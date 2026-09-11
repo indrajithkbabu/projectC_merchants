@@ -15,15 +15,16 @@ class HomePlaceholderRoute extends StatelessWidget {
     return MultiBlocListener(
       listeners: [
         BlocListener<AuthBloc, AuthState>(
-          listenWhen: (prev, curr) =>
-              curr.errorMessage != null &&
-              curr.errorMessage != prev.errorMessage,
+          listenWhen:
+              (prev, curr) =>
+                  curr.errorMessage != null &&
+                  curr.errorMessage != prev.errorMessage,
           listener: (context, state) {
             final message = state.errorMessage?.trim();
             if (message == null || message.isEmpty) return;
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(content: Text(message)),
-            );
+            ScaffoldMessenger.of(
+              context,
+            ).showSnackBar(SnackBar(content: Text(message)));
             context.read<AuthBloc>().add(const AuthClearMessage());
           },
         ),

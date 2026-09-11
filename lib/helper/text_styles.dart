@@ -26,137 +26,114 @@ abstract final class AppTextStyles {
     Color color = AppColors.textPrimary,
     double letterSpacing = -0.6,
     double? height,
-  }) =>
-      _base(
-        fontSize: fontSize,
-        fontWeight: fontWeight,
-        color: color,
-        letterSpacing: letterSpacing,
-        height: height,
-      );
+  }) => _base(
+    fontSize: fontSize,
+    fontWeight: fontWeight,
+    color: color,
+    letterSpacing: letterSpacing,
+    height: height,
+  );
 
   static TextStyle title({
     double fontSize = 28,
-    FontWeight fontWeight = FontWeight.w800,
+    FontWeight fontWeight = FontWeight.w600,
     Color color = AppColors.textPrimary,
     double letterSpacing = -0.4,
     double? height,
-  }) =>
-      _base(
-        fontSize: fontSize,
-        fontWeight: fontWeight,
-        color: color,
-        letterSpacing: letterSpacing,
-        height: height,
-      );
+  }) => _base(
+    fontSize: fontSize,
+    fontWeight: fontWeight,
+    color: color,
+    letterSpacing: letterSpacing,
+    height: height,
+  );
 
   static TextStyle headline({
     double fontSize = 20,
     FontWeight fontWeight = FontWeight.w700,
     Color color = AppColors.textPrimary,
     double? height,
-  }) =>
-      _base(
-        fontSize: fontSize,
-        fontWeight: fontWeight,
-        color: color,
-        height: height,
-      );
+  }) => _base(
+    fontSize: fontSize,
+    fontWeight: fontWeight,
+    color: color,
+    height: height,
+  );
 
   static TextStyle body({
     double fontSize = 16,
     FontWeight fontWeight = FontWeight.w400,
     Color color = AppColors.textPrimary,
     double? height,
-  }) =>
-      _base(
-        fontSize: fontSize,
-        fontWeight: fontWeight,
-        color: color,
-        height: height,
-      );
+  }) => _base(
+    fontSize: fontSize,
+    fontWeight: fontWeight,
+    color: color,
+    height: height,
+  );
 
   static TextStyle bodySecondary({
     double fontSize = 15,
     FontWeight fontWeight = FontWeight.w400,
     Color color = AppColors.textSecondary,
     double height = 1.4,
-  }) =>
-      _base(
-        fontSize: fontSize,
-        fontWeight: fontWeight,
-        color: color,
-        height: height,
-      );
+  }) => _base(
+    fontSize: fontSize,
+    fontWeight: fontWeight,
+    color: color,
+    height: height,
+  );
 
   static TextStyle label({
     double fontSize = 14,
     FontWeight fontWeight = FontWeight.w500,
     Color color = AppColors.textPrimary,
     double? height,
-  }) =>
-      _base(
-        fontSize: fontSize,
-        fontWeight: fontWeight,
-        color: color,
-        height: height,
-      );
+  }) => _base(
+    fontSize: fontSize,
+    fontWeight: fontWeight,
+    color: color,
+    height: height,
+  );
 
   static TextStyle button({
     double fontSize = 17,
     FontWeight fontWeight = FontWeight.w600,
     Color color = AppColors.textOnPrimary,
-  }) =>
-      _base(
-        fontSize: fontSize,
-        fontWeight: fontWeight,
-        color: color,
-      );
+  }) => _base(fontSize: fontSize, fontWeight: fontWeight, color: color);
 
   static TextStyle caption({
     double fontSize = 13,
     FontWeight fontWeight = FontWeight.w400,
     Color color = AppColors.textSecondary,
     double height = 1.4,
-  }) =>
-      _base(
-        fontSize: fontSize,
-        fontWeight: fontWeight,
-        color: color,
-        height: height,
-      );
+  }) => _base(
+    fontSize: fontSize,
+    fontWeight: fontWeight,
+    color: color,
+    height: height,
+  );
 
   static TextStyle hint({
     double fontSize = 17,
     FontWeight fontWeight = FontWeight.w500,
     Color color = AppColors.textHint,
-  }) =>
-      _base(
-        fontSize: fontSize,
-        fontWeight: fontWeight,
-        color: color,
-      );
+  }) => _base(fontSize: fontSize, fontWeight: fontWeight, color: color);
 
   static TextStyle keypad({
     double fontSize = 24,
     FontWeight fontWeight = FontWeight.w500,
     Color color = AppColors.textPrimary,
-  }) =>
-      _base(
-        fontSize: fontSize,
-        fontWeight: fontWeight,
-        color: color,
-      );
+  }) => _base(fontSize: fontSize, fontWeight: fontWeight, color: color);
 
   static TextStyle otpDigit({
     double fontSize = 28,
     FontWeight fontWeight = FontWeight.w700,
     Color color = AppColors.textPrimary,
-  }) =>
-      _base(
-        fontSize: fontSize,
-        fontWeight: fontWeight,
-        color: color,
-        height: 1,
-      );
+  }) => _base(
+    fontSize: fontSize,
+    fontWeight: fontWeight,
+    color: color,
+    height: 1,
+  );
 }

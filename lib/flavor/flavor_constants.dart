@@ -1,4 +1,5 @@
 class FlavorConstants {
-  static const String devBaseUrl = "https://test.bullionare.com";
-  static const String prodBaseUrl = "https://api.bullionare.com";
+  /// Catalog API base URL including the `/v1/catalog` prefix.
+  static const String devBaseUrl = 'https://dev.bullionare.com/v1/catalog';
+  static const String prodBaseUrl = 'https://api.bullionare.com/v1/catalog';
 }

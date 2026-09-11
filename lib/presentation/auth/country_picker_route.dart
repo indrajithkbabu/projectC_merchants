@@ -8,10 +8,7 @@ import 'package:project_c/helper/widgets/screen_wrapper.dart';
 import 'package:project_c/models/country_model.dart';
 
 class CountryPickerRoute extends StatefulWidget {
-  const CountryPickerRoute({
-    super.key,
-    this.initialIsoCode,
-  });
+  const CountryPickerRoute({super.key, this.initialIsoCode});
 
   final String? initialIsoCode;
 
@@ -27,10 +24,10 @@ class _CountryPickerRouteState extends State<CountryPickerRoute> {
   @override
   void initState() {
     super.initState();
-    _all = CountryService().getAll()
-      ..sort(
-        (a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()),
-      );
+    _all =
+        CountryService().getAll()..sort(
+          (a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()),
+        );
     _filtered = List<Country>.from(_all);
   }
 
@@ -47,12 +44,13 @@ class _CountryPickerRouteState extends State<CountryPickerRoute> {
         _filtered = List<Country>.from(_all);
         return;
       }
-      _filtered = _all.where((c) {
-        return c.name.toLowerCase().contains(q) ||
-            c.countryCode.toLowerCase().contains(q) ||
-            c.phoneCode.contains(q) ||
-            '+${c.phoneCode}'.contains(q);
-      }).toList();
+      _filtered =
+          _all.where((c) {
+            return c.name.toLowerCase().contains(q) ||
+                c.countryCode.toLowerCase().contains(q) ||
+                c.phoneCode.contains(q) ||
+                '+${c.phoneCode}'.contains(q);
+          }).toList();
     });
   }
 
@@ -121,48 +119,53 @@ class _CountryPickerRouteState extends State<CountryPickerRoute> {
             ),
           ),
           Expanded(
-            child: _filtered.isEmpty
-                ? Center(
-                    child: Text(
-                      'No countries found',
-                      style: AppTextStyles.bodySecondary(),
+            child:
+                _filtered.isEmpty
+                    ? Center(
+                      child: Text(
+                        'No countries found',
+                        style: AppTextStyles.bodySecondary(),
+                      ),
+                    )
+                    : ListView.separated(
+                      padding: AppPadding.screenHorizontal,
+                      itemCount: _filtered.length,
+                      separatorBuilder:
+                          (_, __) => const Divider(
+                            height: 1,
+                            indent: 56,
+                            color: AppColors.border,
+                          ),
+                      itemBuilder: (context, index) {
+                        final country = _filtered[index];
+                        final isSelected = country.countryCode == selectedIso;
+                        return ListTile(
+                          contentPadding: EdgeInsets.zero,
+                          onTap: () => _select(country),
+                          leading: Text(
+                            country.flagEmoji,
+                            style: const TextStyle(fontSize: 24),
+                          ),
+                          title: Text(
+                            country.name,
+                            style: AppTextStyles.body(
+                              fontWeight: FontWeight.w500,
+                            ),
+                          ),
+                          subtitle: Text(
+                            '+${country.phoneCode}',
+                            style: AppTextStyles.caption(),
+                          ),
+                          trailing:
+                              isSelected
+                                  ? const Icon(
+                                    Icons.check_rounded,
+                                    color: AppColors.primary,
+                                  )
+                                  : null,
+                        );
+                      },
                     ),
-                  )
-                : ListView.separated(
-                    padding: AppPadding.screenHorizontal,
-                    itemCount: _filtered.length,
-                    separatorBuilder: (_, __) => const Divider(
-                      height: 1,
-                      indent: 56,
-                      color: AppColors.border,
-                    ),
-                    itemBuilder: (context, index) {
-                      final country = _filtered[index];
-                      final isSelected = country.countryCode == selectedIso;
-                      return ListTile(
-                        contentPadding: EdgeInsets.zero,
-                        onTap: () => _select(country),
-                        leading: Text(
-                          country.flagEmoji,
-                          style: const TextStyle(fontSize: 24),
-                        ),
-                        title: Text(
-                          country.name,
-                          style: AppTextStyles.body(fontWeight: FontWeight.w500),
-                        ),
-                        subtitle: Text(
-                          '+${country.phoneCode}',
-                          style: AppTextStyles.caption(),
-                        ),
-                        trailing: isSelected
-                            ? const Icon(
-                                Icons.check_rounded,
-                                color: AppColors.primary,
-                              )
-                            : null,
-                      );
-                    },
-                  ),
           ),
         ],
       ),

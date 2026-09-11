@@ -42,11 +42,11 @@ class CountryModel {
   int get hashCode => Object.hash(isoCode, dialCode);
 
   static const CountryModel defaultCountry = CountryModel(
-    name: 'United States',
-    isoCode: 'US',
-    dialCode: '+1',
+    name: 'India',
+    isoCode: 'IN',
+    dialCode: '+91',
     minNationalLength: 10,
     maxNationalLength: 10,
-    flagEmoji: '🇺🇸',
+    flagEmoji: '🇮🇳',
   );
 }

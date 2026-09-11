@@ -6,10 +6,7 @@ import 'package:project_c/main/main.dart';
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  FlavorConfig(
-    name: FlavorNames.prod,
-    variables: Prod.flavorVariables,
-  );
+  FlavorConfig(name: FlavorNames.prod, variables: Prod.flavorVariables);
 
   defaultMain(Flavor.prod);
 }

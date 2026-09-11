@@ -27,7 +27,10 @@ class PhoneNumberField extends StatelessWidget {
         children: [
           Text(
             dialCode,
-            style: AppTextStyles.body(fontWeight: FontWeight.w600, fontSize: 17),
+            style: AppTextStyles.body(
+              fontWeight: FontWeight.w600,
+              fontSize: 17,
+            ),
           ),
           Container(
             width: 1,
@@ -38,9 +41,13 @@ class PhoneNumberField extends StatelessWidget {
           Expanded(
             child: Text(
               hasNumber ? displayNumber : 'Phone number',
-              style: hasNumber
-                  ? AppTextStyles.body(fontWeight: FontWeight.w500, fontSize: 17)
-                  : AppTextStyles.hint(),
+              style:
+                  hasNumber
+                      ? AppTextStyles.body(
+                        fontWeight: FontWeight.w500,
+                        fontSize: 17,
+                      )
+                      : AppTextStyles.hint(),
             ),
           ),
         ],

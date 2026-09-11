@@ -5,10 +5,7 @@ import 'package:project_c/helper/widgets/primary_button.dart';
 import 'package:project_c/presentation/onboarding/onboarding_widgets/jewel_flow_logo.dart';
 
 class WelcomeStep extends StatefulWidget {
-  const WelcomeStep({
-    super.key,
-    required this.onContinue,
-  });
+  const WelcomeStep({super.key, required this.onContinue});
 
   final VoidCallback onContinue;
 

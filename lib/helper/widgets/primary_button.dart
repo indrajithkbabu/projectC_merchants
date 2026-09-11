@@ -40,16 +40,17 @@ class PrimaryButton extends StatelessWidget {
               borderRadius: BorderRadius.circular(14),
             ),
           ),
-          child: isLoading
-              ? const SizedBox(
-                  width: 22,
-                  height: 22,
-                  child: CircularProgressIndicator(
-                    strokeWidth: 2.4,
-                    color: Colors.white,
-                  ),
-                )
-              : Text(label, style: AppTextStyles.button()),
+          child:
+              isLoading
+                  ? const SizedBox(
+                    width: 22,
+                    height: 22,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2.4,
+                      color: Colors.white,
+                    ),
+                  )
+                  : Text(label, style: AppTextStyles.button()),
         ),
       ),
     );

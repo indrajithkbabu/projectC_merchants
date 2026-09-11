@@ -8,7 +8,6 @@ import 'package:project_c/helper/widgets/app_back_button.dart';
 import 'package:project_c/helper/widgets/custom_numeric_keypad.dart';
 import 'package:project_c/helper/widgets/keypad_cta_bar.dart';
 import 'package:project_c/helper/widgets/screen_wrapper.dart';
-import 'package:project_c/models/country_model.dart';
 import 'package:project_c/navigation/routes.dart';
 import 'package:project_c/presentation/auth/auth_widgets/phone_country_field.dart';
 import 'package:project_c/presentation/auth/auth_widgets/phone_number_field.dart';
@@ -16,16 +15,13 @@ import 'package:project_c/presentation/auth/auth_widgets/phone_number_field.dart
 class PhoneRoute extends StatelessWidget {
   const PhoneRoute({super.key});
 
-  Future<void> _openCountryPicker(
-    BuildContext context,
-    AuthState state,
-  ) async {
-    final selected = await Navigator.of(context).pushNamed(
-      Routes.countryPickerRoute,
-      arguments: state.country.isoCode,
+  Future<void> _openCountryPicker(BuildContext context, AuthState state) async {
+    // Catalog OTP is India-only; keep picker closed with a clear message.
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('Only Indian mobile numbers (+91) are supported.'),
+      ),
     );
-    if (selected is! CountryModel || !context.mounted) return;
-    context.read<AuthBloc>().add(AuthCountryChanged(selected));
   }
 
   @override
@@ -33,21 +29,22 @@ class PhoneRoute extends StatelessWidget {
     return MultiBlocListener(
       listeners: [
         BlocListener<AuthBloc, AuthState>(
-          listenWhen: (prev, curr) =>
-              curr.errorMessage != null &&
-              curr.errorMessage != prev.errorMessage,
+          listenWhen:
+              (prev, curr) =>
+                  curr.errorMessage != null &&
+                  curr.errorMessage != prev.errorMessage,
           listener: (context, state) {
             final message = state.errorMessage?.trim();
             if (message == null || message.isEmpty) return;
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(content: Text(message)),
-            );
+            ScaffoldMessenger.of(
+              context,
+            ).showSnackBar(SnackBar(content: Text(message)));
             context.read<AuthBloc>().add(const AuthClearMessage());
           },
         ),
         BlocListener<AuthBloc, AuthState>(
-          listenWhen: (prev, curr) =>
-              curr.phoneSubmitted && !prev.phoneSubmitted,
+          listenWhen:
+              (prev, curr) => curr.phoneSubmitted && !prev.phoneSubmitted,
           listener: (context, state) {
             context.read<AuthBloc>().add(const AuthClearPhoneSubmitted());
             Navigator.of(context).pushNamed(Routes.authOtpRoute);
@@ -93,7 +90,7 @@ class PhoneRoute extends StatelessWidget {
                         ),
                         const SizedBox(height: 16),
                         Text(
-                          "We'll send a one-time code by SMS to verify it's you.",
+                          "We'll send a one-time code by SMS. Indian mobile numbers only (+91).",
                           style: AppTextStyles.caption(),
                         ),
                       ],
@@ -104,18 +101,18 @@ class PhoneRoute extends StatelessWidget {
                   label: 'Continue',
                   enabled: state.canContinuePhone,
                   isLoading: state.isSubmitting,
-                  onPressed: () => context
-                      .read<AuthBloc>()
-                      .add(const AuthPhoneContinuePressed()),
+                  onPressed:
+                      () => context.read<AuthBloc>().add(
+                        const AuthPhoneContinuePressed(),
+                      ),
                 ),
                 CustomNumericKeypad(
-                  onDigit: (digit) => context.read<AuthBloc>().add(
-                        AuthDigitPressed(
-                          digit,
-                          target: AuthInputTarget.phone,
-                        ),
+                  onDigit:
+                      (digit) => context.read<AuthBloc>().add(
+                        AuthDigitPressed(digit, target: AuthInputTarget.phone),
                       ),
-                  onBackspace: () => context.read<AuthBloc>().add(
+                  onBackspace:
+                      () => context.read<AuthBloc>().add(
                         const AuthBackspacePressed(
                           target: AuthInputTarget.phone,
                         ),

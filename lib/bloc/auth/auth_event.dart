@@ -70,10 +70,18 @@ class AuthClearPhoneSubmitted extends AuthEvent {
   const AuthClearPhoneSubmitted();
 }
 
+class AuthClearPostAuthNavigation extends AuthEvent {
+  const AuthClearPostAuthNavigation();
+}
+
 class AuthResetPhoneFlow extends AuthEvent {
   const AuthResetPhoneFlow();
 }
 
 class AuthLoggedOut extends AuthEvent {
   const AuthLoggedOut();
+}
+
+class AuthSessionRestoreRequested extends AuthEvent {
+  const AuthSessionRestoreRequested();
 }
