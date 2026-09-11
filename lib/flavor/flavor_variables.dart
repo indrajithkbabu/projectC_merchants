@@ -21,9 +21,7 @@ class Dev {
     FlavorVariables.baseUrl: FlavorConstants.devBaseUrl,
   };
 
-  static Map<String, dynamic> flavorVariables = {
-    ..._strings,
-  };
+  static Map<String, dynamic> flavorVariables = {..._strings};
 }
 
 /*===============================
@@ -36,9 +34,7 @@ class Prod {
     FlavorVariables.baseUrl: FlavorConstants.prodBaseUrl,
   };
 
-  static Map<String, dynamic> flavorVariables = {
-    ..._strings,
-  };
+  static Map<String, dynamic> flavorVariables = {..._strings};
 }
 
 dynamic getFlavorVariable(String flavorVariable) =>

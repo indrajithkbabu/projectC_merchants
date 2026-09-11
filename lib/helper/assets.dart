@@ -1,5 +1,4 @@
 /// Central place for asset paths (icons, images, fonts references).
 abstract final class AppAssets {
-  // Example:
-  // static const String logo = 'assets/icons/logo.svg';
+  static const String appLogo = 'assets/icons/app_logo.png';
 }

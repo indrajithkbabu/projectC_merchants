@@ -8,9 +8,6 @@ abstract final class AppPadding {
     horizontal: horizontal,
   );
 
-  static EdgeInsets screen({
-    double top = 0,
-    double bottom = 0,
-  }) =>
+  static EdgeInsets screen({double top = 0, double bottom = 0}) =>
       EdgeInsets.fromLTRB(horizontal, top, horizontal, bottom);
 }

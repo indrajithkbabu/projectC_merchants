@@ -29,4 +29,16 @@ abstract final class AppColors {
 
   static const Color error = Color(0xFFFF3B30);
   static const Color success = Color(0xFF4FAE4E);
+  static const Color warning = Color(0xFFE67E22);
+  static const Color warningSoft = Color(0xFFFFF0E0);
+
+  /// iOS Photos-style gallery backdrop.
+  static const Color galleryBackground = Color(0xFF000000);
+
+  /// Floating bottom nav — light theme (matches app white + blue).
+  static const Color navBar = Color(0xFFFFFFFF);
+  static const Color navBarActivePill = Color(0x1A2AABEE); // primary @ 10%
+  static const Color navBarInactive = Color(0xFF8E8E93);
+  static const Color navBarBorder = Color(0xFFE5E7EB);
+  static const Color navBarShadow = Color(0x1A000000);
 }

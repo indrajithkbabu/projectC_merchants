@@ -8,7 +8,6 @@ import 'package:project_c/helper/widgets/app_back_button.dart';
 import 'package:project_c/helper/widgets/custom_numeric_keypad.dart';
 import 'package:project_c/helper/widgets/keypad_cta_bar.dart';
 import 'package:project_c/helper/widgets/screen_wrapper.dart';
-import 'package:project_c/navigation/routes.dart';
 import 'package:project_c/presentation/auth/auth_widgets/otp_code_display.dart';
 
 class OtpRoute extends StatelessWidget {
@@ -25,25 +24,30 @@ class OtpRoute extends StatelessWidget {
     return MultiBlocListener(
       listeners: [
         BlocListener<AuthBloc, AuthState>(
-          listenWhen: (prev, curr) =>
-              curr.errorMessage != null &&
-              curr.errorMessage != prev.errorMessage,
+          listenWhen:
+              (prev, curr) =>
+                  curr.errorMessage != null &&
+                  curr.errorMessage != prev.errorMessage,
           listener: (context, state) {
             final message = state.errorMessage?.trim();
             if (message == null || message.isEmpty) return;
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(content: Text(message)),
-            );
+            ScaffoldMessenger.of(
+              context,
+            ).showSnackBar(SnackBar(content: Text(message)));
             context.read<AuthBloc>().add(const AuthClearMessage());
           },
         ),
         BlocListener<AuthBloc, AuthState>(
-          listenWhen: (prev, curr) => curr.isVerified && !prev.isVerified,
+          listenWhen: (prev, curr) =>
+              curr.postAuthRoute != null &&
+              curr.postAuthRoute != prev.postAuthRoute,
           listener: (context, state) {
-            context.read<AuthBloc>().add(const AuthClearVerified());
+            final route = state.postAuthRoute;
+            if (route == null) return;
+            context.read<AuthBloc>().add(const AuthClearPostAuthNavigation());
             Navigator.of(context).pushNamedAndRemoveUntil(
-              Routes.homePlaceholderRoute,
-              (route) => false,
+              route,
+              (r) => r.isFirst,
             );
           },
         ),
@@ -66,9 +70,9 @@ class OtpRoute extends StatelessWidget {
                       children: [
                         AppBackButton(
                           onPressed: () {
-                            context
-                                .read<AuthBloc>()
-                                .add(const AuthResetPhoneFlow());
+                            context.read<AuthBloc>().add(
+                              const AuthResetPhoneFlow(),
+                            );
                             Navigator.of(context).maybePop();
                           },
                         ),
@@ -121,11 +125,12 @@ class OtpRoute extends StatelessWidget {
                           )
                         else
                           TextButton(
-                            onPressed: state.canResend
-                                ? () => context
-                                    .read<AuthBloc>()
-                                    .add(const AuthResendPressed())
-                                : null,
+                            onPressed:
+                                state.canResend
+                                    ? () => context.read<AuthBloc>().add(
+                                      const AuthResendPressed(),
+                                    )
+                                    : null,
                             child: Text(
                               'Resend code',
                               style: AppTextStyles.label(
@@ -143,21 +148,19 @@ class OtpRoute extends StatelessWidget {
                   label: 'Continue',
                   enabled: state.canContinueOtp,
                   isLoading: state.isSubmitting,
-                  onPressed: () => context
-                      .read<AuthBloc>()
-                      .add(const AuthOtpContinuePressed()),
+                  onPressed:
+                      () => context.read<AuthBloc>().add(
+                        const AuthOtpContinuePressed(),
+                      ),
                 ),
                 CustomNumericKeypad(
-                  onDigit: (digit) => context.read<AuthBloc>().add(
-                        AuthDigitPressed(
-                          digit,
-                          target: AuthInputTarget.otp,
-                        ),
+                  onDigit:
+                      (digit) => context.read<AuthBloc>().add(
+                        AuthDigitPressed(digit, target: AuthInputTarget.otp),
                       ),
-                  onBackspace: () => context.read<AuthBloc>().add(
-                        const AuthBackspacePressed(
-                          target: AuthInputTarget.otp,
-                        ),
+                  onBackspace:
+                      () => context.read<AuthBloc>().add(
+                        const AuthBackspacePressed(target: AuthInputTarget.otp),
                       ),
                 ),
               ],

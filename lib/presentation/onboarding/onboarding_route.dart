@@ -14,12 +14,12 @@ class OnboardingRoute extends StatelessWidget {
     return MultiBlocListener(
       listeners: [
         BlocListener<OnboardingBloc, OnboardingState>(
-          listenWhen: (prev, curr) =>
-              curr.navigateToAuth && !prev.navigateToAuth,
+          listenWhen:
+              (prev, curr) => curr.navigateToAuth && !prev.navigateToAuth,
           listener: (context, state) {
-            context
-                .read<OnboardingBloc>()
-                .add(const OnboardingClearNavigateToAuth());
+            context.read<OnboardingBloc>().add(
+              const OnboardingClearNavigateToAuth(),
+            );
             Navigator.of(context).pushNamed(Routes.authPhoneRoute);
           },
         ),
@@ -30,9 +30,10 @@ class OnboardingRoute extends StatelessWidget {
         child: Padding(
           padding: EdgeInsets.only(top: ScreenWrapper.statusBarTop(context)),
           child: WelcomeStep(
-            onContinue: () => context
-                .read<OnboardingBloc>()
-                .add(const OnboardingContinuePressed()),
+            onContinue:
+                () => context.read<OnboardingBloc>().add(
+                  const OnboardingContinuePressed(),
+                ),
           ),
         ),
       ),

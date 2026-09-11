@@ -1,9 +1,7 @@
 part of 'onboarding_bloc.dart';
 
 class OnboardingState extends Equatable {
-  const OnboardingState({
-    this.navigateToAuth = false,
-  });
+  const OnboardingState({this.navigateToAuth = false});
 
   final bool navigateToAuth;
 

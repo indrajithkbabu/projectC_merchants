@@ -1,0 +1,93 @@
+import 'package:flutter_simple_dependency_injection/injector.dart';
+import 'package:project_c/session/catalog_session.dart';
+import 'package:project_c/storage/session_storage.dart';
+import 'package:project_c/webservice/auth/auth_repository.dart';
+import 'package:project_c/webservice/auth/auth_request.dart';
+import 'package:project_c/webservice/catalog_api_client.dart';
+import 'package:project_c/webservice/collection/collection_repository.dart';
+import 'package:project_c/webservice/collection/collection_request.dart';
+import 'package:project_c/webservice/import/import_repository.dart';
+import 'package:project_c/webservice/import/import_request.dart';
+import 'package:project_c/webservice/profile/profile_repository.dart';
+import 'package:project_c/webservice/profile/profile_request.dart';
+import 'package:project_c/webservice/store/store_repository.dart';
+import 'package:project_c/webservice/store/store_request.dart';
+
+/// Application service locator. Call [configureDependencies] once at startup.
+class ServiceLocator {
+  ServiceLocator._();
+
+  static final Injector injector = Injector();
+
+  static bool _configured = false;
+
+  static void configureDependencies() {
+    if (_configured) return;
+    _configured = true;
+
+    final storage = SessionStorage();
+    final apiClient = CatalogApiClient(sessionStorage: storage);
+    final session = CatalogSession(storage: storage, apiClient: apiClient);
+
+    injector.map<SessionStorage>((_) => storage, isSingleton: true);
+    injector.map<CatalogApiClient>((_) => apiClient, isSingleton: true);
+    injector.map<CatalogSession>((_) => session, isSingleton: true);
+
+    injector.map<AuthRequest>(
+      (i) => AuthRequest(apiClient: i.get<CatalogApiClient>()),
+      isSingleton: true,
+    );
+    injector.map<AuthRepository>(
+      (i) => AuthRepositoryImpl(
+        request: i.get<AuthRequest>(),
+        session: i.get<CatalogSession>(),
+        apiClient: i.get<CatalogApiClient>(),
+      ),
+      isSingleton: true,
+    );
+
+    injector.map<ProfileRequest>(
+      (i) => ProfileRequest(apiClient: i.get<CatalogApiClient>()),
+      isSingleton: true,
+    );
+    injector.map<ProfileRepository>(
+      (i) => ProfileRepositoryImpl(
+        request: i.get<ProfileRequest>(),
+        session: i.get<CatalogSession>(),
+      ),
+      isSingleton: true,
+    );
+
+    injector.map<StoreRequest>(
+      (i) => StoreRequest(apiClient: i.get<CatalogApiClient>()),
+      isSingleton: true,
+    );
+    injector.map<StoreRepository>(
+      (i) => StoreRepositoryImpl(
+        request: i.get<StoreRequest>(),
+        session: i.get<CatalogSession>(),
+      ),
+      isSingleton: true,
+    );
+
+    injector.map<CollectionRequest>(
+      (i) => CollectionRequest(apiClient: i.get<CatalogApiClient>()),
+      isSingleton: true,
+    );
+    injector.map<CollectionRepository>(
+      (i) => CollectionRepositoryImpl(request: i.get<CollectionRequest>()),
+      isSingleton: true,
+    );
+
+    injector.map<ImportApiRequest>(
+      (i) => ImportApiRequest(apiClient: i.get<CatalogApiClient>()),
+      isSingleton: true,
+    );
+    injector.map<ImportRepository>(
+      (i) => ImportRepositoryImpl(request: i.get<ImportApiRequest>()),
+      isSingleton: true,
+    );
+  }
+
+  static T get<T>() => injector.get<T>();
+}

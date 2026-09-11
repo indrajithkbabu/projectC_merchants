@@ -77,9 +77,10 @@ class ScreenWrapper extends StatelessWidget {
       statusBarColor: Colors.transparent,
       statusBarIconBrightness: statusBarIconBrightness,
       // iOS uses statusBarBrightness inverted vs Android icon brightness.
-      statusBarBrightness: statusBarIconBrightness == Brightness.dark
-          ? Brightness.light
-          : Brightness.dark,
+      statusBarBrightness:
+          statusBarIconBrightness == Brightness.dark
+              ? Brightness.light
+              : Brightness.dark,
       systemNavigationBarColor: backgroundColor ?? AppColors.scaffold,
       systemNavigationBarIconBrightness: Brightness.dark,
     );

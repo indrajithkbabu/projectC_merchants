@@ -3,11 +3,7 @@ import 'package:project_c/helper/colors.dart';
 import 'package:project_c/helper/text_styles.dart';
 
 class OtpCodeDisplay extends StatelessWidget {
-  const OtpCodeDisplay({
-    super.key,
-    required this.code,
-    this.length = 6,
-  });
+  const OtpCodeDisplay({super.key, required this.code, this.length = 6});
 
   final String code;
   final int length;
@@ -38,9 +34,10 @@ class OtpCodeDisplay extends StatelessWidget {
                   duration: const Duration(milliseconds: 160),
                   height: 2.5,
                   decoration: BoxDecoration(
-                    color: isActive
-                        ? AppColors.primary
-                        : hasDigit
+                    color:
+                        isActive
+                            ? AppColors.primary
+                            : hasDigit
                             ? AppColors.textPrimary
                             : AppColors.divider,
                     borderRadius: BorderRadius.circular(2),

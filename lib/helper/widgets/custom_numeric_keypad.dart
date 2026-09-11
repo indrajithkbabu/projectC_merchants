@@ -51,10 +51,7 @@ class CustomNumericKeypad extends StatelessWidget {
             children: [
               const _EmptyKey(),
               _DigitKey(label: '0', onTap: () => onDigit('0')),
-              _ActionKey(
-                icon: Icons.backspace_outlined,
-                onTap: onBackspace,
-              ),
+              _ActionKey(icon: Icons.backspace_outlined, onTap: onBackspace),
             ],
           ),
         ],
@@ -82,10 +79,7 @@ class _KeyRow extends StatelessWidget {
 }
 
 class _DigitKey extends StatelessWidget {
-  const _DigitKey({
-    required this.label,
-    required this.onTap,
-  });
+  const _DigitKey({required this.label, required this.onTap});
 
   final String label;
   final VoidCallback onTap;
@@ -102,9 +96,7 @@ class _DigitKey extends StatelessWidget {
         borderRadius: BorderRadius.circular(12),
         child: SizedBox(
           height: 52,
-          child: Center(
-            child: Text(label, style: AppTextStyles.keypad()),
-          ),
+          child: Center(child: Text(label, style: AppTextStyles.keypad())),
         ),
       ),
     );
@@ -112,10 +104,7 @@ class _DigitKey extends StatelessWidget {
 }
 
 class _ActionKey extends StatelessWidget {
-  const _ActionKey({
-    required this.icon,
-    required this.onTap,
-  });
+  const _ActionKey({required this.icon, required this.onTap});
 
   final IconData icon;
   final VoidCallback onTap;
