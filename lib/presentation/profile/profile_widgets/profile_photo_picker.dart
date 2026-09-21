@@ -8,22 +8,35 @@ class ProfilePhotoPicker extends StatelessWidget {
   const ProfilePhotoPicker({
     super.key,
     required this.firstName,
-    required this.imagePath,
     required this.isLoading,
     required this.onTap,
+    this.imagePath,
+    this.imageUrl,
   });
 
   final String firstName;
   final String? imagePath;
+  final String? imageUrl;
   final bool isLoading;
   final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
-    final hasImage = imagePath != null && imagePath!.isNotEmpty;
+    final localPath = imagePath?.trim() ?? '';
+    final networkUrl = imageUrl?.trim() ?? '';
+    final hasLocal = localPath.isNotEmpty;
+    final hasNetwork = !hasLocal && networkUrl.isNotEmpty;
+    final hasImage = hasLocal || hasNetwork;
     final trimmed = firstName.trim();
     final initial =
         trimmed.isEmpty ? 'A' : trimmed.substring(0, 1).toUpperCase();
+
+    ImageProvider? provider;
+    if (hasLocal) {
+      provider = FileImage(File(localPath));
+    } else if (hasNetwork) {
+      provider = NetworkImage(networkUrl);
+    }
 
     return Center(
       child: Stack(
@@ -38,12 +51,9 @@ class ProfilePhotoPicker extends StatelessWidget {
                 shape: BoxShape.circle,
                 color: AppColors.surfaceSecondary,
                 image:
-                    hasImage
-                        ? DecorationImage(
-                          image: FileImage(File(imagePath!)),
-                          fit: BoxFit.cover,
-                        )
-                        : null,
+                    provider == null
+                        ? null
+                        : DecorationImage(image: provider, fit: BoxFit.cover),
               ),
               child:
                   hasImage

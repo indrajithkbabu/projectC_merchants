@@ -9,7 +9,7 @@ Catalog “collections” map to UI “products”:
 ## Create
 `POST /stores/:storeId/collections` as **multipart/form-data**:
 - fields: `name` (required), `tag`, `description`
-- files: repeated `photos` (1–25, each ≤25 MB)
+- files: repeated `photos` (1–50, each ≤500 MB; batch ≤500 MB total)
 - Client timeout up to 5 minutes
 - **201** may include `failedPhotos` while still creating the collection
 - **400 NO_VALID_PHOTOS** includes `error.failedPhotos`; no collection created
@@ -21,6 +21,8 @@ Catalog “collections” map to UI “products”:
 - Remove photos: `POST .../photos/delete` `{photoIds, revision?}`
   (must keep ≥1 photo; otherwise delete the collection)
 - Edit flow adds new locals first, then deletes removed ids, same listing id
+- Sub-groups: `POST .../subgroups` to create; `PATCH .../subgroups/:subGroupId` to
+  update name/tag/description/specs/`usePrecisionTag` (membership via photos/move)
 
 ## Other
 - List/get/delete under `/stores/:storeId/collections`

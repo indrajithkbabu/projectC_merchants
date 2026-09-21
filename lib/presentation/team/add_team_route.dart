@@ -14,9 +14,17 @@ import 'package:project_c/presentation/team/team_widgets/team_search_field.dart'
 
 class AddTeamRoute extends StatefulWidget {
   /// [storeName] is shown in the subtitle for context.
-  const AddTeamRoute({super.key, required this.storeName});
+  ///
+  /// When [returnToProfile] is true (opened from store profile), Continue/Skip
+  /// pops back to the profile instead of clearing to the store listing.
+  const AddTeamRoute({
+    super.key,
+    required this.storeName,
+    this.returnToProfile = false,
+  });
 
   final String storeName;
+  final bool returnToProfile;
 
   @override
   State<AddTeamRoute> createState() => _AddTeamRouteState();
@@ -59,6 +67,10 @@ class _AddTeamRouteState extends State<AddTeamRoute> {
           listenWhen: (prev, curr) => curr.isCompleted && !prev.isCompleted,
           listener: (context, state) {
             context.read<TeamBloc>().add(const TeamClearCompleted());
+            if (widget.returnToProfile) {
+              Navigator.of(context).pop(true);
+              return;
+            }
             Navigator.of(context).pushNamedAndRemoveUntil(
               Routes.storeListingRoute,
               (route) => false,
@@ -104,7 +116,9 @@ class _AddTeamRouteState extends State<AddTeamRoute> {
                     label:
                         state.addedCount == 0
                             ? 'Skip for now'
-                            : 'Continue to store',
+                            : (widget.returnToProfile
+                                ? 'Done'
+                                : 'Continue to store'),
                     isLoading: state.isSubmitting,
                     onPressed:
                         () => context.read<TeamBloc>().add(

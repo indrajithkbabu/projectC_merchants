@@ -1,9 +1,12 @@
+import 'dart:io';
+
 import 'package:bloc/bloc.dart';
 import 'package:equatable/equatable.dart';
 import 'package:project_c/bloc/team/team_bloc.dart';
 import 'package:project_c/di/service_locator.dart';
 import 'package:project_c/helper/app_log.dart';
 import 'package:project_c/helper/catalog_ui_mapper.dart';
+import 'package:project_c/helper/device_contact_names.dart';
 import 'package:project_c/models/catalog/collection_models.dart';
 import 'package:project_c/models/catalog/store_member_models.dart';
 import 'package:project_c/models/store_product.dart';
@@ -13,6 +16,7 @@ import 'package:project_c/webservice/catalog_error_mapper.dart';
 import 'package:project_c/webservice/collection/collection_repository.dart';
 import 'package:project_c/webservice/import/import_repository.dart';
 import 'package:project_c/webservice/store/store_repository.dart';
+import 'package:project_c/webservice/store/store_request.dart';
 
 part 'store_profile_event.dart';
 part 'store_profile_state.dart';
@@ -53,6 +57,7 @@ class StoreProfileBloc extends Bloc<StoreProfileEvent, StoreProfileState> {
                ?.id,
            isLoadingProducts: true,
            isLoadingMembers: isOwnStore,
+           isLoadingStoreMeta: true,
          ),
        ) {
     on<StoreProfileAddProductsPressed>(_onAddProductsPressed);
@@ -69,6 +74,10 @@ class StoreProfileBloc extends Bloc<StoreProfileEvent, StoreProfileState> {
     on<StoreProfileLoadCollections>(_onLoadCollections);
     on<StoreProfileLoadMembers>(_onLoadMembers);
     on<StoreProfileLoadImportRequestCount>(_onLoadImportRequestCount);
+    on<StoreProfileLoadStoreMeta>(_onLoadStoreMeta);
+    on<StoreProfileAppendImagesRequested>(_onAppendImagesRequested);
+    on<StoreProfileDeleteImageRequested>(_onDeleteImageRequested);
+    add(const StoreProfileLoadStoreMeta());
     add(const StoreProfileLoadCollections());
     if (isOwnStore) {
       add(const StoreProfileLoadMembers());
@@ -202,6 +211,20 @@ class StoreProfileBloc extends Bloc<StoreProfileEvent, StoreProfileState> {
           currentUserId: _session.profile?.id ?? state.currentUserId,
         ),
       );
+
+      // Quietly fill missing names from device contacts (no loader).
+      final enrichedApi = await DeviceContactNames.enrichMembers(all);
+      if (emit.isDone) return;
+      final enrichedMapped = [
+        for (var i = 0; i < enrichedApi.length; i++)
+          _mapMember(enrichedApi[i], i),
+      ];
+      emit(
+        state.copyWith(
+          members: enrichedMapped,
+          currentUserId: _session.profile?.id ?? state.currentUserId,
+        ),
+      );
     } catch (e) {
       AppLog.e(_tag, 'Members load failed', e);
       emit(
@@ -241,6 +264,122 @@ class StoreProfileBloc extends Bloc<StoreProfileEvent, StoreProfileState> {
     } catch (e) {
       // Badge is secondary; do not interrupt the profile with a snackbar.
       AppLog.e(_tag, 'Import request count failed', e);
+    }
+  }
+
+  Future<void> _onLoadStoreMeta(
+    StoreProfileLoadStoreMeta event,
+    Emitter<StoreProfileState> emit,
+  ) async {
+    final storeId = state.storeId;
+    if (storeId.isEmpty || storeId == 'my_store' || storeId == 'other_store') {
+      emit(state.copyWith(isLoadingStoreMeta: false));
+      return;
+    }
+    emit(state.copyWith(isLoadingStoreMeta: true, clearError: true));
+    try {
+      final store = await _storeRepository.fetchStore(storeId);
+      if (emit.isDone) return;
+      AppLog.d(
+        _tag,
+        'Store meta loaded images=${store.images.length} '
+        'cover=${store.coverImageUrl.isNotEmpty}',
+      );
+      emit(
+        state.copyWith(
+          isLoadingStoreMeta: false,
+          storeName:
+              store.name.trim().isNotEmpty ? store.name : state.storeName,
+          overrideStoreLink:
+              store.slug.trim().isNotEmpty
+                  ? store.storeLink
+                  : state.overrideStoreLink,
+          storeImages: store.images,
+          coverImageUrl: store.coverImageUrl,
+        ),
+      );
+    } catch (e) {
+      AppLog.e(_tag, 'Load store meta failed', e);
+      emit(state.copyWith(isLoadingStoreMeta: false));
+    }
+  }
+
+  Future<void> _onAppendImagesRequested(
+    StoreProfileAppendImagesRequested event,
+    Emitter<StoreProfileState> emit,
+  ) async {
+    if (!state.isOwnStore || state.isUpdatingStoreImages) return;
+    final storeId = state.storeId;
+    if (storeId.isEmpty || storeId == 'my_store') return;
+    final remaining = StoreRequest.maxStoreImages - state.storeImages.length;
+    if (remaining <= 0) {
+      emit(
+        state.copyWith(
+          errorMessage: 'A store can have at most ${StoreRequest.maxStoreImages} showcase images.',
+        ),
+      );
+      return;
+    }
+    final paths = event.imagePaths.take(remaining).toList();
+    if (paths.isEmpty) return;
+    emit(state.copyWith(isUpdatingStoreImages: true, clearError: true));
+    try {
+      final store = await _storeRepository.appendStoreImages(
+        storeId: storeId,
+        imageFiles: paths.map(File.new).toList(),
+      );
+      emit(
+        state.copyWith(
+          isUpdatingStoreImages: false,
+          storeImages: store.images,
+          coverImageUrl: store.coverImageUrl,
+          infoMessage:
+              event.imagePaths.length > remaining
+                  ? 'Only $remaining more photo(s) could be added.'
+                  : 'Store photos updated.',
+        ),
+      );
+    } catch (e) {
+      AppLog.e(_tag, 'Append store images failed', e);
+      emit(
+        state.copyWith(
+          isUpdatingStoreImages: false,
+          errorMessage: CatalogErrorMapper.toUserMessage(e),
+        ),
+      );
+    }
+  }
+
+  Future<void> _onDeleteImageRequested(
+    StoreProfileDeleteImageRequested event,
+    Emitter<StoreProfileState> emit,
+  ) async {
+    if (!state.isOwnStore || state.isUpdatingStoreImages) return;
+    final storeId = state.storeId;
+    final imageId = event.imageId.trim();
+    if (storeId.isEmpty || storeId == 'my_store' || imageId.isEmpty) return;
+    emit(state.copyWith(isUpdatingStoreImages: true, clearError: true));
+    try {
+      final store = await _storeRepository.deleteStoreImage(
+        storeId: storeId,
+        imageId: imageId,
+      );
+      emit(
+        state.copyWith(
+          isUpdatingStoreImages: false,
+          storeImages: store.images,
+          coverImageUrl: store.coverImageUrl,
+          infoMessage: 'Store photo removed.',
+        ),
+      );
+    } catch (e) {
+      AppLog.e(_tag, 'Delete store image failed', e);
+      emit(
+        state.copyWith(
+          isUpdatingStoreImages: false,
+          errorMessage: CatalogErrorMapper.toUserMessage(e),
+        ),
+      );
     }
   }
 

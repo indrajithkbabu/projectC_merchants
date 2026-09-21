@@ -2,6 +2,7 @@ import 'package:bloc/bloc.dart';
 import 'package:equatable/equatable.dart';
 import 'package:project_c/di/service_locator.dart';
 import 'package:project_c/helper/app_log.dart';
+import 'package:project_c/helper/device_contact_names.dart';
 import 'package:project_c/models/catalog/store_member_models.dart';
 import 'package:project_c/session/catalog_session.dart';
 import 'package:project_c/webservice/catalog_error_mapper.dart';
@@ -74,6 +75,7 @@ class ContactsBloc extends Bloc<ContactsEvent, ContactsState> {
         limit: 100,
       );
       AppLog.d(_tag, 'Loaded ${page.items.length} members for $storeId');
+      // Show API rows immediately — no blocking loader for contact enrich.
       emit(
         state.copyWith(
           isRefreshing: false,
@@ -83,6 +85,10 @@ class ContactsBloc extends Bloc<ContactsEvent, ContactsState> {
           hasOwnStore: true,
         ),
       );
+
+      final enriched = await DeviceContactNames.enrichMembers(page.items);
+      if (emit.isDone) return;
+      emit(state.copyWith(members: enriched));
     } catch (e) {
       AppLog.e(_tag, 'Contacts load failed', e);
       emit(

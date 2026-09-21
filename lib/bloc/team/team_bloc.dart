@@ -3,6 +3,7 @@ import 'package:equatable/equatable.dart';
 import 'package:flutter_contacts/flutter_contacts.dart';
 import 'package:project_c/di/service_locator.dart';
 import 'package:project_c/helper/app_log.dart';
+import 'package:project_c/helper/phone_normalize.dart';
 import 'package:project_c/session/catalog_session.dart';
 import 'package:project_c/webservice/catalog_error_mapper.dart';
 import 'package:project_c/webservice/store/store_repository.dart';
@@ -181,7 +182,7 @@ class TeamBloc extends Bloc<TeamEvent, TeamState> {
     for (final contact in contacts) {
       final displayName = contact.displayName.trim();
       for (final phone in contact.phones) {
-        final e164 = normalizeToE164(phone.number);
+        final e164 = PhoneNormalize.toE164(phone.number);
         if (e164 == null) continue;
         if (byPhone.containsKey(e164)) continue;
 
@@ -205,42 +206,5 @@ class TeamBloc extends Bloc<TeamEvent, TeamState> {
         (a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()),
       );
     return list;
-  }
-
-  /// Catalog contacts require international numbers beginning with `+`.
-  /// Indian 10-digit mobiles are normalized to `+91…`.
-  static String? normalizeToE164(String raw) {
-    final trimmed = raw.trim();
-    if (trimmed.isEmpty) return null;
-
-    var digits = trimmed.replaceAll(RegExp(r'[^\d+]'), '');
-    if (digits.startsWith('00')) {
-      digits = '+${digits.substring(2)}';
-    }
-
-    if (digits.startsWith('+')) {
-      final rest = digits.substring(1).replaceAll(RegExp(r'\D'), '');
-      if (rest.length < 8 || rest.length > 15) return null;
-      return '+$rest';
-    }
-
-    final onlyDigits = digits.replaceAll(RegExp(r'\D'), '');
-    if (onlyDigits.length == 10 &&
-        onlyDigits.codeUnitAt(0) >= 0x36 &&
-        onlyDigits.codeUnitAt(0) <= 0x39) {
-      return '+91$onlyDigits';
-    }
-    if (onlyDigits.length == 12 && onlyDigits.startsWith('91')) {
-      return '+$onlyDigits';
-    }
-    if (onlyDigits.length == 11 && onlyDigits.startsWith('0')) {
-      final national = onlyDigits.substring(1);
-      if (national.length == 10 &&
-          national.codeUnitAt(0) >= 0x36 &&
-          national.codeUnitAt(0) <= 0x39) {
-        return '+91$national';
-      }
-    }
-    return null;
   }
 }

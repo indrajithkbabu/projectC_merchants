@@ -8,6 +8,7 @@ import 'package:project_c/helper/widgets/app_back_button.dart';
 import 'package:project_c/helper/widgets/primary_button.dart';
 import 'package:project_c/helper/widgets/screen_wrapper.dart';
 import 'package:project_c/navigation/routes.dart';
+import 'package:project_c/presentation/store_setup/store_setup_widgets/store_images_picker_strip.dart';
 import 'package:project_c/presentation/store_setup/store_setup_widgets/store_link_card.dart';
 import 'package:project_c/presentation/store_setup/store_setup_widgets/store_name_field.dart';
 
@@ -136,37 +137,34 @@ class _StoreSetupRouteState extends State<StoreSetupRoute> {
                           'Anyone with this link can view your products - no account needed.',
                           style: AppTextStyles.caption(),
                         ),
+                        const SizedBox(height: 22),
+                        StoreImagesPickerStrip(
+                          imagePaths: state.imagePaths,
+                          onAdd:
+                              state.isPickingImages || state.isSubmitting
+                                  ? () {}
+                                  : () => context.read<StoreSetupBloc>().add(
+                                    const StoreImagesPickRequested(),
+                                  ),
+                          onRemoveAt:
+                              (index) => context.read<StoreSetupBloc>().add(
+                                StoreImageRemoved(index),
+                              ),
+                        ),
                       ],
                     ),
                   ),
                 ),
                 Padding(
                   padding: AppPadding.screen(top: 8, bottom: 24),
-                  child: Column(
-                    children: [
-                      PrimaryButton(
-                        label: 'Create store',
-                        enabled: state.canContinue,
-                        isLoading: state.isSubmitting && !state.skippedStore,
-                        onPressed:
-                            () => context.read<StoreSetupBloc>().add(
-                              const StoreCreatePressed(),
-                            ),
-                      ),
-                      // const SizedBox(height: 12),
-                      // TextButton(
-                      //   onPressed:
-                      //       state.isSubmitting
-                      //           ? null
-                      //           : () => context.read<StoreSetupBloc>().add(
-                      //             const StoreSkipPressed(),
-                      //           ),
-                      //   child: Text(
-                      //     'Skip for now',
-                      //     style: AppTextStyles.bodySecondary(),
-                      //   ),
-                      // ),
-                    ],
+                  child: PrimaryButton(
+                    label: 'Create store',
+                    enabled: state.canContinue,
+                    isLoading: state.isSubmitting && !state.skippedStore,
+                    onPressed:
+                        () => context.read<StoreSetupBloc>().add(
+                          const StoreCreatePressed(),
+                        ),
                   ),
                 ),
               ],

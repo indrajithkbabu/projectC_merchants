@@ -50,22 +50,6 @@ class _ProfileRouteState extends State<ProfileRoute> {
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                if (!hasImage)
-                  ListTile(
-                    leading: const Icon(Icons.add_photo_alternate_rounded),
-                    title: Text('Add photo', style: AppTextStyles.body()),
-                    onTap:
-                        () =>
-                            Navigator.of(context).pop(_ProfilePhotoAction.add),
-                  ),
-                if (hasImage)
-                  ListTile(
-                    leading: const Icon(Icons.edit_rounded),
-                    title: Text('Edit photo', style: AppTextStyles.body()),
-                    onTap:
-                        () =>
-                            Navigator.of(context).pop(_ProfilePhotoAction.edit),
-                  ),
                 ListTile(
                   leading: const Icon(Icons.photo_camera_rounded),
                   title: Text('Use camera', style: AppTextStyles.body()),
@@ -109,10 +93,6 @@ class _ProfileRouteState extends State<ProfileRoute> {
     if (!mounted || action == null) return;
     final bloc = context.read<ProfileBloc>();
     switch (action) {
-      case _ProfilePhotoAction.add:
-      case _ProfilePhotoAction.edit:
-        bloc.add(const ProfilePickImageRequested(ImageSource.gallery));
-        return;
       case _ProfilePhotoAction.camera:
         bloc.add(const ProfilePickImageRequested(ImageSource.camera));
         return;
@@ -239,4 +219,4 @@ class _ProfileRouteState extends State<ProfileRoute> {
   }
 }
 
-enum _ProfilePhotoAction { add, edit, camera, gallery, delete }
+enum _ProfilePhotoAction { camera, gallery, delete }

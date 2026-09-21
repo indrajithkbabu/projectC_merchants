@@ -11,7 +11,7 @@ import 'package:project_c/resources/endpoints.dart';
 import 'package:project_c/storage/session_storage.dart';
 import 'package:project_c/webservice/catalog_api_exception.dart';
 
-enum HttpMethod { get, post, patch, delete }
+enum HttpMethod { get, post, patch, put, delete }
 
 /// One multipart file part for catalog uploads (field name is usually `photos`).
 class CatalogMultipartFile {
@@ -104,7 +104,7 @@ class CatalogApiClient {
     return _decodeOrThrow(response, path);
   }
 
-  /// Multipart POST/PATCH (collection create / add photos). Do not set Content-Type.
+  /// Multipart POST/PATCH/PUT (profile, store images, collections). Do not set Content-Type.
   Future<Map<String, dynamic>?> sendMultipart({
     required String path,
     required Map<String, String> fields,
@@ -114,8 +114,11 @@ class CatalogApiClient {
     bool skipAuthRetry = false,
     Duration timeout = const Duration(minutes: 5),
   }) async {
-    final httpMethod =
-        method == HttpMethod.patch ? HttpMethod.patch : HttpMethod.post;
+    final httpMethod = switch (method) {
+      HttpMethod.patch => HttpMethod.patch,
+      HttpMethod.put => HttpMethod.put,
+      _ => HttpMethod.post,
+    };
     final response = await _executeMultipart(
       method: httpMethod,
       path: path,
@@ -246,7 +249,11 @@ class CatalogApiClient {
       );
     }
 
-    final methodLabel = method == HttpMethod.patch ? 'PATCH' : 'POST';
+    final methodLabel = switch (method) {
+      HttpMethod.patch => 'PATCH',
+      HttpMethod.put => 'PUT',
+      _ => 'POST',
+    };
     final uri = Uri.parse('$_baseUrl$path');
     final request = http.MultipartRequest(methodLabel, uri);
     request.headers['Accept'] = 'application/json';
@@ -343,6 +350,10 @@ class CatalogApiClient {
           response = await _http
               .patch(uri, headers: headers, body: encoded)
               .timeout(effectiveTimeout);
+        case HttpMethod.put:
+          response = await _http
+              .put(uri, headers: headers, body: encoded)
+              .timeout(effectiveTimeout);
         case HttpMethod.delete:
           response = await _http
               .delete(uri, headers: headers, body: encoded)
@@ -383,14 +394,12 @@ class CatalogApiClient {
     try {
       final decoded = jsonDecode(body);
       if (decoded is Map<String, dynamic>) {
-        AppLog.d(_tag, 'responseBody=${_sanitizeForLog(decoded)}');
-      } else if (decoded is List) {
-        AppLog.d(_tag, 'responseBody=${jsonEncode(decoded)}');
+        AppLog.full(_tag, 'responseBody', _redactMap(decoded));
       } else {
-        AppLog.d(_tag, 'responseBody=$body');
+        AppLog.full(_tag, 'responseBody', decoded);
       }
     } catch (_) {
-      AppLog.d(_tag, 'responseBody=$body');
+      AppLog.full(_tag, 'responseBody', body);
     }
   }
 

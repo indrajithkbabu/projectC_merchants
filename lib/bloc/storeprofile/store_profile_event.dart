@@ -19,6 +19,28 @@ class StoreProfileLoadImportRequestCount extends StoreProfileEvent {
   const StoreProfileLoadImportRequestCount();
 }
 
+class StoreProfileLoadStoreMeta extends StoreProfileEvent {
+  const StoreProfileLoadStoreMeta();
+}
+
+class StoreProfileAppendImagesRequested extends StoreProfileEvent {
+  const StoreProfileAppendImagesRequested(this.imagePaths);
+
+  final List<String> imagePaths;
+
+  @override
+  List<Object?> get props => [imagePaths];
+}
+
+class StoreProfileDeleteImageRequested extends StoreProfileEvent {
+  const StoreProfileDeleteImageRequested(this.imageId);
+
+  final String imageId;
+
+  @override
+  List<Object?> get props => [imageId];
+}
+
 class StoreProfileAddProductsPressed extends StoreProfileEvent {
   const StoreProfileAddProductsPressed();
 }

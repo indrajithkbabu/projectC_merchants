@@ -15,6 +15,19 @@ class AccountProfileRefreshed extends AccountProfileEvent {
   const AccountProfileRefreshed();
 }
 
+class AccountProfilePickImageRequested extends AccountProfileEvent {
+  const AccountProfilePickImageRequested(this.source);
+
+  final ImageSource source;
+
+  @override
+  List<Object?> get props => [source];
+}
+
+class AccountProfileRemoveImageRequested extends AccountProfileEvent {
+  const AccountProfileRemoveImageRequested();
+}
+
 class AccountProfileDeleteRequested extends AccountProfileEvent {
   const AccountProfileDeleteRequested();
 }

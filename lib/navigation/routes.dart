@@ -15,7 +15,14 @@ class Routes {
   static const String storeImportApprovedRoute = 'store_import_approved_route';
   static const String storeImportRequestsRoute = 'store_import_requests_route';
   static const String addProductGalleryRoute = 'add_product_gallery_route';
+  static const String addProductGroupRoute = 'add_product_group_route';
+  static const String addProductGroupDetailsRoute =
+      'add_product_group_details_route';
+  static const String addProductGroupPreviewRoute =
+      'add_product_group_preview_route';
   static const String addProductFormRoute = 'add_product_form_route';
+  static const String editProductSpecsRoute = 'edit_product_specs_route';
+  static const String collectionBrowseRoute = 'collection_browse_route';
   static const String productDetailsRoute = 'product_details_route';
   static const String countryPickerRoute = 'country_picker_route';
   static const String homePlaceholderRoute = 'home_placeholder_route';

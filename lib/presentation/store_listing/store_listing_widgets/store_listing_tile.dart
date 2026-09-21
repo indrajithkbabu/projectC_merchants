@@ -62,10 +62,6 @@ class StoreListingTile extends StatelessWidget {
         store.storeLink,
         style: AppTextStyles.caption(),
       ),
-      trailing: Text(
-        '${store.products.length}',
-        style: AppTextStyles.caption(fontWeight: FontWeight.w600),
-      ),
     );
   }
 }

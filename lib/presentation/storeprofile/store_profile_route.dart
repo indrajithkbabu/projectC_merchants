@@ -10,11 +10,72 @@ import 'package:project_c/helper/text_styles.dart';
 import 'package:project_c/helper/widgets/screen_wrapper.dart';
 import 'package:project_c/models/store_product.dart';
 import 'package:project_c/navigation/routes.dart';
+import 'package:project_c/presentation/storeprofile/storeprofile_widgets/store_images_manager_sheet.dart';
 import 'package:project_c/presentation/storeprofile/storeprofile_widgets/store_product_grid.dart';
 import 'package:project_c/presentation/storeprofile/storeprofile_widgets/store_profile_collapsing_header.dart';
 
-class StoreProfileRoute extends StatelessWidget {
+class StoreProfileRoute extends StatefulWidget {
   const StoreProfileRoute({super.key});
+
+  @override
+  State<StoreProfileRoute> createState() => _StoreProfileRouteState();
+}
+
+class _StoreProfileRouteState extends State<StoreProfileRoute>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _headerExpand;
+  late final Animation<double> _headerExpandT;
+
+  @override
+  void initState() {
+    super.initState();
+    // Start collapsed (listing-first); tap header to reveal store details.
+    _headerExpand = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 380),
+      value: 0,
+    );
+    _headerExpandT = CurvedAnimation(
+      parent: _headerExpand,
+      curve: Curves.easeInOutCubic,
+      reverseCurve: Curves.easeInOutCubic,
+    );
+  }
+
+  @override
+  void dispose() {
+    _headerExpand.dispose();
+    super.dispose();
+  }
+
+  bool get _isHeaderExpanded => _headerExpand.value > 0.001;
+
+  void _collapseHeaderDetails() {
+    if (!_isHeaderExpanded) return;
+    if (_headerExpand.status == AnimationStatus.reverse) return;
+    _headerExpand.reverse();
+  }
+
+  void _toggleHeaderDetails() {
+    if (_headerExpand.status == AnimationStatus.completed ||
+        _headerExpand.status == AnimationStatus.forward) {
+      _headerExpand.reverse();
+    } else {
+      _headerExpand.forward();
+    }
+  }
+
+  bool _onScrollNotification(ScrollNotification notification) {
+    if (notification is! ScrollUpdateNotification) return false;
+    // Ignore bounce / ballistic motion after finger lift — only collapse while
+    // the user is actively dragging upward (content moves up, positive delta).
+    if (notification.dragDetails == null) return false;
+    final delta = notification.scrollDelta ?? 0;
+    if (delta > 1.5 && _isHeaderExpanded) {
+      _collapseHeaderDetails();
+    }
+    return false;
+  }
 
   Future<void> _addProducts(BuildContext context) async {
     final source = await showModalBottomSheet<_ImagePickSource>(
@@ -74,7 +135,7 @@ class StoreProfileRoute extends StatelessWidget {
           maxWidth: 1920,
           maxHeight: 1920,
         );
-        final limited = photos.take(25).toList();
+        final limited = photos.take(50).toList();
         for (var i = 0; i < limited.length; i++) {
           final photo = limited[i];
           selectedItems.add(
@@ -97,7 +158,7 @@ class StoreProfileRoute extends StatelessWidget {
     if (!context.mounted || selectedItems.isEmpty) return;
 
     final published = await Navigator.of(context).pushNamed(
-      Routes.addProductFormRoute,
+      Routes.addProductGroupRoute,
       arguments: <String, Object?>{
         'selectedItems': selectedItems,
         'storeId': context.read<StoreProfileBloc>().state.storeId,
@@ -109,16 +170,20 @@ class StoreProfileRoute extends StatelessWidget {
       context.read<StoreProfileBloc>().add(
         StoreProfileProductPublished(StoreProduct.fromMap(payload)),
       );
+      return;
     }
+    // Done may popUntil store profile (result is null) — refresh from API
+    // so the newly published collection appears in the grid.
+    context.read<StoreProfileBloc>().add(const StoreProfileLoadCollections());
   }
 
-  Future<void> _openProductDetails(
+  Future<void> _openCollectionBrowse(
     BuildContext context,
     StoreProfileState state,
     StoreProduct product,
   ) async {
     final result = await Navigator.of(context).pushNamed(
-      Routes.productDetailsRoute,
+      Routes.collectionBrowseRoute,
       arguments: <String, Object?>{
         'product': product,
         'storeName': state.storeName,
@@ -139,7 +204,16 @@ class StoreProfileRoute extends StatelessWidget {
       return;
     }
 
-    if (payload['updated'] == true) {
+    // Ungroup → new collection (and similar structural moves): reload the grid
+    // so the new listing appears and the source card counts/cover stay in sync.
+    final newCollectionId = (payload['newCollectionId'] as String?)?.trim();
+    if (payload['refreshCollections'] == true ||
+        (newCollectionId != null && newCollectionId.isNotEmpty)) {
+      context.read<StoreProfileBloc>().add(const StoreProfileLoadCollections());
+      return;
+    }
+
+    if (payload['updated'] == true && payload.containsKey('id')) {
       context.read<StoreProfileBloc>().add(
         StoreProfileProductUpdated(
           StoreProduct.fromMap(payload),
@@ -218,10 +292,12 @@ class StoreProfileRoute extends StatelessWidget {
   ) async {
     await Navigator.of(context).pushNamed(
       Routes.addTeamRoute,
-      arguments: state.storeName,
+      arguments: <String, Object?>{
+        'storeName': state.storeName,
+        'returnToProfile': true,
+      },
     );
     if (!context.mounted) return;
-    // Returning via system back (without Continue) — refresh members.
     context.read<StoreProfileBloc>().add(const StoreProfileLoadMembers());
   }
 
@@ -313,73 +389,88 @@ class StoreProfileRoute extends StatelessWidget {
                 top: ScreenWrapper.statusBarTop(context),
                 bottom: 24,
               ),
-              child: CustomScrollView(
-                physics: const BouncingScrollPhysics(),
-                slivers: [
-                  SliverPersistentHeader(
-                    pinned: true,
-                    delegate: StoreProfileCollapsingHeaderDelegate(
-                      state: state,
-                      onBack: () => _onBack(context),
-                      onAddProducts: () => _addProducts(context),
-                      onImport: () => _openImport(context, state),
-                      onAddMembers:
-                          state.showAddMembersCta
-                              ? () => _openAddMembers(context, state)
-                              : null,
-                      onCopyStoreLink: () => _copyStoreLink(context, state),
-                      onViewAll:
-                          state.products.isNotEmpty
-                              ? () => _openGallery(context, state)
-                              : null,
-                      toolbarActions: [
-                        if (state.showImportRequestsBadge) ...[
-                          _ImportRequestsIconButton(
-                            count: state.pendingImportRequestCount,
-                            onTap: () async {
-                              await Navigator.of(context).pushNamed(
-                                Routes.storeImportRequestsRoute,
-                                arguments: <String, Object?>{
-                                  'storeId': state.storeId,
-                                  'storeName': state.storeName,
-                                },
-                              );
-                              if (!context.mounted) return;
-                              context.read<StoreProfileBloc>().add(
-                                const StoreProfileLoadImportRequestCount(),
-                              );
-                            },
+              child: NotificationListener<ScrollNotification>(
+                onNotification: _onScrollNotification,
+                child: AnimatedBuilder(
+                  animation: _headerExpandT,
+                  builder: (context, _) {
+                    return CustomScrollView(
+                      physics: const BouncingScrollPhysics(),
+                      slivers: [
+                        SliverPersistentHeader(
+                          pinned: true,
+                          delegate: StoreProfileCollapsingHeaderDelegate(
+                            state: state,
+                            expandT: _headerExpandT.value,
+                            onToggleDetails: _toggleHeaderDetails,
+                            onBack: () => _onBack(context),
+                            onAddProducts: () => _addProducts(context),
+                            onImport: () => _openImport(context, state),
+                            onAddMembers:
+                                state.showAddMembersCta
+                                    ? () => _openAddMembers(context, state)
+                                    : null,
+                            onCopyStoreLink:
+                                () => _copyStoreLink(context, state),
+                            onManageImages:
+                                state.isOwnStore
+                                    ? () => showStoreImagesManagerSheet(context)
+                                    : null,
+                            onViewAll:
+                                state.products.isNotEmpty
+                                    ? () => _openGallery(context, state)
+                                    : null,
+                            toolbarActions: [
+                              if (state.showImportRequestsBadge) ...[
+                                _ImportRequestsIconButton(
+                                  count: state.pendingImportRequestCount,
+                                  onTap: () async {
+                                    await Navigator.of(context).pushNamed(
+                                      Routes.storeImportRequestsRoute,
+                                      arguments: <String, Object?>{
+                                        'storeId': state.storeId,
+                                        'storeName': state.storeName,
+                                      },
+                                    );
+                                    if (!context.mounted) return;
+                                    context.read<StoreProfileBloc>().add(
+                                      const StoreProfileLoadImportRequestCount(),
+                                    );
+                                  },
+                                ),
+                                if (state.products.isNotEmpty)
+                                  const SizedBox(width: 8),
+                              ],
+                              if (state.products.isNotEmpty)
+                                _RoundIconButton(
+                                  icon: Icons.photo_library_outlined,
+                                  onTap: () => _openGallery(context, state),
+                                ),
+                            ],
                           ),
-                          if (state.products.isNotEmpty)
-                            const SizedBox(width: 8),
-                        ],
-                        if (state.products.isNotEmpty)
-                          _RoundIconButton(
-                            icon: Icons.photo_library_outlined,
-                            onTap: () => _openGallery(context, state),
-                          ),
+                        ),
+                        SliverPadding(
+                          padding: const EdgeInsets.only(bottom: 16),
+                          sliver: StoreProductGrid(
+                            products: state.products,
+                            deletingProductId: state.deletingProductId,
+                            onProductTap:
+                                (product) => _openCollectionBrowse(
+                                  context,
+                                  state,
+                                  product,
+                                ),
+                            onProductDelete:
+                                state.isOwnStore
+                                    ? (product) =>
+                                        _confirmDeleteProduct(context, product)
+                                    : null,
+                          ).buildSliver(),
+                        ),
                       ],
-                    ),
-                  ),
-                  SliverPadding(
-                    padding: const EdgeInsets.only(bottom: 16),
-                    sliver: StoreProductGrid(
-                      products: state.products,
-                      deletingProductId: state.deletingProductId,
-                      onProductTap:
-                          (product) => _openProductDetails(
-                            context,
-                            state,
-                            product,
-                          ),
-                      onProductDelete:
-                          state.isOwnStore
-                              ? (product) =>
-                                  _confirmDeleteProduct(context, product)
-                              : null,
-                    ).buildSliver(),
-                  ),
-                ],
+                    );
+                  },
+                ),
               ),
             );
           },

@@ -1,5 +1,8 @@
+import 'dart:io';
+
 import 'package:bloc/bloc.dart';
 import 'package:equatable/equatable.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:project_c/di/service_locator.dart';
 import 'package:project_c/helper/app_log.dart';
 import 'package:project_c/models/catalog/catalog_profile.dart';
@@ -16,12 +19,16 @@ class AccountProfileBloc
   AccountProfileBloc({
     ProfileRepository? profileRepository,
     CatalogSession? session,
+    ImagePicker? imagePicker,
   }) : _profileRepository =
            profileRepository ?? ServiceLocator.get<ProfileRepository>(),
        _session = session ?? ServiceLocator.get<CatalogSession>(),
+       _imagePicker = imagePicker ?? ImagePicker(),
        super(const AccountProfileState()) {
     on<AccountProfileStarted>(_onStarted);
     on<AccountProfileRefreshed>(_onRefreshed);
+    on<AccountProfilePickImageRequested>(_onPickImageRequested);
+    on<AccountProfileRemoveImageRequested>(_onRemoveImageRequested);
     on<AccountProfileDeleteRequested>(_onDeleteRequested);
     on<AccountProfileClearMessage>(_onClearMessage);
     on<AccountProfileClearAccountDeleted>(_onClearAccountDeleted);
@@ -30,6 +37,7 @@ class AccountProfileBloc
 
   final ProfileRepository _profileRepository;
   final CatalogSession _session;
+  final ImagePicker _imagePicker;
   static const _tag = 'AccountProfileBloc';
 
   Future<void> _onStarted(
@@ -66,6 +74,58 @@ class AccountProfileBloc
       emit(
         state.copyWith(
           isRefreshing: false,
+          errorMessage: CatalogErrorMapper.toUserMessage(e),
+        ),
+      );
+    }
+  }
+
+  Future<void> _onPickImageRequested(
+    AccountProfilePickImageRequested event,
+    Emitter<AccountProfileState> emit,
+  ) async {
+    if (state.isUpdatingImage) return;
+    emit(state.copyWith(isUpdatingImage: true, clearError: true));
+    try {
+      final picked = await _imagePicker.pickImage(
+        source: event.source,
+        imageQuality: 85,
+      );
+      if (picked == null) {
+        emit(state.copyWith(isUpdatingImage: false));
+        return;
+      }
+      final profile = await _profileRepository.uploadProfileImage(
+        File(picked.path),
+      );
+      AppLog.d(_tag, 'Profile image uploaded');
+      emit(state.copyWith(isUpdatingImage: false, profile: profile));
+    } catch (e) {
+      AppLog.e(_tag, 'Profile image upload failed', e);
+      emit(
+        state.copyWith(
+          isUpdatingImage: false,
+          errorMessage: CatalogErrorMapper.toUserMessage(e),
+        ),
+      );
+    }
+  }
+
+  Future<void> _onRemoveImageRequested(
+    AccountProfileRemoveImageRequested event,
+    Emitter<AccountProfileState> emit,
+  ) async {
+    if (state.isUpdatingImage) return;
+    emit(state.copyWith(isUpdatingImage: true, clearError: true));
+    try {
+      final profile = await _profileRepository.deleteProfileImage();
+      AppLog.d(_tag, 'Profile image deleted');
+      emit(state.copyWith(isUpdatingImage: false, profile: profile));
+    } catch (e) {
+      AppLog.e(_tag, 'Profile image delete failed', e);
+      emit(
+        state.copyWith(
+          isUpdatingImage: false,
           errorMessage: CatalogErrorMapper.toUserMessage(e),
         ),
       );

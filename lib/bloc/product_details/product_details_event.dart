@@ -11,6 +11,15 @@ class ProductDetailsLoadPhotos extends ProductDetailsEvent {
   const ProductDetailsLoadPhotos();
 }
 
+class ProductDetailsActivateProduct extends ProductDetailsEvent {
+  const ProductDetailsActivateProduct(this.product);
+
+  final StoreProduct product;
+
+  @override
+  List<Object?> get props => [product];
+}
+
 class ProductDetailsSharePressed extends ProductDetailsEvent {
   const ProductDetailsSharePressed();
 }

@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:project_c/helper/app_log.dart';
 import 'package:project_c/models/catalog/catalog_profile.dart';
 import 'package:project_c/session/catalog_session.dart';
@@ -9,7 +11,12 @@ abstract class ProfileRepository {
   Future<CatalogProfile> updateNames({
     required String firstName,
     String? lastName,
+    File? profileImageFile,
   });
+
+  Future<CatalogProfile> uploadProfileImage(File file);
+
+  Future<CatalogProfile> deleteProfileImage();
 
   Future<CatalogProfile> skipStoreOnboarding();
 
@@ -41,14 +48,42 @@ class ProfileRepositoryImpl implements ProfileRepository {
   Future<CatalogProfile> updateNames({
     required String firstName,
     String? lastName,
+    File? profileImageFile,
   }) async {
-    AppLog.d(_tag, 'updateNames');
+    AppLog.d(
+      _tag,
+      'updateNames hasImage=${profileImageFile != null}',
+    );
     final profile = await _request.updateMe(
       firstName: firstName,
       lastName: lastName,
+      profileImageFile: profileImageFile,
     );
     await _session.updateProfile(profile);
     return profile;
+  }
+
+  @override
+  Future<CatalogProfile> uploadProfileImage(File file) async {
+    AppLog.d(_tag, 'uploadProfileImage');
+    final result = await _request.uploadProfileImage(file);
+    final current = _session.profile ?? await _request.fetchMe();
+    final updated = current.copyWith(
+      profileImage: result.profileImage,
+      profileImageUrl: result.profileImageUrl,
+    );
+    await _session.updateProfile(updated);
+    return updated;
+  }
+
+  @override
+  Future<CatalogProfile> deleteProfileImage() async {
+    AppLog.d(_tag, 'deleteProfileImage');
+    await _request.deleteProfileImage();
+    final current = _session.profile ?? await _request.fetchMe();
+    final updated = current.copyWith(clearProfileImage: true);
+    await _session.updateProfile(updated);
+    return updated;
   }
 
   @override

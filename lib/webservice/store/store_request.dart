@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:project_c/models/catalog/catalog_page.dart';
 import 'package:project_c/models/catalog/catalog_store.dart';
 import 'package:project_c/models/catalog/store_member_models.dart';
@@ -8,6 +10,8 @@ class StoreRequest {
   StoreRequest({required CatalogApiClient apiClient}) : _api = apiClient;
 
   final CatalogApiClient _api;
+
+  static const maxStoreImages = 5;
 
   Future<CatalogPage<CatalogStore>> fetchHome({
     int limit = 20,
@@ -59,11 +63,33 @@ class StoreRequest {
   Future<CatalogStore> createStore({
     required String name,
     required String slug,
+    String? legalName,
+    List<File> imageFiles = const [],
   }) async {
-    final json = await _api.sendJson(
+    if (imageFiles.isEmpty) {
+      final json = await _api.sendJson(
+        method: HttpMethod.post,
+        path: Endpoints.stores,
+        body: {
+          'name': name,
+          'slug': slug,
+          if (legalName != null && legalName.trim().isNotEmpty)
+            'legalName': legalName.trim(),
+        },
+        requiresAuth: true,
+      );
+      return CatalogStore.fromJson(json ?? const {});
+    }
+
+    final fields = <String, String>{'name': name, 'slug': slug};
+    if (legalName != null && legalName.trim().isNotEmpty) {
+      fields['legalName'] = legalName.trim();
+    }
+    final json = await _api.sendMultipart(
       method: HttpMethod.post,
       path: Endpoints.stores,
-      body: {'name': name, 'slug': slug},
+      fields: fields,
+      files: _imageParts(imageFiles),
       requiresAuth: true,
     );
     return CatalogStore.fromJson(json ?? const {});
@@ -80,6 +106,46 @@ class StoreRequest {
       requiresAuth: true,
     );
     return CatalogStore.fromJson(json ?? const {});
+  }
+
+  Future<CatalogStore> appendStoreImages({
+    required String storeId,
+    required List<File> imageFiles,
+  }) async {
+    await _api.sendMultipart(
+      method: HttpMethod.post,
+      path: Endpoints.storeImages(storeId),
+      fields: const {},
+      files: _imageParts(imageFiles),
+      requiresAuth: true,
+    );
+    return fetchStore(storeId);
+  }
+
+  Future<CatalogStore> deleteStoreImage({
+    required String storeId,
+    required String imageId,
+  }) async {
+    await _api.sendJson(
+      method: HttpMethod.delete,
+      path: Endpoints.storeImage(storeId, imageId),
+      requiresAuth: true,
+    );
+    return fetchStore(storeId);
+  }
+
+  Future<CatalogStore> replaceStoreImages({
+    required String storeId,
+    required List<File> imageFiles,
+  }) async {
+    await _api.sendMultipart(
+      method: HttpMethod.put,
+      path: Endpoints.storeImages(storeId),
+      fields: const {},
+      files: _imageParts(imageFiles),
+      requiresAuth: true,
+    );
+    return fetchStore(storeId);
   }
 
   Future<ContactBatchResult> addContacts({
@@ -139,6 +205,24 @@ class StoreRequest {
       body: const <String, dynamic>{},
       requiresAuth: true,
     );
+  }
+
+  List<CatalogMultipartFile> _imageParts(List<File> files) {
+    final parts = <CatalogMultipartFile>[];
+    for (final file in files) {
+      final name =
+          file.uri.pathSegments.isNotEmpty
+              ? file.uri.pathSegments.last
+              : 'store.jpg';
+      parts.add(
+        CatalogMultipartFile(
+          field: 'images',
+          file: file,
+          filename: name,
+        ),
+      );
+    }
+    return parts;
   }
 
   CatalogPage<CatalogStore> _pageStores(Map<String, dynamic>? json) {

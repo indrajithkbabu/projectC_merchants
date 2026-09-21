@@ -14,6 +14,10 @@ class StoreProfileState extends Equatable {
     this.errorMessage,
     this.isLoadingProducts = false,
     this.isLoadingMembers = false,
+    this.isLoadingStoreMeta = false,
+    this.isUpdatingStoreImages = false,
+    this.storeImages = const [],
+    this.coverImageUrl = '',
     this.pendingImportRequestCount = 0,
     this.deletingProductId,
   });
@@ -30,6 +34,10 @@ class StoreProfileState extends Equatable {
   final String? errorMessage;
   final bool isLoadingProducts;
   final bool isLoadingMembers;
+  final bool isLoadingStoreMeta;
+  final bool isUpdatingStoreImages;
+  final List<CatalogPhoto> storeImages;
+  final String coverImageUrl;
   final int pendingImportRequestCount;
   final String? deletingProductId;
 
@@ -48,8 +56,8 @@ class StoreProfileState extends Equatable {
 
   int get teammateCount => teammates.length;
 
-  /// Own store with no added teammates → show Add members CTA.
-  bool get showAddMembersCta => isOwnStore && teammateCount == 0;
+  /// Own store can always add members from the expanded profile header.
+  bool get showAddMembersCta => isOwnStore;
 
   bool get showImportRequestsBadge => isOwnStore;
 
@@ -70,6 +78,10 @@ class StoreProfileState extends Equatable {
     String? errorMessage,
     bool? isLoadingProducts,
     bool? isLoadingMembers,
+    bool? isLoadingStoreMeta,
+    bool? isUpdatingStoreImages,
+    List<CatalogPhoto>? storeImages,
+    String? coverImageUrl,
     int? pendingImportRequestCount,
     String? deletingProductId,
     bool clearDeletingProductId = false,
@@ -89,6 +101,11 @@ class StoreProfileState extends Equatable {
       errorMessage: clearError ? null : (errorMessage ?? this.errorMessage),
       isLoadingProducts: isLoadingProducts ?? this.isLoadingProducts,
       isLoadingMembers: isLoadingMembers ?? this.isLoadingMembers,
+      isLoadingStoreMeta: isLoadingStoreMeta ?? this.isLoadingStoreMeta,
+      isUpdatingStoreImages:
+          isUpdatingStoreImages ?? this.isUpdatingStoreImages,
+      storeImages: storeImages ?? this.storeImages,
+      coverImageUrl: coverImageUrl ?? this.coverImageUrl,
       pendingImportRequestCount:
           pendingImportRequestCount ?? this.pendingImportRequestCount,
       deletingProductId:
@@ -112,6 +129,10 @@ class StoreProfileState extends Equatable {
     errorMessage,
     isLoadingProducts,
     isLoadingMembers,
+    isLoadingStoreMeta,
+    isUpdatingStoreImages,
+    storeImages,
+    coverImageUrl,
     pendingImportRequestCount,
     deletingProductId,
   ];

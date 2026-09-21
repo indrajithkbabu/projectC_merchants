@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:project_c/helper/app_log.dart';
 import 'package:project_c/models/catalog/catalog_page.dart';
 import 'package:project_c/models/catalog/collection_models.dart';
+import 'package:project_c/models/catalog/collection_specifications.dart';
 import 'package:project_c/webservice/collection/collection_request.dart';
 
 abstract class CollectionRepository {
@@ -23,6 +24,8 @@ abstract class CollectionRepository {
     required List<File> photoFiles,
     String tag = '',
     String description = '',
+    Map<String, dynamic>? specifications,
+    bool usePrecisionTag = false,
   });
 
   Future<CollectionMutation> updateCollection({
@@ -32,6 +35,8 @@ abstract class CollectionRepository {
     String? name,
     String? tag,
     String? description,
+    Map<String, dynamic>? specifications,
+    bool? usePrecisionTag,
   });
 
   Future<CollectionCreateResult> updateCollectionWithPhotos({
@@ -42,11 +47,46 @@ abstract class CollectionRepository {
     String? name,
     String? tag,
     String? description,
+    Map<String, dynamic>? specifications,
+    bool? usePrecisionTag,
   });
 
   Future<CollectionCreateResult> deletePhotos({
     required String storeId,
     required String listingId,
+    required List<String> photoIds,
+    int? revision,
+  });
+
+  Future<CollectionSubGroup> createSubGroup({
+    required String storeId,
+    required String listingId,
+    required String name,
+    required List<String> photoIds,
+    required int revision,
+    String tag = '',
+    String description = '',
+    Map<String, dynamic>? specifications,
+    bool usePrecisionTag = false,
+  });
+
+  Future<void> updateSubGroup({
+    required String storeId,
+    required String listingId,
+    required String subGroupId,
+    required int revision,
+    String? name,
+    String? tag,
+    String? description,
+    Map<String, dynamic>? specifications,
+    bool? usePrecisionTag,
+  });
+
+  Future<CollectionCreateResult> movePhotos({
+    required String storeId,
+    required String listingId,
+    required Map<String, dynamic> source,
+    required Map<String, dynamic> destination,
     required List<String> photoIds,
     int? revision,
   });
@@ -94,14 +134,22 @@ class CollectionRepositoryImpl implements CollectionRepository {
     required List<File> photoFiles,
     String tag = '',
     String description = '',
+    Map<String, dynamic>? specifications,
+    bool usePrecisionTag = false,
   }) {
-    AppLog.d(_tag, 'createCollection photos=${photoFiles.length}');
+    AppLog.d(
+      _tag,
+      'createCollection photos=${photoFiles.length} '
+      'specs=${specifications != null}',
+    );
     return _request.createCollection(
       storeId: storeId,
       name: name,
       photoFiles: photoFiles,
       tag: tag,
       description: description,
+      specifications: specifications,
+      usePrecisionTag: usePrecisionTag,
     );
   }
 
@@ -113,6 +161,8 @@ class CollectionRepositoryImpl implements CollectionRepository {
     String? name,
     String? tag,
     String? description,
+    Map<String, dynamic>? specifications,
+    bool? usePrecisionTag,
   }) {
     return _request.updateCollection(
       storeId: storeId,
@@ -121,6 +171,8 @@ class CollectionRepositoryImpl implements CollectionRepository {
       name: name,
       tag: tag,
       description: description,
+      specifications: specifications,
+      usePrecisionTag: usePrecisionTag,
     );
   }
 
@@ -133,6 +185,8 @@ class CollectionRepositoryImpl implements CollectionRepository {
     String? name,
     String? tag,
     String? description,
+    Map<String, dynamic>? specifications,
+    bool? usePrecisionTag,
   }) {
     AppLog.d(
       _tag,
@@ -146,6 +200,8 @@ class CollectionRepositoryImpl implements CollectionRepository {
       name: name,
       tag: tag,
       description: description,
+      specifications: specifications,
+      usePrecisionTag: usePrecisionTag,
     );
   }
 
@@ -163,6 +219,87 @@ class CollectionRepositoryImpl implements CollectionRepository {
     return _request.deletePhotos(
       storeId: storeId,
       listingId: listingId,
+      photoIds: photoIds,
+      revision: revision,
+    );
+  }
+
+  @override
+  Future<CollectionSubGroup> createSubGroup({
+    required String storeId,
+    required String listingId,
+    required String name,
+    required List<String> photoIds,
+    required int revision,
+    String tag = '',
+    String description = '',
+    Map<String, dynamic>? specifications,
+    bool usePrecisionTag = false,
+  }) {
+    AppLog.d(
+      _tag,
+      'createSubGroup listing=$listingId photos=${photoIds.length}',
+    );
+    return _request.createSubGroup(
+      storeId: storeId,
+      listingId: listingId,
+      name: name,
+      photoIds: photoIds,
+      revision: revision,
+      tag: tag,
+      description: description,
+      specifications: specifications,
+      usePrecisionTag: usePrecisionTag,
+    );
+  }
+
+  @override
+  Future<void> updateSubGroup({
+    required String storeId,
+    required String listingId,
+    required String subGroupId,
+    required int revision,
+    String? name,
+    String? tag,
+    String? description,
+    Map<String, dynamic>? specifications,
+    bool? usePrecisionTag,
+  }) {
+    AppLog.d(
+      _tag,
+      'updateSubGroup listing=$listingId sub=$subGroupId',
+    );
+    return _request.updateSubGroup(
+      storeId: storeId,
+      listingId: listingId,
+      subGroupId: subGroupId,
+      revision: revision,
+      name: name,
+      tag: tag,
+      description: description,
+      specifications: specifications,
+      usePrecisionTag: usePrecisionTag,
+    );
+  }
+
+  @override
+  Future<CollectionCreateResult> movePhotos({
+    required String storeId,
+    required String listingId,
+    required Map<String, dynamic> source,
+    required Map<String, dynamic> destination,
+    required List<String> photoIds,
+    int? revision,
+  }) {
+    AppLog.d(
+      _tag,
+      'movePhotos listing=$listingId count=${photoIds.length}',
+    );
+    return _request.movePhotos(
+      storeId: storeId,
+      listingId: listingId,
+      source: source,
+      destination: destination,
       photoIds: photoIds,
       revision: revision,
     );

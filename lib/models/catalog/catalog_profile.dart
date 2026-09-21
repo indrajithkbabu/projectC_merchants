@@ -1,5 +1,6 @@
 import 'package:equatable/equatable.dart';
 import 'package:project_c/models/catalog/catalog_store.dart';
+import 'package:project_c/models/catalog/collection_models.dart';
 
 enum CatalogOnboarding { nameRequired, storeOptional, complete }
 
@@ -36,6 +37,8 @@ class CatalogProfile extends Equatable {
     this.firstName,
     this.lastName,
     this.ownStore,
+    this.profileImage,
+    this.profileImageUrl,
   });
 
   final String id;
@@ -44,6 +47,8 @@ class CatalogProfile extends Equatable {
   final String? lastName;
   final CatalogOnboarding onboarding;
   final CatalogStore? ownStore;
+  final CatalogPhoto? profileImage;
+  final String? profileImageUrl;
 
   String get displayName {
     final first = firstName?.trim() ?? '';
@@ -53,16 +58,52 @@ class CatalogProfile extends Equatable {
     return '$first $last';
   }
 
+  /// Prefer explicit URL, then nested image object.
+  String get effectiveProfileImageUrl {
+    final direct = profileImageUrl?.trim() ?? '';
+    if (direct.isNotEmpty) return direct;
+    return profileImage?.url.trim() ?? '';
+  }
+
   factory CatalogProfile.fromJson(Map<String, dynamic> json) {
-    final own = json['ownStore'];
+    final root =
+        json['user'] is Map<String, dynamic>
+            ? json['user'] as Map<String, dynamic>
+            : json;
+    final own = root['ownStore'] ?? root['stores'];
+    CatalogStore? ownStore;
+    if (own is Map<String, dynamic>) {
+      ownStore = CatalogStore.fromJson(own);
+    } else if (own is List && own.isNotEmpty && own.first is Map) {
+      ownStore = CatalogStore.fromJson(
+        Map<String, dynamic>.from(own.first as Map),
+      );
+    }
+
+    var firstName = root['firstName'] as String?;
+    var lastName = root['lastName'] as String?;
+    final fullName = (root['name'] as String?)?.trim() ?? '';
+    if ((firstName == null || firstName.trim().isEmpty) && fullName.isNotEmpty) {
+      final parts = fullName.split(RegExp(r'\s+'));
+      firstName = parts.first;
+      if (parts.length > 1) {
+        lastName = parts.sublist(1).join(' ');
+      }
+    }
+
+    final rawImage = root['profileImage'];
     return CatalogProfile(
-      id: json['id'] as String? ?? '',
-      phone: json['phone'] as String? ?? '',
-      firstName: json['firstName'] as String?,
-      lastName: json['lastName'] as String?,
-      onboarding: catalogOnboardingFromString(json['onboarding'] as String?),
-      ownStore:
-          own is Map<String, dynamic> ? CatalogStore.fromJson(own) : null,
+      id: root['id'] as String? ?? '',
+      phone: root['phone'] as String? ?? '',
+      firstName: firstName,
+      lastName: lastName,
+      onboarding: catalogOnboardingFromString(root['onboarding'] as String?),
+      ownStore: ownStore,
+      profileImage:
+          rawImage is Map<String, dynamic>
+              ? CatalogPhoto.fromJson(rawImage)
+              : null,
+      profileImageUrl: root['profileImageUrl'] as String?,
     );
   }
 
@@ -73,6 +114,14 @@ class CatalogProfile extends Equatable {
     'lastName': lastName,
     'onboarding': onboarding.apiValue,
     'ownStore': ownStore?.toJson(),
+    if (profileImage != null)
+      'profileImage': {
+        'id': profileImage!.id,
+        'url': profileImage!.url,
+        'width': profileImage!.width,
+        'height': profileImage!.height,
+      },
+    'profileImageUrl': profileImageUrl,
   };
 
   CatalogProfile copyWith({
@@ -82,7 +131,10 @@ class CatalogProfile extends Equatable {
     String? lastName,
     CatalogOnboarding? onboarding,
     CatalogStore? ownStore,
+    CatalogPhoto? profileImage,
+    String? profileImageUrl,
     bool clearOwnStore = false,
+    bool clearProfileImage = false,
   }) {
     return CatalogProfile(
       id: id ?? this.id,
@@ -91,6 +143,12 @@ class CatalogProfile extends Equatable {
       lastName: lastName ?? this.lastName,
       onboarding: onboarding ?? this.onboarding,
       ownStore: clearOwnStore ? null : (ownStore ?? this.ownStore),
+      profileImage:
+          clearProfileImage ? null : (profileImage ?? this.profileImage),
+      profileImageUrl:
+          clearProfileImage
+              ? null
+              : (profileImageUrl ?? this.profileImageUrl),
     );
   }
 
@@ -102,5 +160,7 @@ class CatalogProfile extends Equatable {
     lastName,
     onboarding,
     ownStore,
+    profileImage,
+    profileImageUrl,
   ];
 }

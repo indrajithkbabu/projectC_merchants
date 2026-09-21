@@ -12,6 +12,8 @@ class ProductImageCarousel extends StatefulWidget {
     this.onDelete,
     this.onAddPressed,
     this.readOnly = false,
+    this.initialIndex = 0,
+    this.emptyLabel = 'Add product photos',
   });
 
   final List<GalleryImageItem> images;
@@ -19,6 +21,8 @@ class ProductImageCarousel extends StatefulWidget {
   final ValueChanged<String>? onDelete;
   final VoidCallback? onAddPressed;
   final bool readOnly;
+  final int initialIndex;
+  final String emptyLabel;
 
   @override
   State<ProductImageCarousel> createState() => _ProductImageCarouselState();
@@ -26,12 +30,14 @@ class ProductImageCarousel extends StatefulWidget {
 
 class _ProductImageCarouselState extends State<ProductImageCarousel> {
   late final PageController _pageController;
-  int _currentPage = 0;
+  late int _currentPage;
 
   @override
   void initState() {
     super.initState();
-    _pageController = PageController();
+    final max = widget.images.isEmpty ? 0 : widget.images.length - 1;
+    _currentPage = widget.initialIndex.clamp(0, max);
+    _pageController = PageController(initialPage: _currentPage);
   }
 
   @override
@@ -62,6 +68,7 @@ class _ProductImageCarouselState extends State<ProductImageCarousel> {
       return _EmptyImageSlot(
         isPicking: widget.isPicking,
         onAddPressed: widget.readOnly ? null : widget.onAddPressed,
+        emptyLabel: widget.emptyLabel,
       );
     }
 
@@ -206,10 +213,15 @@ class _FallbackThumb extends StatelessWidget {
 }
 
 class _EmptyImageSlot extends StatelessWidget {
-  const _EmptyImageSlot({required this.isPicking, required this.onAddPressed});
+  const _EmptyImageSlot({
+    required this.isPicking,
+    required this.onAddPressed,
+    required this.emptyLabel,
+  });
 
   final bool isPicking;
   final VoidCallback? onAddPressed;
+  final String emptyLabel;
 
   @override
   Widget build(BuildContext context) {
@@ -239,7 +251,7 @@ class _EmptyImageSlot extends StatelessWidget {
                         ),
                         const SizedBox(height: 8),
                         Text(
-                          'Add product photos',
+                          emptyLabel,
                           style: AppTextStyles.label(
                             color: AppColors.accent,
                             fontWeight: FontWeight.w600,
