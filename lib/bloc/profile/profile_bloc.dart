@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:bloc/bloc.dart';
 import 'package:equatable/equatable.dart';
 import 'package:image_picker/image_picker.dart';
@@ -48,7 +50,6 @@ class ProfileBloc extends Bloc<ProfileEvent, ProfileState> {
     ProfilePickImageRequested event,
     Emitter<ProfileState> emit,
   ) async {
-    // Profile photos are not supported by Catalog API; keep local UX only.
     emit(state.copyWith(isPickingImage: true, clearError: true));
     try {
       final picked = await _imagePicker.pickImage(
@@ -76,7 +77,7 @@ class ProfileBloc extends Bloc<ProfileEvent, ProfileState> {
     ProfileRemoveImageRequested event,
     Emitter<ProfileState> emit,
   ) {
-    emit(state.copyWith(imagePath: '', clearError: true));
+    emit(state.copyWith(clearImage: true, clearError: true));
   }
 
   Future<void> _onContinuePressed(
@@ -88,9 +89,12 @@ class ProfileBloc extends Bloc<ProfileEvent, ProfileState> {
     try {
       final first = state.firstName.trim();
       final last = state.lastName.trim();
+      final path = state.imagePath?.trim();
       await _profileRepository.updateNames(
         firstName: first,
-        lastName: last,
+        lastName: last.isEmpty ? null : last,
+        profileImageFile:
+            path != null && path.isNotEmpty ? File(path) : null,
       );
       AppLog.d(_tag, 'Profile names saved');
       emit(state.copyWith(isSubmitting: false, isCompleted: true));

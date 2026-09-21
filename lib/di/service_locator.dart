@@ -1,5 +1,7 @@
 import 'package:flutter_simple_dependency_injection/injector.dart';
+import 'package:project_c/services/screenshot_protection_service.dart';
 import 'package:project_c/session/catalog_session.dart';
+import 'package:project_c/storage/app_settings_storage.dart';
 import 'package:project_c/storage/session_storage.dart';
 import 'package:project_c/webservice/auth/auth_repository.dart';
 import 'package:project_c/webservice/auth/auth_request.dart';
@@ -26,10 +28,19 @@ class ServiceLocator {
     _configured = true;
 
     final storage = SessionStorage();
+    final appSettings = AppSettingsStorage();
+    final screenshotProtection = ScreenshotProtectionService(
+      storage: appSettings,
+    );
     final apiClient = CatalogApiClient(sessionStorage: storage);
     final session = CatalogSession(storage: storage, apiClient: apiClient);
 
     injector.map<SessionStorage>((_) => storage, isSingleton: true);
+    injector.map<AppSettingsStorage>((_) => appSettings, isSingleton: true);
+    injector.map<ScreenshotProtectionService>(
+      (_) => screenshotProtection,
+      isSingleton: true,
+    );
     injector.map<CatalogApiClient>((_) => apiClient, isSingleton: true);
     injector.map<CatalogSession>((_) => session, isSingleton: true);
 

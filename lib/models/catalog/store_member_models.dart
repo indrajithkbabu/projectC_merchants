@@ -7,6 +7,7 @@ class StoreMember extends Equatable {
     required this.signedUp,
     this.firstName,
     this.lastName,
+    this.localName,
   });
 
   final String userId;
@@ -15,12 +16,38 @@ class StoreMember extends Equatable {
   final String? lastName;
   final bool signedUp;
 
+  /// Device contact display name when catalog first/last are empty.
+  final String? localName;
+
   String get displayName {
     final first = firstName?.trim() ?? '';
     final last = lastName?.trim() ?? '';
-    if (first.isEmpty && last.isEmpty) return phone;
-    if (last.isEmpty) return first;
-    return '$first $last';
+    if (first.isNotEmpty || last.isNotEmpty) {
+      if (last.isEmpty) return first;
+      if (first.isEmpty) return last;
+      return '$first $last';
+    }
+    final local = localName?.trim() ?? '';
+    if (local.isNotEmpty) return local;
+    return phone.trim().isEmpty ? 'Unknown' : phone.trim();
+  }
+
+  StoreMember copyWith({
+    String? userId,
+    String? phone,
+    String? firstName,
+    String? lastName,
+    bool? signedUp,
+    String? localName,
+  }) {
+    return StoreMember(
+      userId: userId ?? this.userId,
+      phone: phone ?? this.phone,
+      firstName: firstName ?? this.firstName,
+      lastName: lastName ?? this.lastName,
+      signedUp: signedUp ?? this.signedUp,
+      localName: localName ?? this.localName,
+    );
   }
 
   factory StoreMember.fromJson(Map<String, dynamic> json) {
@@ -34,7 +61,14 @@ class StoreMember extends Equatable {
   }
 
   @override
-  List<Object?> get props => [userId, phone, firstName, lastName, signedUp];
+  List<Object?> get props => [
+    userId,
+    phone,
+    firstName,
+    lastName,
+    signedUp,
+    localName,
+  ];
 }
 
 class ContactBatchResult extends Equatable {

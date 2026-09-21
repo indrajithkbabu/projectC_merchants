@@ -7,6 +7,8 @@ class StoreSetupState extends Equatable {
     this.storeName = '',
     this.storeHandle = '',
     this.availabilityStatus = StoreLinkAvailabilityStatus.idle,
+    this.imagePaths = const [],
+    this.isPickingImages = false,
     this.isSubmitting = false,
     this.isCompleted = false,
     this.skippedStore = false,
@@ -17,6 +19,8 @@ class StoreSetupState extends Equatable {
   final String storeName;
   final String storeHandle;
   final StoreLinkAvailabilityStatus availabilityStatus;
+  final List<String> imagePaths;
+  final bool isPickingImages;
   final bool isSubmitting;
   final bool isCompleted;
   final bool skippedStore;
@@ -36,6 +40,8 @@ class StoreSetupState extends Equatable {
     String? storeName,
     String? storeHandle,
     StoreLinkAvailabilityStatus? availabilityStatus,
+    List<String>? imagePaths,
+    bool? isPickingImages,
     bool? isSubmitting,
     bool? isCompleted,
     bool? skippedStore,
@@ -48,6 +54,8 @@ class StoreSetupState extends Equatable {
       storeName: storeName ?? this.storeName,
       storeHandle: storeHandle ?? this.storeHandle,
       availabilityStatus: availabilityStatus ?? this.availabilityStatus,
+      imagePaths: imagePaths ?? this.imagePaths,
+      isPickingImages: isPickingImages ?? this.isPickingImages,
       isSubmitting: isSubmitting ?? this.isSubmitting,
       isCompleted: clearCompleted ? false : (isCompleted ?? this.isCompleted),
       skippedStore: skippedStore ?? this.skippedStore,
@@ -61,6 +69,8 @@ class StoreSetupState extends Equatable {
     storeName,
     storeHandle,
     availabilityStatus,
+    imagePaths,
+    isPickingImages,
     isSubmitting,
     isCompleted,
     skippedStore,

@@ -6,10 +6,17 @@ import 'package:project_c/helper/widgets/app_back_button.dart';
 import 'package:project_c/presentation/storeprofile/storeprofile_widgets/store_profile_actions_row.dart';
 import 'package:project_c/presentation/storeprofile/storeprofile_widgets/store_profile_header_card.dart';
 
+/// Pinned store profile header.
+///
+/// Defaults to the compact bar (listing-first). Tap the compact identity to
+/// expand store details; tap the header again (or scroll the product list) to
+/// collapse. Expand progress is driven by [expandT] from the parent animation.
 class StoreProfileCollapsingHeaderDelegate
     extends SliverPersistentHeaderDelegate {
   StoreProfileCollapsingHeaderDelegate({
     required this.state,
+    required this.expandT,
+    required this.onToggleDetails,
     required this.onBack,
     required this.onAddProducts,
     required this.onImport,
@@ -17,9 +24,14 @@ class StoreProfileCollapsingHeaderDelegate
     required this.onCopyStoreLink,
     required this.toolbarActions,
     this.onViewAll,
+    this.onManageImages,
   });
 
   final StoreProfileState state;
+
+  /// 0 = compact (listing-first), 1 = full store details.
+  final double expandT;
+  final VoidCallback onToggleDetails;
   final VoidCallback onBack;
   final VoidCallback onAddProducts;
   final VoidCallback onImport;
@@ -27,10 +39,14 @@ class StoreProfileCollapsingHeaderDelegate
   final VoidCallback onCopyStoreLink;
   final List<Widget> toolbarActions;
   final VoidCallback? onViewAll;
+  final VoidCallback? onManageImages;
 
   static const _toolbarHeight = 52.0;
   static const _expandedTopGap = 12.0;
-  static const _headerCardHeight = 200.0;
+  /// Fits logo, name, link, members/products row.
+  static const _headerCardHeightBase = 212.0;
+  /// Compact Add member row (text + light vertical padding).
+  static const _headerCardAddMemberExtra = 30.0;
   static const _actionsGap = 18.0;
   static const _actionsHeight = 48.0;
   static const _productsTopGap = 16.0;
@@ -38,20 +54,21 @@ class StoreProfileCollapsingHeaderDelegate
   static const _productsBottomGap = 10.0;
   static const _compactLogo = 36.0;
 
-  @override
-  double get minExtent =>
+  double get _headerCardHeight =>
+      _headerCardHeightBase +
+      (onAddMembers != null ? _headerCardAddMemberExtra : 0);
+
+  double get _collapsedExtent =>
       _toolbarHeight + _productsTopGap + _productsHeight + _productsBottomGap;
 
+  double get _expandedExtra =>
+      _expandedTopGap + _headerCardHeight + _actionsGap + _actionsHeight;
+
   @override
-  double get maxExtent =>
-      _toolbarHeight +
-      _expandedTopGap +
-      _headerCardHeight +
-      _actionsGap +
-      _actionsHeight +
-      _productsTopGap +
-      _productsHeight +
-      _productsBottomGap;
+  double get minExtent => _collapsedExtent + (_expandedExtra * expandT);
+
+  @override
+  double get maxExtent => minExtent;
 
   @override
   Widget build(
@@ -59,22 +76,21 @@ class StoreProfileCollapsingHeaderDelegate
     double shrinkOffset,
     bool overlapsContent,
   ) {
-    final range = (maxExtent - minExtent).clamp(1.0, double.infinity);
-    final t = (shrinkOffset / range).clamp(0.0, 1.0);
+    final t = expandT.clamp(0.0, 1.0);
+    // Stagger fades so compact identity and expanded details cross smoothly.
     final compactT = Curves.easeInOutCubic.transform(
-      ((t - 0.38) / 0.62).clamp(0.0, 1.0),
+      (1.0 - ((t - 0.08) / 0.55).clamp(0.0, 1.0)),
     );
-    final expandedT = Curves.easeOut.transform(
-      (1 - (t / 0.72).clamp(0.0, 1.0)),
+    final expandedT = Curves.easeOutCubic.transform(
+      ((t - 0.05) / 0.7).clamp(0.0, 1.0),
     );
-    final actionsT = Curves.easeOut.transform(
-      (1 - (t / 0.42).clamp(0.0, 1.0)),
+    final actionsT = Curves.easeOutCubic.transform(
+      ((t - 0.35) / 0.65).clamp(0.0, 1.0),
     );
+    // Own-store + lives on the compact bar; fades out as expanded actions appear.
     final addT = state.isOwnStore ? compactT : 0.0;
-    final productsBlock = _productsTopGap + _productsHeight + _productsBottomGap;
-    final headerHeight = (maxExtent - shrinkOffset).clamp(minExtent, maxExtent);
-    final clipHeight = headerHeight - _toolbarHeight - productsBlock;
-    final showExpanded = clipHeight > 0.5 && expandedT > 0.02;
+    final detailsHeight = _expandedExtra * t;
+    final showExpanded = detailsHeight > 0.5 && expandedT > 0.02;
 
     return ColoredBox(
       color: AppColors.background,
@@ -86,18 +102,18 @@ class StoreProfileCollapsingHeaderDelegate
               top: _toolbarHeight,
               left: 0,
               right: 0,
-              bottom: productsBlock,
+              height: detailsHeight,
               child: ClipRect(
                 child: OverflowBox(
                   alignment: Alignment.topCenter,
                   minHeight: 0,
-                  maxHeight: maxExtent,
+                  maxHeight: _expandedExtra,
                   child: IgnorePointer(
                     ignoring: expandedT < 0.05,
                     child: Opacity(
                       opacity: expandedT,
-                      child: Transform.translate(
-                        offset: Offset(0, _expandedTopGap - shrinkOffset),
+                      child: Padding(
+                        padding: const EdgeInsets.only(top: _expandedTopGap),
                         child: Column(
                           mainAxisSize: MainAxisSize.min,
                           children: [
@@ -105,6 +121,8 @@ class StoreProfileCollapsingHeaderDelegate
                               state: state,
                               onAddMembers: onAddMembers,
                               onCopyStoreLink: onCopyStoreLink,
+                              onToggleDetails: onToggleDetails,
+                              onManageImages: onManageImages,
                             ),
                             if (actionsT > 0.02) ...[
                               const SizedBox(height: _actionsGap),
@@ -139,18 +157,22 @@ class StoreProfileCollapsingHeaderDelegate
                 children: [
                   AppBackButton(onPressed: onBack),
                   Expanded(
-                    child: IgnorePointer(
-                      ignoring: compactT < 0.05,
-                      child: Opacity(
-                        opacity: compactT,
-                        child: _CompactStoreIdentity(state: state),
+                    child: GestureDetector(
+                      onTap: onToggleDetails,
+                      behavior: HitTestBehavior.opaque,
+                      child: IgnorePointer(
+                        ignoring: compactT < 0.05,
+                        child: Opacity(
+                          opacity: compactT,
+                          child: _CompactStoreIdentity(state: state),
+                        ),
                       ),
                     ),
                   ),
                   if (state.isOwnStore)
                     ClipRect(
                       child: SizedBox(
-                        width: 44 * addT,
+                        width: 44 * addT.clamp(0.0, 1.0),
                         child: Align(
                           alignment: Alignment.centerRight,
                           child: Opacity(
@@ -213,8 +235,10 @@ class StoreProfileCollapsingHeaderDelegate
   @override
   bool shouldRebuild(covariant StoreProfileCollapsingHeaderDelegate oldDelegate) {
     return oldDelegate.state != state ||
+        oldDelegate.expandT != expandT ||
         oldDelegate.toolbarActions.length != toolbarActions.length ||
-        (oldDelegate.onViewAll == null) != (onViewAll == null);
+        (oldDelegate.onViewAll == null) != (onViewAll == null) ||
+        (oldDelegate.onManageImages == null) != (onManageImages == null);
   }
 }
 
@@ -227,7 +251,10 @@ class _CompactStoreIdentity extends StatelessWidget {
   Widget build(BuildContext context) {
     return Row(
       children: [
-        const StoreProfileLogo(size: StoreProfileCollapsingHeaderDelegate._compactLogo),
+        StoreProfileLogo(
+          size: StoreProfileCollapsingHeaderDelegate._compactLogo,
+          imageUrl: state.coverImageUrl,
+        ),
         const SizedBox(width: 8),
         Expanded(
           child: Column(

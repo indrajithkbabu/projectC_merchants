@@ -51,12 +51,17 @@ class AddProductGalleryRoute extends StatelessWidget {
                     )
                     .toList();
             Navigator.of(context).pushNamed(
-              Routes.addProductFormRoute,
+              Routes.addProductGroupRoute,
               arguments: <String, Object?>{
                 'selectedItems': selectedItems,
                 'storeId': state.storeId,
               },
-            );
+            ).then((published) {
+              if (!context.mounted) return;
+              if (published is Map) {
+                Navigator.of(context).pop(published);
+              }
+            });
           },
         ),
       ],

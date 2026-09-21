@@ -82,12 +82,11 @@ class StoreGalleryState extends Equatable {
     }
 
     final dates = grouped.keys.toList()..sort((a, b) => b.compareTo(a));
-    final now = DateTime.now();
     return [
       for (final date in dates)
         StoreGalleryDaySection(
           date: date,
-          label: _dateLabel(date, now),
+          label: _dateLabel(date),
           products: [
             for (final product in grouped[date]!)
               StoreGalleryProductSection(product: product),
@@ -111,13 +110,49 @@ class StoreGalleryState extends Equatable {
     'Dec',
   ];
 
-  static String _dateLabel(DateTime date, DateTime now) {
-    final today = DateTime(now.year, now.month, now.day);
-    final yesterday = today.subtract(const Duration(days: 1));
-    final stamp = '${_months[date.month - 1]} ${date.day}';
-    if (date == today) return '$stamp (Today)';
-    if (date == yesterday) return '$stamp (Yesterday)';
-    return stamp;
+  static String _dateLabel(DateTime date) {
+    return '${_months[date.month - 1]} ${date.day}';
+  }
+
+  /// Flat photo order matching the gallery grid (day → product → images).
+  List<ProductDetailsFeedItem> buildPhotoFeed() {
+    final feed = <ProductDetailsFeedItem>[];
+    for (final day in sections) {
+      for (final section in day.products) {
+        final paths = section.imagePaths;
+        if (paths.isEmpty) {
+          feed.add(
+            ProductDetailsFeedItem(
+              product: section.product,
+              imageIndex: 0,
+              path: '',
+            ),
+          );
+          continue;
+        }
+        for (var i = 0; i < paths.length; i++) {
+          feed.add(
+            ProductDetailsFeedItem(
+              product: section.product,
+              imageIndex: i,
+              path: paths[i],
+            ),
+          );
+        }
+      }
+    }
+    return feed;
+  }
+
+  int feedIndexFor({
+    required String productId,
+    required int imageIndex,
+  }) {
+    final feed = buildPhotoFeed();
+    final idx = feed.indexWhere(
+      (e) => e.product.id == productId && e.imageIndex == imageIndex,
+    );
+    return idx < 0 ? 0 : idx;
   }
 
   @override

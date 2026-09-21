@@ -25,6 +25,19 @@ class StoreAvailabilityCheckRequested extends StoreSetupEvent {
   List<Object?> get props => [handle];
 }
 
+class StoreImagesPickRequested extends StoreSetupEvent {
+  const StoreImagesPickRequested();
+}
+
+class StoreImageRemoved extends StoreSetupEvent {
+  const StoreImageRemoved(this.index);
+
+  final int index;
+
+  @override
+  List<Object?> get props => [index];
+}
+
 class StoreCreatePressed extends StoreSetupEvent {
   const StoreCreatePressed();
 }

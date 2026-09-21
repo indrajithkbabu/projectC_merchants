@@ -65,8 +65,8 @@ class AddStoreProductBloc
   static const _tag = 'AddStoreProductBloc';
 
   /// Matches CATALOG_IMAGES.md collection photo caps.
-  static const maxPhotosPerCollection = 25;
-  static const maxPhotoBytes = 25 * 1024 * 1024;
+  static const maxPhotosPerCollection = 50;
+  static const maxPhotoBytes = 500 * 1024 * 1024;
 
   /// Client downscale before multipart to reduce nginx 413 risk.
   static const _pickMaxDimension = 1920.0;
@@ -370,10 +370,29 @@ class AddStoreProductBloc
       final created = await _collectionRepository.createCollection(
         storeId: storeId,
         name: state.title.trim(),
-        photoFiles: photoFiles,
+        photoFiles: [photoFiles.first],
         tag: _apiTag(state.tags),
         description: state.description.trim(),
       );
+
+      var revision = created.revision;
+      final failedPhotos = List<FailedPhoto>.from(created.failedPhotos);
+      const appendBatchSize = 4;
+      for (var i = 1; i < photoFiles.length; i += appendBatchSize) {
+        final end =
+            (i + appendBatchSize < photoFiles.length)
+                ? i + appendBatchSize
+                : photoFiles.length;
+        final batch = photoFiles.sublist(i, end);
+        final appended = await _collectionRepository.updateCollectionWithPhotos(
+          storeId: storeId,
+          listingId: created.id,
+          revision: revision,
+          photoFiles: batch,
+        );
+        revision = appended.revision;
+        failedPhotos.addAll(appended.failedPhotos);
+      }
 
       StoreProduct product;
       try {
@@ -399,21 +418,21 @@ class AddStoreProductBloc
       }
 
       final partialMessage =
-          created.hasPartialFailures
-              ? CatalogErrorMapper.failedPhotosSummary(created.failedPhotos)
+          failedPhotos.isNotEmpty
+              ? CatalogErrorMapper.failedPhotosSummary(failedPhotos)
               : null;
 
       AppLog.d(
         _tag,
         'Published collection ${created.id} '
-        'photos=${created.photoCount} failed=${created.failedPhotos.length}',
+        'photos=${product.imagePaths.length} failed=${failedPhotos.length}',
       );
       emit(
         state.copyWith(
           isPublishing: false,
           isPublished: true,
           publishedProduct: product,
-          publishedRevision: created.revision,
+          publishedRevision: revision,
           publishedApiTag: created.tag,
           errorMessage: partialMessage,
         ),

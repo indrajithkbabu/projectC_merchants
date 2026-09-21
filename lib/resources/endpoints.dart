@@ -13,6 +13,7 @@ class Endpoints {
 
   // Profile / onboarding
   static const String me = '/me';
+  static const String profileImage = '/me/profile-image';
   static const String skipStore = '/me/onboarding/skip-store';
 
   // Stores / home
@@ -22,13 +23,16 @@ class Endpoints {
   static String storeBySlug(String slug) => '/stores/by-slug/$slug';
   static String slugAvailability(String slug) =>
       '/store-slugs/$slug/availability';
+  static String storeImages(String storeId) => '/stores/$storeId/images';
+  static String storeImage(String storeId, String imageId) =>
+      '/stores/$storeId/images/$imageId';
   static String storeContacts(String storeId) => '/stores/$storeId/contacts';
   static String storeMembers(String storeId) => '/stores/$storeId/members';
   static String storeMember(String storeId, String userId) =>
       '/stores/$storeId/members/$userId';
   static String storeLeave(String storeId) => '/stores/$storeId/leave';
 
-  // Collections (multipart photos on create/update — CATALOG_IMAGES.md)
+  // Collections (multipart photos on create/update)
   static String storeCollections(String storeId) =>
       '/stores/$storeId/collections';
   static String storeCollection(String storeId, String listingId) =>
@@ -42,6 +46,15 @@ class Endpoints {
   ) => '/stores/$storeId/collections/$listingId/photos/$photoId';
   static String storeCollectionPhotosDelete(String storeId, String listingId) =>
       '/stores/$storeId/collections/$listingId/photos/delete';
+  static String storeCollectionPhotosMove(String storeId, String listingId) =>
+      '/stores/$storeId/collections/$listingId/photos/move';
+  static String storeCollectionSubGroups(String storeId, String listingId) =>
+      '/stores/$storeId/collections/$listingId/subgroups';
+  static String storeCollectionSubGroup(
+    String storeId,
+    String listingId,
+    String subGroupId,
+  ) => '/stores/$storeId/collections/$listingId/subgroups/$subGroupId';
 
   // Imports
   static const String importTargets = '/import-targets';

@@ -161,6 +161,12 @@ class CatalogErrorMapper {
         return 'You already have a store.';
       case 'STORE_NOT_FOUND':
         return 'This store is no longer available.';
+      case 'TOO_MANY_STORE_IMAGES':
+        return 'A store can have at most 5 showcase images.';
+      case 'AT_LEAST_ONE_IMAGE_REQUIRED':
+        return 'Add at least one store image.';
+      case 'STORE_IMAGE_NOT_FOUND':
+        return 'That store image is no longer available.';
 
       // ── Collections / photos (multipart + legacy asset flows) ───
       case 'COLLECTION_NOT_FOUND':
@@ -172,7 +178,7 @@ class CatalogErrorMapper {
       case 'PHOTO_NOT_FOUND':
         return 'One or more photos are no longer available.';
       case 'TOO_MANY_PHOTOS':
-        return 'You can upload at most 25 photos.';
+        return 'You can upload at most 50 photos.';
       case 'INVALID_MULTIPART':
         return 'Upload format is invalid. Try again with fewer or smaller photos.';
       case 'NO_VALID_PHOTOS':
@@ -187,6 +193,20 @@ class CatalogErrorMapper {
         return 'This store is out of media storage space.';
       case 'REVISION_CONFLICT':
         return 'This was updated elsewhere. Refresh and try again.';
+      case 'INCOMPLETE_SPECIFICATIONS':
+        return 'Fill all product details: weight, deduction, purity, wastage, size, metal, and category.';
+      case 'DEDUCTION_EXCEEDS_WEIGHT':
+        return 'Stone or other deduction must be less than the gross weight.';
+      case 'INVALID_PURITY':
+        return 'Choose a valid purity (75, 82, 86, 92, 999) or Varied.';
+      case 'INVALID_WASTAGE':
+        return 'Wastage must be between 0 and 100 percent.';
+      case 'CROSS_SELECTION_NOT_ALLOWED':
+        return 'Selected photos must come from the same group. Try again.';
+      case 'PHOTO_ALREADY_IN_SUBGROUP':
+        return 'One or more photos are already in another group.';
+      case 'SUBGROUP_NOT_FOUND':
+        return 'This product group is no longer available.';
       case 'UPLOAD_BUSY':
         return 'Uploads are busy. Please try again in a moment.';
       case 'PAYLOAD_TOO_LARGE':
@@ -203,7 +223,7 @@ class CatalogErrorMapper {
       case 'ANIMATED_IMAGE_NOT_ALLOWED':
         return 'Animated images are not supported.';
       case 'IMAGE_TOO_LARGE':
-        return 'Image is too large. Use a photo under 25 MB.';
+        return 'Image is too large. Use a photo under 500 MB.';
       case 'IMAGE_RESOLUTION_TOO_LOW':
         return 'Image is too small. Use a clearer photo.';
       case 'PROCESSED_IMAGE_TOO_LARGE':

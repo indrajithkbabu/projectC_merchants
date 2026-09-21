@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:project_c/bloc/bulk_upload/bulk_upload_bloc.dart';
 import 'package:project_c/bloc/product_details/product_details_bloc.dart';
+import 'package:project_c/di/service_locator.dart';
 import 'package:project_c/helper/app_padding.dart';
 import 'package:project_c/helper/colors.dart';
 import 'package:project_c/helper/product_image.dart';
@@ -8,6 +10,8 @@ import 'package:project_c/helper/text_styles.dart';
 import 'package:project_c/helper/widgets/screen_wrapper.dart';
 import 'package:project_c/models/store_product.dart';
 import 'package:project_c/navigation/routes.dart';
+import 'package:project_c/webservice/catalog_error_mapper.dart';
+import 'package:project_c/webservice/collection/collection_repository.dart';
 
 class ProductDetailsRoute extends StatefulWidget {
   const ProductDetailsRoute({super.key});
@@ -20,21 +24,26 @@ class _ProductDetailsRouteState extends State<ProductDetailsRoute> {
   late final PageController _pageController;
   late final ScrollController _thumbController;
 
-  int _currentIndex = 0;
+  /// PageView index: gallery-feed index when [ProductDetailsState.hasGalleryFeed],
+  /// otherwise image index within the active product.
+  int _pageIndex = 0;
   bool _showInfo = false;
   Map<String, Object?>? _popResult;
 
   @override
   void initState() {
     super.initState();
-    final initialIndex =
-        context.read<ProductDetailsBloc>().state.initialImageIndex;
-    _currentIndex = initialIndex;
-    _pageController = PageController(initialPage: initialIndex);
+    final blocState = context.read<ProductDetailsBloc>().state;
+    final initialPage =
+        blocState.hasGalleryFeed
+            ? blocState.galleryFeedIndex
+            : blocState.initialImageIndex;
+    _pageIndex = initialPage;
+    _pageController = PageController(initialPage: initialPage);
     _thumbController = ScrollController();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
-      _scrollThumbTo(_currentIndex);
+      _scrollThumbTo(initialPage);
     });
   }
 
@@ -45,9 +54,30 @@ class _ProductDetailsRouteState extends State<ProductDetailsRoute> {
     super.dispose();
   }
 
-  void _onPageChanged(int index) {
-    setState(() => _currentIndex = index);
-    _scrollThumbTo(index);
+  int _productImageIndex(ProductDetailsState state) {
+    if (state.hasGalleryFeed) {
+      final feed = state.galleryFeed!;
+      if (_pageIndex < 0 || _pageIndex >= feed.length) return 0;
+      return feed[_pageIndex].imageIndex;
+    }
+    return _pageIndex;
+  }
+
+  void _onPageChanged(int index, ProductDetailsState state) {
+    setState(() => _pageIndex = index);
+    if (state.hasGalleryFeed) {
+      final entry = state.galleryFeed![index];
+      final activeId = context.read<ProductDetailsBloc>().state.product.id;
+      if (entry.product.id != activeId) {
+        context.read<ProductDetailsBloc>().add(
+          ProductDetailsActivateProduct(entry.product),
+        );
+      }
+      // Thumb strip follows feed order — scroll by page index.
+      _scrollThumbTo(index);
+    } else {
+      _scrollThumbTo(index);
+    }
   }
 
   void _scrollThumbTo(int index) {
@@ -62,8 +92,8 @@ class _ProductDetailsRouteState extends State<ProductDetailsRoute> {
 
     _thumbController.animateTo(
       clamped,
-      duration: const Duration(milliseconds: 200),
-      curve: Curves.easeOut,
+      duration: const Duration(milliseconds: 280),
+      curve: Curves.easeOutCubic,
     );
   }
 
@@ -79,6 +109,57 @@ class _ProductDetailsRouteState extends State<ProductDetailsRoute> {
 
   Future<void> _openEdit(ProductDetailsState state) async {
     context.read<ProductDetailsBloc>().add(const ProductDetailsClearOpenEdit());
+    final storeId = state.storeId;
+    if (storeId == null || storeId.isEmpty) return;
+
+    final choice = await showModalBottomSheet<_EditChoice>(
+      context: context,
+      backgroundColor: AppColors.surface,
+      builder: (sheetContext) {
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.symmetric(vertical: 8),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                ListTile(
+                  leading: const Icon(Icons.edit_outlined),
+                  title: Text(
+                    'Edit title, tags & photos',
+                    style: AppTextStyles.body(),
+                  ),
+                  onTap:
+                      () => Navigator.of(
+                        sheetContext,
+                      ).pop(_EditChoice.metadataPhotos),
+                ),
+                ListTile(
+                  leading: const Icon(Icons.tune_rounded),
+                  title: Text(
+                    'Refine items & details',
+                    style: AppTextStyles.body(),
+                  ),
+                  onTap:
+                      () =>
+                          Navigator.of(sheetContext).pop(_EditChoice.refine),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+    if (!mounted || choice == null) return;
+
+    switch (choice) {
+      case _EditChoice.metadataPhotos:
+        await _openMetadataEdit(state);
+      case _EditChoice.refine:
+        await _openRefineEdit(state);
+    }
+  }
+
+  Future<void> _openMetadataEdit(ProductDetailsState state) async {
     final storeId = state.storeId;
     if (storeId == null || storeId.isEmpty) return;
 
@@ -116,6 +197,51 @@ class _ProductDetailsRouteState extends State<ProductDetailsRoute> {
         apiTag: apiTag,
       ),
     );
+  }
+
+  Future<void> _openRefineEdit(ProductDetailsState state) async {
+    final storeId = state.storeId;
+    if (storeId == null || storeId.isEmpty) return;
+
+    BulkUploadBloc? bloc;
+    try {
+      final detail = await ServiceLocator.get<CollectionRepository>()
+          .fetchCollection(storeId: storeId, listingId: state.product.id);
+      if (!mounted) return;
+      bloc = BulkUploadBloc.fromCollectionDetail(
+        detail: detail,
+        storeId: storeId,
+      );
+      final result = await Navigator.of(context).pushNamed(
+        Routes.addProductGroupPreviewRoute,
+        arguments: <String, Object?>{'bloc': bloc},
+      );
+      if (!mounted) return;
+      if (result is! Map) return;
+
+      final payload = Map<String, Object?>.from(result);
+      final revision = payload['revision'];
+      final apiTag = (payload['apiTag'] as String?) ?? '';
+      final product = StoreProduct.fromMap(payload);
+      _popResult = <String, Object?>{
+        'updated': true,
+        ...product.toMap(),
+      };
+      context.read<ProductDetailsBloc>().add(
+        ProductDetailsApplyEditedProduct(
+          product: product,
+          revision: revision is int ? revision : state.revision,
+          apiTag: apiTag,
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(CatalogErrorMapper.toUserMessage(e))),
+      );
+    } finally {
+      await bloc?.close();
+    }
   }
 
   void _popDetails() {
@@ -157,7 +283,9 @@ class _ProductDetailsRouteState extends State<ProductDetailsRoute> {
     );
     if (!mounted || confirmed != true) return;
     context.read<ProductDetailsBloc>().add(
-      ProductDetailsDeletePressed(imageIndex: _currentIndex),
+      ProductDetailsDeletePressed(
+        imageIndex: _productImageIndex(state),
+      ),
     );
   }
 
@@ -197,18 +325,22 @@ class _ProductDetailsRouteState extends State<ProductDetailsRoute> {
               'updated': true,
               ...state.product.toMap(),
             };
+            if (state.hasGalleryFeed) {
+              // Leave gallery feed paging as-is; gallery will sync on pop.
+              return;
+            }
             final last =
                 state.product.imagePaths.isEmpty
                     ? 0
                     : state.product.imagePaths.length - 1;
-            final nextIndex = _currentIndex > last ? last : _currentIndex;
+            final nextIndex = _pageIndex > last ? last : _pageIndex;
             WidgetsBinding.instance.addPostFrameCallback((_) {
               if (!mounted) return;
               if (_pageController.hasClients) {
                 _pageController.jumpToPage(nextIndex);
               }
-              if (nextIndex != _currentIndex) {
-                setState(() => _currentIndex = nextIndex);
+              if (nextIndex != _pageIndex) {
+                setState(() => _pageIndex = nextIndex);
               }
             });
           },
@@ -239,30 +371,43 @@ class _ProductDetailsRouteState extends State<ProductDetailsRoute> {
           builder: (context, state) {
             final product = state.product;
             final imagePaths = product.imagePaths;
-            final pageCount = imagePaths.isEmpty ? 1 : imagePaths.length;
+            final feed = state.galleryFeed;
+            final useFeed = state.hasGalleryFeed;
+            final pageCount =
+                useFeed
+                    ? feed!.length
+                    : (imagePaths.isEmpty ? 1 : imagePaths.length);
+            final photoIndex = _productImageIndex(state);
 
             return Stack(
               children: [
                 Positioned.fill(
                   child: PageView.builder(
                     controller: _pageController,
+                    physics: const BouncingScrollPhysics(
+                      parent: PageScrollPhysics(),
+                    ),
                     itemCount: pageCount,
-                    onPageChanged: _onPageChanged,
+                    onPageChanged: (index) => _onPageChanged(index, state),
                     itemBuilder: (context, index) {
-                      if (imagePaths.isEmpty) {
-                        return GestureDetector(
-                          behavior: HitTestBehavior.opaque,
-                          onTap: () => setState(() => _showInfo = !_showInfo),
-                          child: _ImagePlaceholder(tone: product.toneIndex),
-                        );
-                      }
+                      final path =
+                          useFeed
+                              ? feed![index].path
+                              : (imagePaths.isEmpty
+                                  ? null
+                                  : imagePaths[index]);
+                      final tone =
+                          useFeed
+                              ? feed![index].product.toneIndex
+                              : product.toneIndex;
 
-                      final path = imagePaths[index];
-                      if (!ProductImagePaths.isDisplayable(path)) {
+                      if (path == null ||
+                          path.isEmpty ||
+                          !ProductImagePaths.isDisplayable(path)) {
                         return GestureDetector(
                           behavior: HitTestBehavior.opaque,
                           onTap: () => setState(() => _showInfo = !_showInfo),
-                          child: _ImagePlaceholder(tone: product.toneIndex),
+                          child: _ImagePlaceholder(tone: tone),
                         );
                       }
 
@@ -317,35 +462,36 @@ class _ProductDetailsRouteState extends State<ProductDetailsRoute> {
                                     icon: Icons.arrow_back_ios_new_rounded,
                                     onTap: _popDetails,
                                   ),
-                                  const SizedBox(width: 8),
-                                  Expanded(
-                                    child: Column(
-                                      crossAxisAlignment:
-                                          CrossAxisAlignment.start,
-                                      children: [
-                                        Text(
-                                          state.storeName,
-                                          maxLines: 1,
-                                          overflow: TextOverflow.ellipsis,
-                                          style: AppTextStyles.body(
-                                            fontSize: 18,
-                                            fontWeight: FontWeight.w700,
-                                            color: AppColors.textOnPrimary,
-                                          ),
-                                        ),
-                                        const SizedBox(height: 2),
-                                        Text(
-                                          state.storeLink,
-                                          maxLines: 1,
-                                          overflow: TextOverflow.ellipsis,
-                                          style: AppTextStyles.caption(
-                                            color: AppColors.textOnPrimary
-                                                .withValues(alpha: 0.88),
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                  ),
+                                  const Spacer(),
+                                  // Store name / link moved below the photo title.
+                                  // Expanded(
+                                  //   child: Column(
+                                  //     crossAxisAlignment:
+                                  //         CrossAxisAlignment.start,
+                                  //     children: [
+                                  //       Text(
+                                  //         state.storeName,
+                                  //         maxLines: 1,
+                                  //         overflow: TextOverflow.ellipsis,
+                                  //         style: AppTextStyles.body(
+                                  //           fontSize: 18,
+                                  //           fontWeight: FontWeight.w700,
+                                  //           color: AppColors.textOnPrimary,
+                                  //         ),
+                                  //       ),
+                                  //       const SizedBox(height: 2),
+                                  //       Text(
+                                  //         state.storeLink,
+                                  //         maxLines: 1,
+                                  //         overflow: TextOverflow.ellipsis,
+                                  //         style: AppTextStyles.caption(
+                                  //           color: AppColors.textOnPrimary
+                                  //               .withValues(alpha: 0.88),
+                                  //         ),
+                                  //       ),
+                                  //     ],
+                                  //   ),
+                                  // ),
                                   if (state.isDeleting)
                                     const Padding(
                                       padding: EdgeInsets.only(right: 8),
@@ -392,16 +538,42 @@ class _ProductDetailsRouteState extends State<ProductDetailsRoute> {
                                   ],
                                 ],
                               ),
-                              if (product.title.trim().isNotEmpty) ...[
+                              if (state
+                                  .titleForPhoto(photoIndex)
+                                  .trim()
+                                  .isNotEmpty) ...[
                                 const SizedBox(height: 14),
                                 Text(
-                                  product.title,
+                                  state.titleForPhoto(photoIndex),
                                   maxLines: 2,
                                   overflow: TextOverflow.ellipsis,
                                   style: AppTextStyles.title(
                                     fontSize: 22,
                                     fontWeight: FontWeight.w700,
                                     color: AppColors.textOnPrimary,
+                                  ),
+                                ),
+                              ],
+                              if (state.storeName.trim().isNotEmpty) ...[
+                                SizedBox(
+                                  height:
+                                      state
+                                              .titleForPhoto(photoIndex)
+                                              .trim()
+                                              .isNotEmpty
+                                          ? 4
+                                          : 14,
+                                ),
+                                Text(
+                                  state.storeName,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: AppTextStyles.body(
+                                    fontSize: 14,
+                                    fontWeight: FontWeight.w500,
+                                    color: AppColors.textOnPrimary.withValues(
+                                      alpha: 0.88,
+                                    ),
                                   ),
                                 ),
                               ],
@@ -441,9 +613,9 @@ class _ProductDetailsRouteState extends State<ProductDetailsRoute> {
                             children: [
                               _ProductMetaPanel(
                                 product: product,
-                                showSharedMetaHint:
-                                    state.canEdit &&
-                                    product.imagePaths.length > 1,
+                                specDisplay: state.specDisplayForPhoto(
+                                  photoIndex,
+                                ),
                               ),
                               const SizedBox(height: 12),
                               SizedBox(
@@ -453,23 +625,32 @@ class _ProductDetailsRouteState extends State<ProductDetailsRoute> {
                                     controller: _thumbController,
                                     shrinkWrap: true,
                                     scrollDirection: Axis.horizontal,
+                                    physics: const BouncingScrollPhysics(),
                                     itemCount: pageCount,
                                     separatorBuilder:
                                         (_, __) => const SizedBox(width: 8),
                                     itemBuilder: (context, index) {
-                                      final isActive = index == _currentIndex;
+                                      // Feed mode: same order as browse/gallery
+                                      // PageView. Otherwise: product.imagePaths.
+                                      final isActive = index == _pageIndex;
                                       final thumbPath =
-                                          imagePaths.isEmpty
-                                              ? null
-                                              : imagePaths[index];
+                                          useFeed
+                                              ? feed![index].path
+                                              : (imagePaths.isEmpty
+                                                  ? null
+                                                  : imagePaths[index]);
+                                      final tone =
+                                          useFeed
+                                              ? feed![index].product.toneIndex
+                                              : product.toneIndex;
                                       return GestureDetector(
                                         onTap: () {
                                           _pageController.animateToPage(
                                             index,
                                             duration: const Duration(
-                                              milliseconds: 220,
+                                              milliseconds: 320,
                                             ),
-                                            curve: Curves.easeOut,
+                                            curve: Curves.easeOutCubic,
                                           );
                                         },
                                         child: Container(
@@ -490,9 +671,10 @@ class _ProductDetailsRouteState extends State<ProductDetailsRoute> {
                                             ),
                                           ),
                                           child:
-                                              thumbPath == null
+                                              thumbPath == null ||
+                                                      thumbPath.isEmpty
                                                   ? _ImagePlaceholder(
-                                                    tone: product.toneIndex,
+                                                    tone: tone,
                                                   )
                                                   : _ThumbnailImage(
                                                     path: thumbPath,
@@ -521,19 +703,22 @@ class _ProductDetailsRouteState extends State<ProductDetailsRoute> {
 }
 
 class _ProductMetaPanel extends StatelessWidget {
-  const _ProductMetaPanel({
-    required this.product,
-    this.showSharedMetaHint = false,
-  });
+  const _ProductMetaPanel({required this.product, this.specDisplay});
 
   final StoreProduct product;
-  final bool showSharedMetaHint;
+  final PhotoSpecDisplay? specDisplay;
 
   @override
   Widget build(BuildContext context) {
-    final hasTags = product.tags.isNotEmpty;
+    // Tags intentionally hidden on details chrome (edit still manages them).
+    // final hasTags = product.tags.isNotEmpty;
     final hasDescription = product.description.trim().isNotEmpty;
-    if (!hasTags && !hasDescription && !showSharedMetaHint) {
+    final fineLine = specDisplay?.fineWeightLine?.trim() ?? '';
+    final specLine = specDisplay?.line.trim() ?? '';
+    final hasFine = fineLine.isNotEmpty;
+    final hasSpecLine = specLine.isNotEmpty;
+    final hasSpec = hasFine || hasSpecLine;
+    if (!hasDescription && !hasSpec) {
       return const SizedBox.shrink();
     }
 
@@ -547,30 +732,44 @@ class _ProductMetaPanel extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          if (hasTags)
-            Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              children: [
-                for (final tag in product.tags) _TagChip(label: tag),
-              ],
+          if (hasFine) ...[
+            Text(
+              fineLine,
+              style: AppTextStyles.body(
+                fontSize: 14,
+                fontWeight: FontWeight.w600,
+                color: AppColors.textOnPrimary.withValues(alpha: 0.95),
+              ),
             ),
+          ],
+          if (hasSpecLine) ...[
+            if (hasFine) const SizedBox(height: 4),
+            Text(
+              specLine,
+              style: AppTextStyles.body(
+                fontSize: 14,
+                fontWeight: FontWeight.w600,
+                color: AppColors.textOnPrimary.withValues(alpha: 0.95),
+              ),
+            ),
+          ],
+          // if (hasTags) ...[
+          //   if (hasSpec) const SizedBox(height: 10),
+          //   Wrap(
+          //     spacing: 8,
+          //     runSpacing: 8,
+          //     children: [
+          //       for (final tag in product.tags) _TagChip(label: tag),
+          //     ],
+          //   ),
+          // ],
           if (hasDescription) ...[
-            if (hasTags) const SizedBox(height: 10),
+            if (hasSpec) const SizedBox(height: 10),
             Text(
               product.description,
               style: AppTextStyles.body(
                 fontSize: 14,
                 color: AppColors.textOnPrimary.withValues(alpha: 0.92),
-              ),
-            ),
-          ],
-          if (showSharedMetaHint) ...[
-            if (hasTags || hasDescription) const SizedBox(height: 10),
-            Text(
-              'Title, tags, and description are shared by every photo in this product.',
-              style: AppTextStyles.caption(
-                color: AppColors.textOnPrimary.withValues(alpha: 0.78),
               ),
             ),
           ],
@@ -580,31 +779,31 @@ class _ProductMetaPanel extends StatelessWidget {
   }
 }
 
-class _TagChip extends StatelessWidget {
-  const _TagChip({required this.label});
-
-  final String label;
-
-  @override
-  Widget build(BuildContext context) {
-    final display = label.startsWith('#') ? label : '#$label';
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-      decoration: BoxDecoration(
-        color: Colors.white.withValues(alpha: 0.14),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: Colors.white.withValues(alpha: 0.28)),
-      ),
-      child: Text(
-        display,
-        style: AppTextStyles.caption(
-          fontWeight: FontWeight.w600,
-          color: AppColors.textOnPrimary,
-        ),
-      ),
-    );
-  }
-}
+// class _TagChip extends StatelessWidget {
+//   const _TagChip({required this.label});
+//
+//   final String label;
+//
+//   @override
+//   Widget build(BuildContext context) {
+//     final display = label.startsWith('#') ? label : '#$label';
+//     return Container(
+//       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+//       decoration: BoxDecoration(
+//         color: Colors.white.withValues(alpha: 0.14),
+//         borderRadius: BorderRadius.circular(16),
+//         border: Border.all(color: Colors.white.withValues(alpha: 0.28)),
+//       ),
+//       child: Text(
+//         display,
+//         style: AppTextStyles.caption(
+//           fontWeight: FontWeight.w600,
+//           color: AppColors.textOnPrimary,
+//         ),
+//       ),
+//     );
+//   }
+// }
 
 class _RoundIconButton extends StatelessWidget {
   const _RoundIconButton({required this.icon, required this.onTap});
@@ -685,3 +884,5 @@ class _ImagePlaceholder extends StatelessWidget {
     );
   }
 }
+
+enum _EditChoice { metadataPhotos, refine }

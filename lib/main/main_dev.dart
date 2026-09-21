@@ -8,5 +8,5 @@ void main() async {
 
   FlavorConfig(name: FlavorNames.dev, variables: Dev.flavorVariables);
 
-  defaultMain(Flavor.dev);
+  await defaultMain(Flavor.dev);
 }

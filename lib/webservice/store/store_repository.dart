@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:project_c/helper/app_log.dart';
 import 'package:project_c/models/catalog/catalog_page.dart';
 import 'package:project_c/models/catalog/catalog_store.dart';
@@ -17,11 +19,28 @@ abstract class StoreRepository {
   Future<CatalogStore> createStore({
     required String name,
     required String slug,
+    String? legalName,
+    List<File> imageFiles = const [],
   });
 
   Future<CatalogStore> renameStore({
     required String storeId,
     required String name,
+  });
+
+  Future<CatalogStore> appendStoreImages({
+    required String storeId,
+    required List<File> imageFiles,
+  });
+
+  Future<CatalogStore> deleteStoreImage({
+    required String storeId,
+    required String imageId,
+  });
+
+  Future<CatalogStore> replaceStoreImages({
+    required String storeId,
+    required List<File> imageFiles,
   });
 
   Future<ContactBatchResult> addContacts({
@@ -79,9 +98,16 @@ class StoreRepositoryImpl implements StoreRepository {
   Future<CatalogStore> createStore({
     required String name,
     required String slug,
+    String? legalName,
+    List<File> imageFiles = const [],
   }) async {
-    AppLog.d(_tag, 'createStore slug=$slug');
-    final store = await _request.createStore(name: name, slug: slug);
+    AppLog.d(_tag, 'createStore slug=$slug images=${imageFiles.length}');
+    final store = await _request.createStore(
+      name: name,
+      slug: slug,
+      legalName: legalName,
+      imageFiles: imageFiles,
+    );
     // Refresh profile so ownStore is current.
     try {
       await ServiceLocator.get<ProfileRepository>().fetchMe();
@@ -102,6 +128,39 @@ class StoreRepositoryImpl implements StoreRepository {
     required String name,
   }) {
     return _request.renameStore(storeId: storeId, name: name);
+  }
+
+  @override
+  Future<CatalogStore> appendStoreImages({
+    required String storeId,
+    required List<File> imageFiles,
+  }) {
+    AppLog.d(_tag, 'appendStoreImages count=${imageFiles.length}');
+    return _request.appendStoreImages(
+      storeId: storeId,
+      imageFiles: imageFiles,
+    );
+  }
+
+  @override
+  Future<CatalogStore> deleteStoreImage({
+    required String storeId,
+    required String imageId,
+  }) {
+    AppLog.d(_tag, 'deleteStoreImage id=$imageId');
+    return _request.deleteStoreImage(storeId: storeId, imageId: imageId);
+  }
+
+  @override
+  Future<CatalogStore> replaceStoreImages({
+    required String storeId,
+    required List<File> imageFiles,
+  }) {
+    AppLog.d(_tag, 'replaceStoreImages count=${imageFiles.length}');
+    return _request.replaceStoreImages(
+      storeId: storeId,
+      imageFiles: imageFiles,
+    );
   }
 
   @override

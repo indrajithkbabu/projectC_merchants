@@ -14,6 +14,7 @@ class ContactsTab extends StatelessWidget {
   const ContactsTab({super.key});
 
   String _initials(StoreMember member) {
+    final name = member.displayName.trim();
     final first = member.firstName?.trim() ?? '';
     final last = member.lastName?.trim() ?? '';
     if (first.isNotEmpty && last.isNotEmpty) {
@@ -21,6 +22,19 @@ class ContactsTab extends StatelessWidget {
     }
     if (first.isNotEmpty) {
       return first.substring(0, first.length.clamp(0, 2)).toUpperCase();
+    }
+    // Prefer contact / display name initials over phone digits.
+    if (name.isNotEmpty &&
+        name != member.phone.trim() &&
+        !name.startsWith('+') &&
+        !RegExp(r'^\d+$').hasMatch(name)) {
+      final parts = name.split(RegExp(r'\s+'));
+      if (parts.length >= 2 &&
+          parts.first.isNotEmpty &&
+          parts.last.isNotEmpty) {
+        return '${parts.first[0]}${parts.last[0]}'.toUpperCase();
+      }
+      return name.substring(0, name.length.clamp(0, 2)).toUpperCase();
     }
     final phone = member.phone;
     if (phone.length >= 2) return phone.substring(phone.length - 2);

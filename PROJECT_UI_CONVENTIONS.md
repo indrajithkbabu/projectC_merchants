@@ -103,6 +103,7 @@ Do not duplicate these widgets inside feature folders.
 - **Font family:** Inter everywhere via `AppTheme` + `AppTextStyles`.
 - **Main horizontal spacing:** 15 via `AppPadding.horizontal`.
 - **Back navigation control:** icon-only `AppBackButton`.
+- **Screenshot / screen recording:** Blocked app-wide by default via `ScreenshotProtectionService` + `no_screenshot`. Settings → **Allow screenshots** turns capture on. While blocked, detected capture attempts show a snackbar. Preference persists in `AppSettingsStorage` (not cleared on logout).
 
 ## Auth Flow Implementation Rules
 - `AuthBloc` owns phone input, OTP input, resend timer, and verification state.

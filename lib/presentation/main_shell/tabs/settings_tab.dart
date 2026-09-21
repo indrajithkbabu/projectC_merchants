@@ -2,12 +2,14 @@ import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:project_c/bloc/account_profile/account_profile_bloc.dart';
 import 'package:project_c/bloc/auth/auth_bloc.dart';
+import 'package:project_c/di/service_locator.dart';
 import 'package:project_c/helper/app_padding.dart';
 import 'package:project_c/helper/colors.dart';
 import 'package:project_c/helper/text_styles.dart';
 import 'package:project_c/helper/widgets/floating_bottom_nav_bar.dart';
 import 'package:project_c/helper/widgets/screen_wrapper.dart';
 import 'package:project_c/navigation/routes.dart';
+import 'package:project_c/services/screenshot_protection_service.dart';
 
 class SettingsTab extends StatelessWidget {
   const SettingsTab({super.key});
@@ -62,6 +64,7 @@ class SettingsTab extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final bottomPad = FloatingBottomNavBar.reservedHeight(context) + 8;
+    final protection = ServiceLocator.get<ScreenshotProtectionService>();
     return BlocBuilder<AccountProfileBloc, AccountProfileState>(
       builder: (context, state) {
         final profile = state.profile;
@@ -94,6 +97,25 @@ class SettingsTab extends StatelessWidget {
                     label: 'Store',
                     value: profile!.ownStore!.name,
                   ),
+              ],
+            ),
+            const SizedBox(height: 16),
+            _SettingsGroup(
+              children: [
+                ListenableBuilder(
+                  listenable: protection,
+                  builder: (context, _) {
+                    return _SettingsToggle(
+                      label: 'Allow screenshots',
+                      subtitle:
+                          'Also controls screen recording. Off by default for privacy.',
+                      value: protection.allowScreenshots,
+                      onChanged: (value) {
+                        protection.setAllowScreenshots(value);
+                      },
+                    );
+                  },
+                ),
               ],
             ),
             const SizedBox(height: 16),
@@ -176,6 +198,53 @@ class _SettingsRow extends StatelessWidget {
               style: AppTextStyles.bodySecondary(),
               overflow: TextOverflow.ellipsis,
             ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _SettingsToggle extends StatelessWidget {
+  const _SettingsToggle({
+    required this.label,
+    required this.subtitle,
+    required this.value,
+    required this.onChanged,
+  });
+
+  final String label;
+  final String subtitle;
+  final bool value;
+  final ValueChanged<bool> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(label, style: AppTextStyles.body()),
+                const SizedBox(height: 2),
+                Text(
+                  subtitle,
+                  style: AppTextStyles.caption(
+                    color: AppColors.textSecondary,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 12),
+          Switch.adaptive(
+            value: value,
+            activeColor: AppColors.primary,
+            onChanged: onChanged,
           ),
         ],
       ),

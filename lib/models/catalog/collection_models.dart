@@ -1,4 +1,5 @@
 import 'package:equatable/equatable.dart';
+import 'package:project_c/models/catalog/collection_specifications.dart';
 
 class CatalogPhoto extends Equatable {
   const CatalogPhoto({
@@ -80,6 +81,12 @@ class CollectionSummary extends Equatable {
     this.description = '',
     this.kind,
     this.permissions,
+    this.mainGroupPhotoCount,
+    this.subGroupCount,
+    this.precisionTag = '',
+    this.usePrecisionTag = false,
+    this.specifications,
+    this.mainGroupCover,
   });
 
   final String id;
@@ -91,9 +98,17 @@ class CollectionSummary extends Equatable {
   final CatalogPhoto cover;
   final String? kind;
   final CollectionPermissions? permissions;
+  final int? mainGroupPhotoCount;
+  final int? subGroupCount;
+  final String precisionTag;
+  final bool usePrecisionTag;
+  final CollectionSpecifications? specifications;
+  final CatalogPhoto? mainGroupCover;
 
   factory CollectionSummary.fromJson(Map<String, dynamic> json) {
     final perms = json['permissions'];
+    final rawSpecs = json['specifications'];
+    final rawMainCover = json['mainGroupCover'];
     return CollectionSummary(
       id: json['id'] as String? ?? '',
       name: json['name'] as String? ?? '',
@@ -109,6 +124,18 @@ class CollectionSummary extends Equatable {
           perms is Map<String, dynamic>
               ? CollectionPermissions.fromJson(perms)
               : null,
+      mainGroupPhotoCount: (json['mainGroupPhotoCount'] as num?)?.toInt(),
+      subGroupCount: (json['subGroupCount'] as num?)?.toInt(),
+      precisionTag: json['precisionTag'] as String? ?? '',
+      usePrecisionTag: json['usePrecisionTag'] == true,
+      specifications:
+          rawSpecs is Map<String, dynamic>
+              ? CollectionSpecifications.fromJson(rawSpecs)
+              : null,
+      mainGroupCover:
+          rawMainCover is Map<String, dynamic>
+              ? CatalogPhoto.fromJson(rawMainCover)
+              : null,
     );
   }
 
@@ -123,6 +150,12 @@ class CollectionSummary extends Equatable {
     cover,
     kind,
     permissions,
+    mainGroupPhotoCount,
+    subGroupCount,
+    precisionTag,
+    usePrecisionTag,
+    specifications,
+    mainGroupCover,
   ];
 }
 
@@ -137,6 +170,13 @@ class CollectionDetail extends Equatable {
     this.description = '',
     this.kind,
     this.permissions,
+    this.specifications,
+    this.usePrecisionTag = false,
+    this.precisionTag = '',
+    this.mainGroupPhotoCount,
+    this.subGroupCount,
+    this.mainGroupPhotos = const [],
+    this.subGroups = const [],
   });
 
   final String id;
@@ -148,10 +188,20 @@ class CollectionDetail extends Equatable {
   final List<CatalogPhoto> photos;
   final String? kind;
   final CollectionPermissions? permissions;
+  final CollectionSpecifications? specifications;
+  final bool usePrecisionTag;
+  final String precisionTag;
+  final int? mainGroupPhotoCount;
+  final int? subGroupCount;
+  final List<CatalogPhoto> mainGroupPhotos;
+  final List<CollectionSubGroup> subGroups;
 
   factory CollectionDetail.fromJson(Map<String, dynamic> json) {
     final rawPhotos = json['photos'];
+    final rawMainPhotos = json['mainGroupPhotos'];
+    final rawSubGroups = json['subGroups'];
     final perms = json['permissions'];
+    final rawSpecs = json['specifications'];
     return CollectionDetail(
       id: json['id'] as String? ?? '',
       name: json['name'] as String? ?? '',
@@ -171,6 +221,28 @@ class CollectionDetail extends Equatable {
           perms is Map<String, dynamic>
               ? CollectionPermissions.fromJson(perms)
               : null,
+      specifications:
+          rawSpecs is Map<String, dynamic>
+              ? CollectionSpecifications.fromJson(rawSpecs)
+              : null,
+      usePrecisionTag: json['usePrecisionTag'] == true,
+      precisionTag: json['precisionTag'] as String? ?? '',
+      mainGroupPhotoCount: (json['mainGroupPhotoCount'] as num?)?.toInt(),
+      subGroupCount: (json['subGroupCount'] as num?)?.toInt(),
+      mainGroupPhotos:
+          rawMainPhotos is List
+              ? rawMainPhotos
+                  .whereType<Map<String, dynamic>>()
+                  .map(CatalogPhoto.fromJson)
+                  .toList()
+              : const [],
+      subGroups:
+          rawSubGroups is List
+              ? rawSubGroups
+                  .whereType<Map<String, dynamic>>()
+                  .map(CollectionSubGroup.fromJson)
+                  .toList()
+              : const [],
     );
   }
 
@@ -185,6 +257,13 @@ class CollectionDetail extends Equatable {
     photos,
     kind,
     permissions,
+    specifications,
+    usePrecisionTag,
+    precisionTag,
+    mainGroupPhotoCount,
+    subGroupCount,
+    mainGroupPhotos,
+    subGroups,
   ];
 }
 
@@ -198,6 +277,8 @@ class CollectionCreateResult extends Equatable {
     required this.revision,
     required this.photoCount,
     this.failedPhotos = const [],
+    this.photos = const [],
+    this.newCollectionId,
   });
 
   final String id;
@@ -207,11 +288,14 @@ class CollectionCreateResult extends Equatable {
   final int revision;
   final int photoCount;
   final List<FailedPhoto> failedPhotos;
+  final List<CatalogPhoto> photos;
+  final String? newCollectionId;
 
   bool get hasPartialFailures => failedPhotos.isNotEmpty;
 
   factory CollectionCreateResult.fromJson(Map<String, dynamic> json) {
     final rawFailed = json['failedPhotos'];
+    final rawPhotos = json['photos'];
     return CollectionCreateResult(
       id: json['id'] as String? ?? '',
       name: json['name'] as String? ?? '',
@@ -226,6 +310,14 @@ class CollectionCreateResult extends Equatable {
                   .map(FailedPhoto.fromJson)
                   .toList()
               : const [],
+      photos:
+          rawPhotos is List
+              ? rawPhotos
+                  .whereType<Map<String, dynamic>>()
+                  .map(CatalogPhoto.fromJson)
+                  .toList()
+              : const [],
+      newCollectionId: json['newCollectionId'] as String?,
     );
   }
 
@@ -238,6 +330,8 @@ class CollectionCreateResult extends Equatable {
     revision,
     photoCount,
     failedPhotos,
+    photos,
+    newCollectionId,
   ];
 }
 
@@ -249,6 +343,9 @@ class CollectionMutation extends Equatable {
     required this.tag,
     required this.description,
     required this.revision,
+    this.precisionTag,
+    this.usePrecisionTag,
+    this.specifications,
   });
 
   final String id;
@@ -256,17 +353,39 @@ class CollectionMutation extends Equatable {
   final String tag;
   final String description;
   final int revision;
+  final String? precisionTag;
+  final bool? usePrecisionTag;
+  final CollectionSpecifications? specifications;
 
   factory CollectionMutation.fromJson(Map<String, dynamic> json) {
+    final rawSpecs = json['specifications'];
     return CollectionMutation(
       id: json['id'] as String? ?? '',
       name: json['name'] as String? ?? '',
       tag: json['tag'] as String? ?? '',
       description: json['description'] as String? ?? '',
       revision: (json['revision'] as num?)?.toInt() ?? 1,
+      precisionTag: json['precisionTag'] as String?,
+      usePrecisionTag:
+          json.containsKey('usePrecisionTag')
+              ? json['usePrecisionTag'] == true
+              : null,
+      specifications:
+          rawSpecs is Map<String, dynamic>
+              ? CollectionSpecifications.fromJson(rawSpecs)
+              : null,
     );
   }
 
   @override
-  List<Object?> get props => [id, name, tag, description, revision];
+  List<Object?> get props => [
+    id,
+    name,
+    tag,
+    description,
+    revision,
+    precisionTag,
+    usePrecisionTag,
+    specifications,
+  ];
 }

@@ -25,6 +25,11 @@ class StoreGalleryRoute extends StatelessWidget {
     StoreProduct product,
     int imageIndex,
   ) async {
+    final feed = state.buildPhotoFeed();
+    final feedIndex = state.feedIndexFor(
+      productId: product.id,
+      imageIndex: imageIndex,
+    );
     final result = await Navigator.of(context).pushNamed(
       Routes.productDetailsRoute,
       arguments: <String, Object?>{
@@ -34,6 +39,8 @@ class StoreGalleryRoute extends StatelessWidget {
         'storeId': state.storeId,
         'isOwnStore': state.isOwnStore,
         'imageIndex': imageIndex,
+        'galleryFeed': feed,
+        'galleryFeedIndex': feedIndex,
       },
     );
     if (!context.mounted || result is! Map) return;

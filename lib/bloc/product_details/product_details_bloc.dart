@@ -3,7 +3,10 @@ import 'package:equatable/equatable.dart';
 import 'package:project_c/di/service_locator.dart';
 import 'package:project_c/helper/app_log.dart';
 import 'package:project_c/helper/catalog_ui_mapper.dart';
+import 'package:project_c/models/bulk_upload.dart';
 import 'package:project_c/models/catalog/collection_models.dart';
+import 'package:project_c/models/catalog/collection_specifications.dart';
+import 'package:project_c/models/product_details_feed_item.dart';
 import 'package:project_c/models/store_product.dart';
 import 'package:project_c/webservice/catalog_api_exception.dart';
 import 'package:project_c/webservice/catalog_error_mapper.dart';
@@ -21,6 +24,8 @@ class ProductDetailsBloc
     String? storeId,
     bool isOwnStore = false,
     int initialImageIndex = 0,
+    List<ProductDetailsFeedItem>? galleryFeed,
+    int galleryFeedIndex = 0,
     CollectionRepository? collectionRepository,
   }) : _collectionRepository =
            collectionRepository ??
@@ -33,6 +38,11 @@ class ProductDetailsBloc
            storeId: storeId,
            isOwnStore: isOwnStore,
            initialImageIndex: _clampIndex(initialImageIndex, product),
+           galleryFeed: galleryFeed,
+           galleryFeedIndex:
+               (galleryFeed == null || galleryFeed.isEmpty)
+                   ? 0
+                   : galleryFeedIndex.clamp(0, galleryFeed.length - 1),
            isLoadingPhotos: _canFetchPhotos(storeId, product),
            canEdit: _resolveCanEdit(
              explicit: product.canEdit,
@@ -43,6 +53,7 @@ class ProductDetailsBloc
          ),
        ) {
     on<ProductDetailsLoadPhotos>(_onLoadPhotos);
+    on<ProductDetailsActivateProduct>(_onActivateProduct);
     on<ProductDetailsSharePressed>(_onSharePressed);
     on<ProductDetailsEditPressed>(_onEditPressed);
     on<ProductDetailsDeletePressed>(_onDeletePressed);
@@ -99,12 +110,19 @@ class ProductDetailsBloc
       return;
     }
 
+    final requestedListingId = state.product.id;
     emit(state.copyWith(isLoadingPhotos: true));
     try {
       final detail = await _collectionRepository.fetchCollection(
         storeId: storeId!,
-        listingId: state.product.id,
+        listingId: requestedListingId,
       );
+      if (emit.isDone) return;
+      // User may have swiped to another product while this request was in flight.
+      if (state.product.id != requestedListingId) {
+        emit(state.copyWith(isLoadingPhotos: false));
+        return;
+      }
       final updated = CatalogUiMapper.detailToProduct(detail);
       final perms = detail.permissions;
       AppLog.d(
@@ -119,6 +137,11 @@ class ProductDetailsBloc
           initialImageIndex: _clampIndex(state.initialImageIndex, updated),
           revision: detail.revision,
           apiTag: detail.tag,
+          specifications: ProductSpec.fromApiJson(
+            detail.specifications?.toJson(),
+          ),
+          precisionTag: detail.precisionTag,
+          subGroups: detail.subGroups,
           canEdit: _resolveCanEdit(
             explicit: perms?.edit ?? updated.canEdit,
             isOwnStore: state.isOwnStore,
@@ -130,6 +153,11 @@ class ProductDetailsBloc
     } catch (e) {
       // Keep cover/local images already on the product; do not block the screen.
       AppLog.e(_tag, 'Collection detail load failed', e);
+      if (emit.isDone) return;
+      if (state.product.id != requestedListingId) {
+        emit(state.copyWith(isLoadingPhotos: false));
+        return;
+      }
       emit(
         state.copyWith(
           isLoadingPhotos: false,
@@ -141,6 +169,34 @@ class ProductDetailsBloc
           canDelete: state.canDelete || state.isOwnStore,
         ),
       );
+    }
+  }
+
+  Future<void> _onActivateProduct(
+    ProductDetailsActivateProduct event,
+    Emitter<ProductDetailsState> emit,
+  ) async {
+    if (event.product.id == state.product.id) return;
+    emit(
+      state.copyWith(
+        product: event.product,
+        isLoadingPhotos: _canFetchPhotos(state.storeId, event.product),
+        apiTag: '',
+        clearSpecifications: true,
+        precisionTag: '',
+        subGroups: const [],
+        canEdit: _resolveCanEdit(
+          explicit: event.product.canEdit,
+          isOwnStore: state.isOwnStore,
+          kind: _kindFromProduct(event.product),
+        ),
+        canDelete: event.product.canDelete || state.isOwnStore,
+        clearShouldOpenEdit: true,
+        clearInfoMessage: true,
+      ),
+    );
+    if (_canFetchPhotos(state.storeId, event.product)) {
+      add(const ProductDetailsLoadPhotos());
     }
   }
 

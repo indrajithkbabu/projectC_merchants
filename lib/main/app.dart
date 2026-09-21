@@ -4,14 +4,49 @@ import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:project_c/bloc/auth/auth_bloc.dart';
+import 'package:project_c/di/service_locator.dart';
 import 'package:project_c/helper/app_log.dart';
 import 'package:project_c/helper/app_theme.dart';
 import 'package:project_c/helper/colors.dart';
 import 'package:project_c/navigation/route_initializer.dart';
 import 'package:project_c/navigation/routes.dart';
+import 'package:project_c/services/screenshot_protection_service.dart';
 
-class App extends StatelessWidget {
+class App extends StatefulWidget {
   const App({super.key});
+
+  @override
+  State<App> createState() => _AppState();
+}
+
+class _AppState extends State<App> with WidgetsBindingObserver {
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _startScreenshotProtection();
+    });
+  }
+
+  Future<void> _startScreenshotProtection() async {
+    final protection = ServiceLocator.get<ScreenshotProtectionService>();
+    protection.attachMessenger(scaffoldMessengerKey);
+    await protection.initialize(messengerKey: scaffoldMessengerKey);
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      ServiceLocator.get<ScreenshotProtectionService>().reapply();
+    }
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -52,6 +87,7 @@ class App extends StatelessWidget {
         },
         child: MaterialApp(
           navigatorKey: navigatorKey,
+          scaffoldMessengerKey: scaffoldMessengerKey,
           title: 'Project C',
           debugShowCheckedModeBanner: false,
           theme: AppTheme.light,
@@ -71,6 +107,8 @@ class App extends StatelessWidget {
 }
 
 final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
+final GlobalKey<ScaffoldMessengerState> scaffoldMessengerKey =
+    GlobalKey<ScaffoldMessengerState>();
 
 void configureSystemUi() {
   SystemChrome.setSystemUIOverlayStyle(

@@ -1,12 +1,15 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:bloc/bloc.dart';
 import 'package:equatable/equatable.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:project_c/di/service_locator.dart';
 import 'package:project_c/helper/app_log.dart';
 import 'package:project_c/webservice/catalog_error_mapper.dart';
 import 'package:project_c/webservice/profile/profile_repository.dart';
 import 'package:project_c/webservice/store/store_repository.dart';
+import 'package:project_c/webservice/store/store_request.dart';
 
 part 'store_setup_event.dart';
 part 'store_setup_state.dart';
@@ -15,13 +18,17 @@ class StoreSetupBloc extends Bloc<StoreSetupEvent, StoreSetupState> {
   StoreSetupBloc({
     StoreRepository? storeRepository,
     ProfileRepository? profileRepository,
+    ImagePicker? imagePicker,
   }) : _storeRepository =
            storeRepository ?? ServiceLocator.get<StoreRepository>(),
        _profileRepository =
            profileRepository ?? ServiceLocator.get<ProfileRepository>(),
+       _imagePicker = imagePicker ?? ImagePicker(),
        super(const StoreSetupState()) {
     on<StoreNameChanged>(_onStoreNameChanged);
     on<StoreAvailabilityCheckRequested>(_onAvailabilityCheckRequested);
+    on<StoreImagesPickRequested>(_onImagesPickRequested);
+    on<StoreImageRemoved>(_onImageRemoved);
     on<StoreCreatePressed>(_onCreatePressed);
     on<StoreSkipPressed>(_onSkipPressed);
     on<StoreClearMessage>(_onClearMessage);
@@ -30,6 +37,7 @@ class StoreSetupBloc extends Bloc<StoreSetupEvent, StoreSetupState> {
 
   final StoreRepository _storeRepository;
   final ProfileRepository _profileRepository;
+  final ImagePicker _imagePicker;
   Timer? _checkDebounceTimer;
   static const _tag = 'StoreSetupBloc';
 
@@ -99,6 +107,51 @@ class StoreSetupBloc extends Bloc<StoreSetupEvent, StoreSetupState> {
     }
   }
 
+  Future<void> _onImagesPickRequested(
+    StoreImagesPickRequested event,
+    Emitter<StoreSetupState> emit,
+  ) async {
+    final remaining = StoreRequest.maxStoreImages - state.imagePaths.length;
+    if (remaining <= 0 || state.isPickingImages) return;
+    emit(state.copyWith(isPickingImages: true, clearError: true));
+    try {
+      final picked = await _imagePicker.pickMultiImage(imageQuality: 85);
+      if (picked.isEmpty) {
+        emit(state.copyWith(isPickingImages: false));
+        return;
+      }
+      final next = [
+        ...state.imagePaths,
+        ...picked.map((e) => e.path).take(remaining),
+      ];
+      emit(
+        state.copyWith(
+          imagePaths: next,
+          isPickingImages: false,
+          clearError: picked.length <= remaining,
+          errorMessage:
+              picked.length > remaining
+                  ? 'Only $remaining more photo(s) could be added (max ${StoreRequest.maxStoreImages}).'
+                  : null,
+        ),
+      );
+    } catch (e) {
+      AppLog.e(_tag, 'Pick store images failed', e);
+      emit(
+        state.copyWith(
+          isPickingImages: false,
+          errorMessage: 'Unable to open image picker right now.',
+        ),
+      );
+    }
+  }
+
+  void _onImageRemoved(StoreImageRemoved event, Emitter<StoreSetupState> emit) {
+    if (event.index < 0 || event.index >= state.imagePaths.length) return;
+    final next = List<String>.from(state.imagePaths)..removeAt(event.index);
+    emit(state.copyWith(imagePaths: next, clearError: true));
+  }
+
   Future<void> _onCreatePressed(
     StoreCreatePressed event,
     Emitter<StoreSetupState> emit,
@@ -106,9 +159,15 @@ class StoreSetupBloc extends Bloc<StoreSetupEvent, StoreSetupState> {
     if (!state.canContinue) return;
     emit(state.copyWith(isSubmitting: true, clearError: true));
     try {
+      final files =
+          state.imagePaths
+              .where((p) => p.trim().isNotEmpty)
+              .map(File.new)
+              .toList();
       final store = await _storeRepository.createStore(
         name: state.storeName.trim(),
         slug: state.storeHandle,
+        imageFiles: files,
       );
       AppLog.d(_tag, 'Store created id=${store.id}');
       emit(

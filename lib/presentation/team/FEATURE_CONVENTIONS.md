@@ -22,7 +22,8 @@ This file defines what to follow for UI and logic inside `lib/presentation/team/
 ## Route and Navigation Notes
 - Add and maintain routes through centralized route files.
 - Keep shared transition style consistent.
-- Continue / Skip → `store_listing_route` via `pushNamedAndRemoveUntil`.
+- Continue / Skip from onboarding → `store_listing_route` via `pushNamedAndRemoveUntil`.
+- When opened from store profile (`returnToProfile: true`), Continue / Skip / back → `pop` to store profile (do not clear the stack to listing).
 
 ## Folder Scope
 - `add_team_route.dart`: team route entry.

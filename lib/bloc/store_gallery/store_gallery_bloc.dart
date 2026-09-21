@@ -1,5 +1,6 @@
 import 'package:bloc/bloc.dart';
 import 'package:equatable/equatable.dart';
+import 'package:project_c/models/product_details_feed_item.dart';
 import 'package:project_c/models/store_product.dart';
 
 part 'store_gallery_event.dart';
