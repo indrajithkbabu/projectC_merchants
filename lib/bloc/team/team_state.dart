@@ -17,15 +17,7 @@ class TeamMember extends Equatable {
   final int avatarColor;
 
   String get initials {
-    final parts = name.trim().split(RegExp(r'\s+'));
-    if (parts.length >= 2 &&
-        parts.first.isNotEmpty &&
-        parts.last.isNotEmpty) {
-      return '${parts.first[0]}${parts.last[0]}'.toUpperCase();
-    }
-    final trimmed = name.trim();
-    if (trimmed.isEmpty) return '?';
-    return trimmed.substring(0, trimmed.length.clamp(0, 2)).toUpperCase();
+    return SafeDisplayText.initials(displayName: name, phone: phone);
   }
 
   @override

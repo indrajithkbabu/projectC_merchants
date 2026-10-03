@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:project_c/helper/app_log.dart';
 import 'package:project_c/models/catalog/catalog_page.dart';
+import 'package:project_c/models/catalog/catalog_upload_models.dart';
 import 'package:project_c/models/catalog/collection_models.dart';
 import 'package:project_c/models/catalog/collection_specifications.dart';
 import 'package:project_c/webservice/collection/collection_request.dart';
@@ -16,6 +17,29 @@ abstract class CollectionRepository {
   Future<CollectionDetail> fetchCollection({
     required String storeId,
     required String listingId,
+  });
+
+  Future<CatalogPresignResult> presignUploads({
+    required String storeId,
+    required List<CatalogPresignFile> files,
+  });
+
+  Future<CollectionCreateResult> createCollectionFromUploads({
+    required String storeId,
+    required String name,
+    required List<CatalogUploadedPhoto> photos,
+    String tag = '',
+    String description = '',
+    Map<String, dynamic>? specifications,
+    bool usePrecisionTag = false,
+    String? clientRequestId,
+  });
+
+  Future<CollectionCreateResult> appendUploadedPhotos({
+    required String storeId,
+    required String listingId,
+    required List<CatalogUploadedPhoto> photos,
+    int? revision,
   });
 
   Future<CollectionCreateResult> createCollection({
@@ -125,6 +149,62 @@ class CollectionRepositoryImpl implements CollectionRepository {
     required String listingId,
   }) {
     return _request.fetchCollection(storeId: storeId, listingId: listingId);
+  }
+
+  @override
+  Future<CatalogPresignResult> presignUploads({
+    required String storeId,
+    required List<CatalogPresignFile> files,
+  }) {
+    AppLog.d(_tag, 'presignUploads store=$storeId count=${files.length}');
+    return _request.presignUploads(storeId: storeId, files: files);
+  }
+
+  @override
+  Future<CollectionCreateResult> createCollectionFromUploads({
+    required String storeId,
+    required String name,
+    required List<CatalogUploadedPhoto> photos,
+    String tag = '',
+    String description = '',
+    Map<String, dynamic>? specifications,
+    bool usePrecisionTag = false,
+    String? clientRequestId,
+  }) {
+    AppLog.d(
+      _tag,
+      'createCollectionFromUploads photos=${photos.length} '
+      'specs=${specifications != null}',
+    );
+    return _request.createCollectionFromUploads(
+      storeId: storeId,
+      name: name,
+      photos: photos,
+      tag: tag,
+      description: description,
+      specifications: specifications,
+      usePrecisionTag: usePrecisionTag,
+      clientRequestId: clientRequestId,
+    );
+  }
+
+  @override
+  Future<CollectionCreateResult> appendUploadedPhotos({
+    required String storeId,
+    required String listingId,
+    required List<CatalogUploadedPhoto> photos,
+    int? revision,
+  }) {
+    AppLog.d(
+      _tag,
+      'appendUploadedPhotos listing=$listingId photos=${photos.length}',
+    );
+    return _request.appendUploadedPhotos(
+      storeId: storeId,
+      listingId: listingId,
+      photos: photos,
+      revision: revision,
+    );
   }
 
   @override

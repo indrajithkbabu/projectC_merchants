@@ -91,6 +91,31 @@ class AddStoreProductImageRemoved extends AddStoreProductEvent {
   List<Object?> get props => [imageId];
 }
 
+/// Replace a gallery item's local/network path (e.g. after crop).
+/// Clears [assetId] so edit treats it as a new local photo.
+class AddStoreProductImageReplaced extends AddStoreProductEvent {
+  const AddStoreProductImageReplaced({
+    required this.imageId,
+    required this.filePath,
+  });
+
+  final String imageId;
+  final String filePath;
+
+  @override
+  List<Object?> get props => [imageId, filePath];
+}
+
+/// Append already-picked (and optionally edited) local photo paths.
+class AddStoreProductImagesAppended extends AddStoreProductEvent {
+  const AddStoreProductImagesAppended(this.filePaths);
+
+  final List<String> filePaths;
+
+  @override
+  List<Object?> get props => [filePaths];
+}
+
 class AddStoreProductAddMoreImagesPressed extends AddStoreProductEvent {
   const AddStoreProductAddMoreImagesPressed(this.source);
 

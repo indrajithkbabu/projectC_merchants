@@ -96,6 +96,7 @@ class ProfileBloc extends Bloc<ProfileEvent, ProfileState> {
         profileImageFile:
             path != null && path.isNotEmpty ? File(path) : null,
       );
+      // Repository already wrote CatalogSession; shell will paint from cache.
       AppLog.d(_tag, 'Profile names saved');
       emit(state.copyWith(isSubmitting: false, isCompleted: true));
     } catch (e) {

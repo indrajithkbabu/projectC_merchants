@@ -4,6 +4,7 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:project_c/bloc/bulk_upload/bulk_upload_bloc.dart';
 import 'package:project_c/helper/app_log.dart';
 import 'package:project_c/data/merchant_store_session.dart';
+import 'package:project_c/di/service_locator.dart';
 import 'package:project_c/helper/app_padding.dart';
 import 'package:project_c/helper/colors.dart';
 import 'package:project_c/helper/text_styles.dart';
@@ -11,8 +12,11 @@ import 'package:project_c/helper/widgets/app_back_button.dart';
 import 'package:project_c/helper/widgets/primary_button.dart';
 import 'package:project_c/helper/widgets/screen_wrapper.dart';
 import 'package:project_c/models/bulk_upload.dart';
+import 'package:project_c/models/pending_product_upload.dart';
 import 'package:project_c/navigation/routes.dart';
 import 'package:project_c/presentation/add_store_product/add_store_product_widgets/bulk_item_tile.dart';
+import 'package:project_c/services/product_upload_coordinator.dart';
+import 'package:project_c/session/catalog_session.dart';
 
 class AddProductGroupPreviewRoute extends StatefulWidget {
   const AddProductGroupPreviewRoute({super.key, this.autoOpenEdit = false});
@@ -135,6 +139,8 @@ class _AddProductGroupPreviewRouteState
         child: BlocBuilder<BulkUploadBloc, BulkUploadState>(
           builder: (context, state) {
             if (state.isPublished && !state.isEditMode) {
+              // Create uploads leave immediately for background shimmer;
+              // Published screen is no longer shown for add flow.
               return _PublishedView(
                 title: state.groupTitle.trim(),
                 count: state.items.length,
@@ -270,21 +276,15 @@ class _AddProductGroupPreviewRouteState
                         state.isEditMode
                             ? 'Save changes'
                             : 'Done · publish ${state.items.length} items',
-                    enabled: state.items.isNotEmpty && !state.isPublishing,
-                    isLoading: state.isPublishing,
+                    enabled:
+                        state.items.isNotEmpty &&
+                        (state.isEditMode ? !state.isPublishing : true),
+                    isLoading: state.isEditMode && state.isPublishing,
                     progress:
-                        state.isPublishing ? state.publishProgress : null,
-                    onPressed: () {
-                      AppLog.d(
-                        _logTag,
-                        'CTA pressed edit=${state.isEditMode} '
-                        'items=${state.items.length} '
-                        'publishing=${state.isPublishing}',
-                      );
-                      context.read<BulkUploadBloc>().add(
-                        const BulkUploadPublishPressed(),
-                      );
-                    },
+                        state.isEditMode && state.isPublishing
+                            ? state.publishProgress
+                            : null,
+                    onPressed: () => _onPublishPressed(context, state),
                   ),
                 ),
               ],
@@ -293,6 +293,59 @@ class _AddProductGroupPreviewRouteState
         ),
       ),
     );
+  }
+
+  void _onPublishPressed(BuildContext context, BulkUploadState state) {
+    AppLog.d(
+      _logTag,
+      'CTA pressed edit=${state.isEditMode} '
+      'items=${state.items.length} '
+      'publishing=${state.isPublishing}',
+    );
+    if (state.isEditMode) {
+      context.read<BulkUploadBloc>().add(const BulkUploadPublishPressed());
+      return;
+    }
+
+    final storeId =
+        (state.storeId?.trim().isNotEmpty == true)
+            ? state.storeId!.trim()
+            : (ServiceLocator.get<CatalogSession>().ownStoreId?.trim() ?? '');
+    if (storeId.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Create a store before publishing products.'),
+        ),
+      );
+      return;
+    }
+    if (!state.groupSpec.isValid) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Group details are incomplete. Go back and fill weight, purity, wastage, size, metal, and category.',
+          ),
+        ),
+      );
+      return;
+    }
+
+    ServiceLocator.get<ProductUploadCoordinator>().startWithSpecs(
+      SpecsUploadRequest(
+        storeId: storeId,
+        title: state.groupTitle.trim(),
+        items: List<BulkUploadItem>.from(state.items),
+        groupSpec: state.groupSpec,
+        tags: state.tags,
+        description: state.description,
+        knownSubGroups: List<BulkKnownSubGroup>.from(state.knownSubGroups),
+      ),
+    );
+    // Leave immediately — store profile shows uploading shimmer.
+    Navigator.of(context).popUntil((route) {
+      final name = route.settings.name;
+      return name == Routes.storeProfileRoute || route.isFirst;
+    });
   }
 
   void _popPublishedResult(BuildContext context, BulkUploadState state) {

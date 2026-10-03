@@ -20,22 +20,40 @@ class ProfileRoute extends StatefulWidget {
 }
 
 class _ProfileRouteState extends State<ProfileRoute> {
-  late final TextEditingController _firstNameController;
-  late final TextEditingController _lastNameController;
+  late final TextEditingController _nameController;
+  late final FocusNode _nameFocus;
 
   @override
   void initState() {
     super.initState();
     final state = context.read<ProfileBloc>().state;
-    _firstNameController = TextEditingController(text: state.firstName);
-    _lastNameController = TextEditingController(text: state.lastName);
+    final existing = state.firstName.trim();
+    final last = state.lastName.trim();
+    final seed =
+        existing.isEmpty
+            ? ''
+            : (last.isEmpty ? existing : '$existing $last');
+    _nameController = TextEditingController(text: seed);
+    _nameFocus = FocusNode();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _nameFocus.requestFocus();
+    });
   }
 
   @override
   void dispose() {
-    _firstNameController.dispose();
-    _lastNameController.dispose();
+    _nameController.dispose();
+    _nameFocus.dispose();
     super.dispose();
+  }
+
+  void _onNameChanged(String value) {
+    // API still expects firstName; treat the whole field as the display name.
+    context.read<ProfileBloc>().add(ProfileFirstNameChanged(value));
+    if (context.read<ProfileBloc>().state.lastName.isNotEmpty) {
+      context.read<ProfileBloc>().add(const ProfileLastNameChanged(''));
+    }
   }
 
   Future<void> _showImageOptions(ProfileState state) async {
@@ -127,7 +145,11 @@ class _ProfileRouteState extends State<ProfileRoute> {
           listenWhen: (prev, curr) => curr.isCompleted && !prev.isCompleted,
           listener: (context, state) {
             context.read<ProfileBloc>().add(const ProfileClearCompleted());
-            Navigator.of(context).pushNamed(Routes.storeSetupRoute);
+            // Store setup is optional — create later from Profile tab.
+            Navigator.of(context).pushNamedAndRemoveUntil(
+              Routes.storeListingRoute,
+              (route) => false,
+            );
           },
         ),
       ],
@@ -154,45 +176,35 @@ class _ProfileRouteState extends State<ProfileRoute> {
                         Center(
                           child: Text(
                             'Add your name',
-                            style: AppTextStyles.title(),
+                            style: AppTextStyles.title(fontSize: 24),
                             textAlign: TextAlign.center,
                           ),
                         ),
-                        const SizedBox(height: 10),
+                        const SizedBox(height: 8),
                         Center(
                           child: Text(
                             "Enter your name and a photo so your team knows it's you.",
-                            style: AppTextStyles.bodySecondary(),
+                            style: AppTextStyles.bodySecondary(fontSize: 14),
                             textAlign: TextAlign.center,
                           ),
                         ),
-                        const SizedBox(height: 26),
+                        const SizedBox(height: 22),
                         ProfilePhotoPicker(
                           firstName: state.firstName,
                           imagePath: state.imagePath,
                           isLoading: state.isPickingImage,
                           onTap: () => _showImageOptions(state),
                         ),
-                        const SizedBox(height: 34),
+                        const SizedBox(height: 28),
                         ProfileNameField(
-                          label: 'First name',
-                          hintText: 'First name',
-                          controller: _firstNameController,
-                          onChanged:
-                              (value) => context.read<ProfileBloc>().add(
-                                ProfileFirstNameChanged(value),
-                              ),
-                        ),
-                        const SizedBox(height: 18),
-                        ProfileNameField(
-                          label: 'Last name (optional)',
-                          hintText: 'Last name',
-                          controller: _lastNameController,
+                          label: 'Name',
+                          hintText: 'Enter your name',
+                          controller: _nameController,
+                          focusNode: _nameFocus,
+                          autofocus: true,
                           textInputAction: TextInputAction.done,
-                          onChanged:
-                              (value) => context.read<ProfileBloc>().add(
-                                ProfileLastNameChanged(value),
-                              ),
+                          fontSize: 18,
+                          onChanged: _onNameChanged,
                         ),
                       ],
                     ),

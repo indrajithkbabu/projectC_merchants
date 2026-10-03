@@ -1,9 +1,9 @@
 import 'package:bloc/bloc.dart';
 import 'package:equatable/equatable.dart';
-import 'package:flutter_contacts/flutter_contacts.dart';
 import 'package:project_c/di/service_locator.dart';
 import 'package:project_c/helper/app_log.dart';
-import 'package:project_c/helper/phone_normalize.dart';
+import 'package:project_c/helper/device_contact_names.dart';
+import 'package:project_c/helper/safe_display_text.dart';
 import 'package:project_c/session/catalog_session.dart';
 import 'package:project_c/webservice/catalog_error_mapper.dart';
 import 'package:project_c/webservice/store/store_repository.dart';
@@ -55,8 +55,9 @@ class TeamBloc extends Bloc<TeamEvent, TeamState> {
       ),
     );
     try {
-      final granted = await FlutterContacts.requestPermission(readonly: true);
-      if (!granted) {
+      // Shared with listing / Contacts — never request permission twice.
+      final result = await DeviceContactNames.loadContactList();
+      if (result.permissionDenied) {
         AppLog.d(_tag, 'Contacts permission denied');
         emit(
           state.copyWith(
@@ -69,8 +70,7 @@ class TeamBloc extends Bloc<TeamEvent, TeamState> {
         return;
       }
 
-      final raw = await FlutterContacts.getContacts(withProperties: true);
-      final members = _mapDeviceContacts(raw);
+      final members = _mapDeviceContacts(result.contacts);
       AppLog.d(_tag, 'Loaded ${members.length} device contacts with phones');
       emit(
         state.copyWith(
@@ -175,36 +175,18 @@ class TeamBloc extends Bloc<TeamEvent, TeamState> {
     }).toList();
   }
 
-  List<TeamMember> _mapDeviceContacts(List<Contact> contacts) {
-    final byPhone = <String, TeamMember>{};
-    var colorIndex = 0;
-
-    for (final contact in contacts) {
-      final displayName = contact.displayName.trim();
-      for (final phone in contact.phones) {
-        final e164 = PhoneNormalize.toE164(phone.number);
-        if (e164 == null) continue;
-        if (byPhone.containsKey(e164)) continue;
-
-        final name =
-            displayName.isNotEmpty
-                ? displayName
-                : e164;
-        byPhone[e164] = TeamMember(
-          id: e164,
-          name: name,
-          handle: e164,
-          phone: e164,
-          avatarColor: _avatarPalette[colorIndex % _avatarPalette.length],
-        );
-        colorIndex++;
-      }
-    }
-
-    final list = byPhone.values.toList()
-      ..sort(
-        (a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()),
-      );
-    return list;
+  List<TeamMember> _mapDeviceContacts(
+    List<({String phone, String name})> contacts,
+  ) {
+    return [
+      for (var i = 0; i < contacts.length; i++)
+        TeamMember(
+          id: contacts[i].phone,
+          name: contacts[i].name,
+          handle: contacts[i].phone,
+          phone: contacts[i].phone,
+          avatarColor: _avatarPalette[i % _avatarPalette.length],
+        ),
+    ];
   }
 }

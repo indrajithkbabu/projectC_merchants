@@ -6,9 +6,11 @@ import 'package:project_c/bloc/add_store_product/add_store_product_bloc.dart';
 import 'package:project_c/di/service_locator.dart';
 import 'package:project_c/helper/app_log.dart';
 import 'package:project_c/helper/catalog_ui_mapper.dart';
+import 'package:project_c/helper/product_image.dart';
 import 'package:project_c/models/bulk_upload.dart';
 import 'package:project_c/models/catalog/collection_models.dart';
 import 'package:project_c/models/store_product.dart';
+import 'package:project_c/services/catalog_direct_upload_service.dart';
 import 'package:project_c/session/catalog_session.dart';
 import 'package:project_c/webservice/catalog_api_exception.dart';
 import 'package:project_c/webservice/catalog_error_mapper.dart';
@@ -22,11 +24,15 @@ class BulkUploadBloc extends Bloc<BulkUploadEvent, BulkUploadState> {
     required List<GalleryImageItem> images,
     String? storeId,
     CollectionRepository? collectionRepository,
+    CatalogDirectUploadService? directUploadService,
     CatalogSession? session,
   }) : _storeId = storeId,
        _collectionRepository =
            collectionRepository ??
            ServiceLocator.get<CollectionRepository>(),
+       _directUpload =
+           directUploadService ??
+           ServiceLocator.get<CatalogDirectUploadService>(),
        _session = session ?? ServiceLocator.get<CatalogSession>(),
        super(
          BulkUploadState(
@@ -49,11 +55,15 @@ class BulkUploadBloc extends Bloc<BulkUploadEvent, BulkUploadState> {
     required CollectionDetail detail,
     required String storeId,
     CollectionRepository? collectionRepository,
+    CatalogDirectUploadService? directUploadService,
     CatalogSession? session,
   }) : _storeId = storeId,
        _collectionRepository =
            collectionRepository ??
            ServiceLocator.get<CollectionRepository>(),
+       _directUpload =
+           directUploadService ??
+           ServiceLocator.get<CatalogDirectUploadService>(),
        _session = session ?? ServiceLocator.get<CatalogSession>(),
        super(_stateFromDetail(detail: detail, storeId: storeId)) {
     _registerHandlers();
@@ -61,6 +71,7 @@ class BulkUploadBloc extends Bloc<BulkUploadEvent, BulkUploadState> {
 
   final String? _storeId;
   final CollectionRepository _collectionRepository;
+  final CatalogDirectUploadService _directUpload;
   final CatalogSession _session;
   static const _tag = 'BulkQA.Bloc';
   static const _ungroupTag = 'BulkQA.Ungroup';
@@ -114,8 +125,12 @@ class BulkUploadBloc extends Bloc<BulkUploadEvent, BulkUploadState> {
 
   void _registerHandlers() {
     on<BulkUploadTitleChanged>(_onTitleChanged);
+    on<BulkUploadDescriptionChanged>(_onDescriptionChanged);
+    on<BulkUploadTagDraftChanged>(_onTagDraftChanged);
+    on<BulkUploadTagAdded>(_onTagAdded);
+    on<BulkUploadTagRemoved>(_onTagRemoved);
+    on<BulkUploadSuggestedTagTapped>(_onSuggestedTagTapped);
     on<BulkUploadTitleOnlyPressed>(_onTitleOnlyPressed);
-    on<BulkUploadClearOpenTitleOnlyForm>(_onClearOpenTitleOnlyForm);
     on<BulkUploadAddDetailsPressed>(_onAddDetailsPressed);
     on<BulkUploadClearOpenGroupDetails>(_onClearOpenGroupDetails);
     on<BulkUploadApplyGroupSpec>(_onApplyGroupSpec);
@@ -226,11 +241,21 @@ class BulkUploadBloc extends Bloc<BulkUploadEvent, BulkUploadState> {
       AppLog.d(_editTag, '  hydrate[$i] ${_itemBrief(items[i])}');
     }
 
+    final apiTag = detail.tag.trim();
     return BulkUploadState(
       storeId: storeId,
       images: images,
       items: items,
       groupTitle: detail.name,
+      description: detail.description,
+      tags:
+          apiTag.isEmpty
+              ? const <String>[]
+              : apiTag
+                  .split(',')
+                  .map((t) => t.trim().toLowerCase())
+                  .where((t) => t.isNotEmpty)
+                  .toList(growable: false),
       groupSpec: groupSpec,
       knownSubGroups: [
         for (final sub in detail.subGroups)
@@ -265,19 +290,72 @@ class BulkUploadBloc extends Bloc<BulkUploadEvent, BulkUploadState> {
     emit(state.copyWith(groupTitle: event.value, clearError: true));
   }
 
-  void _onTitleOnlyPressed(
-    BulkUploadTitleOnlyPressed event,
+  void _onDescriptionChanged(
+    BulkUploadDescriptionChanged event,
     Emitter<BulkUploadState> emit,
   ) {
-    if (!state.canContinue) return;
-    emit(state.copyWith(shouldOpenTitleOnlyForm: true, clearError: true));
+    emit(state.copyWith(description: event.value, clearError: true));
   }
 
-  void _onClearOpenTitleOnlyForm(
-    BulkUploadClearOpenTitleOnlyForm event,
+  void _onTagDraftChanged(
+    BulkUploadTagDraftChanged event,
     Emitter<BulkUploadState> emit,
   ) {
-    emit(state.copyWith(clearShouldOpenTitleOnlyForm: true));
+    emit(state.copyWith(tagDraft: event.value));
+  }
+
+  void _onTagAdded(
+    BulkUploadTagAdded event,
+    Emitter<BulkUploadState> emit,
+  ) {
+    final tag = event.tag.trim().toLowerCase();
+    if (tag.isEmpty || state.tags.contains(tag)) {
+      emit(state.copyWith(tagDraft: ''));
+      return;
+    }
+    emit(
+      state.copyWith(
+        tags: [...state.tags, tag],
+        tagDraft: '',
+        clearError: true,
+      ),
+    );
+  }
+
+  void _onTagRemoved(
+    BulkUploadTagRemoved event,
+    Emitter<BulkUploadState> emit,
+  ) {
+    emit(
+      state.copyWith(
+        tags: state.tags.where((t) => t != event.tag).toList(),
+        clearError: true,
+      ),
+    );
+  }
+
+  void _onSuggestedTagTapped(
+    BulkUploadSuggestedTagTapped event,
+    Emitter<BulkUploadState> emit,
+  ) {
+    add(BulkUploadTagAdded(event.tag));
+  }
+
+  Future<void> _onTitleOnlyPressed(
+    BulkUploadTitleOnlyPressed event,
+    Emitter<BulkUploadState> emit,
+  ) async {
+    if (!state.canContinue || state.isPublishing || state.isPublished) return;
+    final storeId = _effectiveStoreId;
+    if (storeId == null || storeId.isEmpty) {
+      emit(
+        state.copyWith(
+          errorMessage: 'Create a store before publishing products.',
+        ),
+      );
+      return;
+    }
+    await _publishTitleOnly(emit, storeId: storeId);
   }
 
   void _onAddDetailsPressed(
@@ -488,7 +566,8 @@ class BulkUploadBloc extends Bloc<BulkUploadEvent, BulkUploadState> {
                 ? GalleryImageItem(
                   id: image.id,
                   filePath: path,
-                  assetId: image.assetId,
+                  // Local crop/replace — clear catalog asset id.
+                  assetId: null,
                   isPlaceholder: false,
                 )
                 : image,
@@ -1192,6 +1271,15 @@ class BulkUploadBloc extends Bloc<BulkUploadEvent, BulkUploadState> {
       var revision = state.revision;
       final groupTitle = state.groupTitle.trim();
 
+      // Persist WhatsApp-style photo edits (local paths) before specs/subgroups.
+      revision = await _syncReplacedEditPhotos(
+        emit,
+        storeId: storeId,
+        listingId: listingId,
+        revision: revision,
+      );
+      _setPublishProgress(emit, 0.08);
+
       final updated = await _collectionRepository.updateCollection(
         storeId: storeId,
         listingId: listingId,
@@ -1439,6 +1527,171 @@ class BulkUploadBloc extends Bloc<BulkUploadEvent, BulkUploadState> {
     }
   }
 
+  /// Upload locally edited photos (crop/draw/text) and remove the old remote
+  /// photo ids. Remaps [BulkUploadItem.id] to the new catalog photo ids so
+  /// later subgroup create/update still matches `mainGroupPhotos`.
+  Future<int> _syncReplacedEditPhotos(
+    Emitter<BulkUploadState> emit, {
+    required String storeId,
+    required String listingId,
+    required int revision,
+  }) async {
+    final replaced =
+        state.items
+            .where(
+              (item) =>
+                  item.imagePath.trim().isNotEmpty &&
+                  !ProductImagePaths.isNetwork(item.imagePath) &&
+                  File(item.imagePath).existsSync(),
+            )
+            .toList(growable: false);
+    if (replaced.isEmpty) return revision;
+
+    AppLog.d(
+      _editTag,
+      'syncReplacedPhotos count=${replaced.length} '
+      'ids=${replaced.map((e) => e.id).join(',')}',
+    );
+
+    var nextRevision = revision;
+    var nextItems = List<BulkUploadItem>.from(state.items);
+    var nextImages = List<GalleryImageItem>.from(state.images);
+
+    for (final item in replaced) {
+      final oldId = item.id.trim();
+      final file = File(item.imagePath);
+      if (oldId.isEmpty || !file.existsSync()) continue;
+
+      var detail = await _collectionRepository.fetchCollection(
+        storeId: storeId,
+        listingId: listingId,
+      );
+      nextRevision = detail.revision;
+      final beforeIds =
+          detail.photos
+              .map((p) => p.id?.trim() ?? '')
+              .where((id) => id.isNotEmpty)
+              .toSet();
+
+      // Add first so the collection never drops below 1 photo.
+      final uploadBatch = await _directUpload.prepareAndUpload(
+        storeId: storeId,
+        localPaths: [item.imagePath],
+      );
+      if (uploadBatch.allFailed) {
+        throw CatalogApiException(
+          statusCode: 400,
+          code: 'NO_VALID_PHOTOS',
+          message: 'Edited photo could not be uploaded.',
+        );
+      }
+      final added = await _collectionRepository.appendUploadedPhotos(
+        storeId: storeId,
+        listingId: listingId,
+        photos: uploadBatch.successful,
+        revision: nextRevision,
+      );
+      nextRevision = added.revision;
+
+      detail = await _collectionRepository.fetchCollection(
+        storeId: storeId,
+        listingId: listingId,
+      );
+      nextRevision = detail.revision;
+
+      String? newId;
+      for (final photo in detail.photos.reversed) {
+        final id = photo.id?.trim() ?? '';
+        if (id.isNotEmpty && !beforeIds.contains(id)) {
+          newId = id;
+          break;
+        }
+      }
+      if (newId == null || newId.isEmpty) {
+        AppLog.d(
+          _editTag,
+          'WARN syncReplacedPhotos no_new_id for old=$oldId — skip delete',
+        );
+        continue;
+      }
+
+      var newUrl = item.imagePath;
+      for (final photo in detail.photos) {
+        if ((photo.id?.trim() ?? '') == newId && photo.url.trim().isNotEmpty) {
+          newUrl = photo.url.trim();
+          break;
+        }
+      }
+
+      // Keep Precise/Standalone membership when the original lived in a sub-group.
+      final subId = item.subGroupId?.trim() ?? '';
+      final inExistingSub =
+          subId.isNotEmpty && !subId.startsWith('local_');
+      if (inExistingSub) {
+        try {
+          final moved = await _collectionRepository.movePhotos(
+            storeId: storeId,
+            listingId: listingId,
+            photoIds: [newId],
+            source: const <String, dynamic>{'type': 'main'},
+            destination: <String, dynamic>{
+              'type': 'existing_subgroup',
+              'targetSubGroupId': subId,
+            },
+            revision: nextRevision,
+          );
+          nextRevision = moved.revision;
+        } catch (e) {
+          AppLog.e(
+            _editTag,
+            'syncReplacedPhotos move to sub=$subId failed',
+            e,
+          );
+        }
+      }
+
+      if (beforeIds.contains(oldId)) {
+        final deleted = await _collectionRepository.deletePhotos(
+          storeId: storeId,
+          listingId: listingId,
+          photoIds: [oldId],
+          revision: nextRevision,
+        );
+        nextRevision = deleted.revision;
+      }
+
+      nextItems = [
+        for (final entry in nextItems)
+          entry.id == oldId
+              ? entry.copyWith(id: newId, imagePath: newUrl)
+              : entry,
+      ];
+      nextImages = [
+        for (final image in nextImages)
+          if (image.id == oldId)
+            GalleryImageItem(
+              id: newId,
+              filePath: newUrl,
+              assetId: newId,
+              isPlaceholder: false,
+            )
+          else
+            image,
+      ];
+
+      AppLog.d(_editTag, 'syncReplacedPhotos OK old=$oldId → new=$newId');
+    }
+
+    emit(
+      state.copyWith(
+        items: nextItems,
+        images: nextImages,
+        revision: nextRevision,
+      ),
+    );
+    return nextRevision;
+  }
+
   /// Name for a new Precise/Standalone cluster: custom title → known sub name →
   /// `{groupTitle} precise|standalone {n}`.
   String _clusterDisplayName({
@@ -1500,69 +1753,87 @@ class BulkUploadBloc extends Bloc<BulkUploadEvent, BulkUploadState> {
 
     try {
       final groupTitle = state.groupTitle.trim();
-      // Create with the first photo, then append the rest in small batches so
-      // nginx body-size limits (413) do not fail large multi-photo uploads.
-      // Prefer 2-at-a-time; on 413 retry that batch one file at a time.
-      const preferredAppendBatchSize = 2;
+      final apiTag = _apiTag(state.tags);
+      final description = state.description.trim();
       final totalPhotos = photoFiles.length;
-      final created = await _collectionRepository.createCollection(
+
+      final uploadBatch = await _directUpload.prepareAndUpload(
+        storeId: storeId,
+        localPaths: [for (final item in state.items) item.imagePath],
+        onProgress: (p) => _setPublishProgress(emit, p * 0.85),
+      );
+      if (uploadBatch.allFailed) {
+        throw CatalogApiException(
+          statusCode: 400,
+          code: 'NO_VALID_PHOTOS',
+          message: 'None of the photos could be uploaded.',
+        );
+      }
+
+      final created = await _collectionRepository.createCollectionFromUploads(
         storeId: storeId,
         name: groupTitle,
-        photoFiles: [photoFiles.first],
+        photos: uploadBatch.successful,
+        tag: apiTag,
+        description: description,
         specifications: state.groupSpec.toApiJson(),
         usePrecisionTag: true,
       );
       AppLog.d(
         _publishTag,
-        'createCollection id=${created.id} revision=${created.revision} '
-        'failed=${created.failedPhotos.length}',
+        'createCollectionFromUploads id=${created.id} '
+        'revision=${created.revision} failed=${created.failedPhotos.length} '
+        's3Failed=${uploadBatch.failedNames.length}',
       );
-      _setPublishProgress(emit, totalPhotos <= 1 ? 0.9 : 1 / totalPhotos * 0.9);
+      _setPublishProgress(emit, 0.9);
 
-      var revision = created.revision;
-      final failedPhotos = List<FailedPhoto>.from(created.failedPhotos);
-
-      for (var i = 1; i < photoFiles.length; i += preferredAppendBatchSize) {
-        final end =
-            (i + preferredAppendBatchSize < photoFiles.length)
-                ? i + preferredAppendBatchSize
-                : photoFiles.length;
-        final batch = photoFiles.sublist(i, end);
-        revision = await _appendPhotoBatch(
-          storeId: storeId,
-          listingId: created.id,
-          revision: revision,
-          batch: batch,
-          failedPhotos: failedPhotos,
-        );
-        _setPublishProgress(emit, (end / totalPhotos) * 0.9);
-      }
+      final failedPhotos = [
+        ...created.failedPhotos,
+        for (final name in uploadBatch.failedNames)
+          FailedPhoto(
+            fileName: name,
+            code: 'S3_UPLOAD_FAILED',
+            message: 'Upload failed',
+          ),
+      ];
 
       var detail = await _collectionRepository.fetchCollection(
         storeId: storeId,
         listingId: created.id,
       );
-      revision = detail.revision;
+      var revision = detail.revision;
 
       final photos = detail.photos;
-      if (photos.length < state.items.length) {
+      if (photos.length < totalPhotos) {
         AppLog.d(
           _tag,
-          'Photo count mismatch local=${state.items.length} '
+          'Photo count mismatch local=$totalPhotos '
           'remote=${photos.length} failed=${failedPhotos.length}',
         );
       }
 
+      final successfulItems = <BulkUploadItem>[];
+      final byPath = {
+        for (final item in state.items) item.imagePath.trim(): item,
+      };
+      for (final uploaded in uploadBatch.successful) {
+        final path = uploaded.localPath?.trim() ?? '';
+        final item = path.isNotEmpty ? byPath[path] : null;
+        if (item != null) successfulItems.add(item);
+      }
+      final mapItems =
+          successfulItems.isNotEmpty ? successfulItems : state.items;
+
       final localToPhotoId = <String, String>{};
-      for (var i = 0; i < state.items.length && i < photos.length; i++) {
+      for (var i = 0; i < mapItems.length && i < photos.length; i++) {
         final photoId = photos[i].id?.trim() ?? '';
         if (photoId.isNotEmpty) {
-          localToPhotoId[state.items[i].id] = photoId;
+          localToPhotoId[mapItems[i].id] = photoId;
         }
       }
 
       final subgroupCandidates =
-          state.items
+          mapItems
               .where(
                 (item) =>
                     item.tag == BulkItemTag.precise ||
@@ -1682,9 +1953,13 @@ class BulkUploadBloc extends Bloc<BulkUploadEvent, BulkUploadState> {
         product = StoreProduct(
           id: created.id,
           title: created.name.isNotEmpty ? created.name : groupTitle,
-          description: created.description,
+          description:
+              created.description.isNotEmpty
+                  ? created.description
+                  : description,
           tags: [
             if (created.tag.isNotEmpty) created.tag,
+            ...state.tags.where((t) => t != created.tag),
             state.groupSpec.category,
             ...state.groupSpec.metalType,
           ],
@@ -1738,70 +2013,6 @@ class BulkUploadBloc extends Bloc<BulkUploadEvent, BulkUploadState> {
     );
   }
 
-  /// Appends [batch]; on nginx 413 with multiple files, retries one-by-one.
-  Future<int> _appendPhotoBatch({
-    required String storeId,
-    required String listingId,
-    required int revision,
-    required List<File> batch,
-    required List<FailedPhoto> failedPhotos,
-  }) async {
-    if (batch.isEmpty) return revision;
-
-    Future<int> bytesOf(File f) async {
-      try {
-        return await f.length();
-      } catch (_) {
-        return -1;
-      }
-    }
-
-    final sizes = <int>[];
-    for (final file in batch) {
-      sizes.add(await bytesOf(file));
-    }
-    final totalBytes = sizes.fold<int>(0, (a, b) => a + (b > 0 ? b : 0));
-    AppLog.d(
-      _publishTag,
-      'appendBatch count=${batch.length} totalBytes=$totalBytes '
-      'sizes=$sizes revision=$revision',
-    );
-
-    try {
-      final appended = await _collectionRepository.updateCollectionWithPhotos(
-        storeId: storeId,
-        listingId: listingId,
-        revision: revision,
-        photoFiles: batch,
-      );
-      failedPhotos.addAll(appended.failedPhotos);
-      AppLog.d(
-        _publishTag,
-        'appendBatch OK count=${batch.length} revision=${appended.revision}',
-      );
-      return appended.revision;
-    } on CatalogApiException catch (e) {
-      final is413 = e.statusCode == 413 || e.code == 'HTTP_413';
-      if (!is413 || batch.length <= 1) rethrow;
-
-      AppLog.d(
-        _publishTag,
-        'appendBatch 413 — retrying ${batch.length} files one-by-one',
-      );
-      var nextRevision = revision;
-      for (final file in batch) {
-        nextRevision = await _appendPhotoBatch(
-          storeId: storeId,
-          listingId: listingId,
-          revision: nextRevision,
-          batch: [file],
-          failedPhotos: failedPhotos,
-        );
-      }
-      return nextRevision;
-    }
-  }
-
   Future<void> _assertPhotoSizes(List<File> files) async {
     for (final file in files) {
       final length = await file.length();
@@ -1813,6 +2024,142 @@ class BulkUploadBloc extends Bloc<BulkUploadEvent, BulkUploadState> {
         );
       }
     }
+  }
+
+  Future<void> _publishTitleOnly(
+    Emitter<BulkUploadState> emit, {
+    required String storeId,
+  }) async {
+    final photoFiles = <File>[
+      for (final item in state.items) File(item.imagePath),
+    ];
+    try {
+      await _assertPhotoSizes(photoFiles);
+    } catch (e) {
+      emit(
+        state.copyWith(errorMessage: CatalogErrorMapper.toUserMessage(e)),
+      );
+      return;
+    }
+
+    emit(
+      state.copyWith(
+        isPublishing: true,
+        publishProgress: 0,
+        isSelectMode: false,
+        selectedItemIds: const [],
+        clearError: true,
+      ),
+    );
+
+    try {
+      final groupTitle = state.groupTitle.trim();
+      final apiTag = _apiTag(state.tags);
+      final description = state.description.trim();
+      final uploadBatch = await _directUpload.prepareAndUpload(
+        storeId: storeId,
+        localPaths: [for (final item in state.items) item.imagePath],
+        onProgress: (p) => _setPublishProgress(emit, p),
+      );
+      if (uploadBatch.allFailed) {
+        throw CatalogApiException(
+          statusCode: 400,
+          code: 'NO_VALID_PHOTOS',
+          message: 'None of the photos could be uploaded.',
+        );
+      }
+
+      final created = await _collectionRepository.createCollectionFromUploads(
+        storeId: storeId,
+        name: groupTitle,
+        photos: uploadBatch.successful,
+        tag: apiTag,
+        description: description,
+      );
+      AppLog.d(
+        _publishTag,
+        'titleOnly createCollectionFromUploads id=${created.id} '
+        'revision=${created.revision} failed=${created.failedPhotos.length}',
+      );
+
+      var revision = created.revision;
+      final failedPhotos = [
+        ...created.failedPhotos,
+        for (final name in uploadBatch.failedNames)
+          FailedPhoto(
+            fileName: name,
+            code: 'S3_UPLOAD_FAILED',
+            message: 'Upload failed',
+          ),
+      ];
+
+      StoreProduct product;
+      try {
+        final detail = await _collectionRepository.fetchCollection(
+          storeId: storeId,
+          listingId: created.id,
+        );
+        product = CatalogUiMapper.detailToProduct(detail);
+        revision = detail.revision;
+      } catch (_) {
+        product = StoreProduct(
+          id: created.id,
+          title: created.name.isNotEmpty ? created.name : groupTitle,
+          description:
+              created.description.isNotEmpty
+                  ? created.description
+                  : description,
+          tags: [
+            if (created.tag.isNotEmpty) created.tag,
+            ...state.tags.where((t) => t != created.tag),
+          ],
+          imagePaths: state.items.map((e) => e.imagePath).toList(),
+          canEdit: true,
+          canDelete: true,
+        );
+      }
+
+      final partialMessage =
+          failedPhotos.isNotEmpty
+              ? CatalogErrorMapper.failedPhotosSummary(failedPhotos)
+              : null;
+
+      AppLog.d(
+        _publishTag,
+        'Published title-only collection ${created.id} '
+        'photos=${product.imagePaths.length} failed=${failedPhotos.length}',
+      );
+
+      emit(
+        state.copyWith(
+          isPublishing: false,
+          publishProgress: 0,
+          isPublished: true,
+          publishedProduct: product,
+          publishedRevision: revision,
+          publishedApiTag: created.tag,
+          errorMessage: partialMessage,
+        ),
+      );
+    } catch (e) {
+      AppLog.e(_publishTag, 'Title-only publish failed', e);
+      emit(
+        state.copyWith(
+          isPublishing: false,
+          publishProgress: 0,
+          errorMessage: CatalogErrorMapper.toUserMessage(e),
+        ),
+      );
+    }
+  }
+
+  /// API accepts a single tag string (max 40). Join UI chips when possible.
+  String _apiTag(List<String> tags) {
+    if (tags.isEmpty) return '';
+    final joined =
+        tags.map((t) => t.trim()).where((t) => t.isNotEmpty).join(', ');
+    if (joined.length <= 40) return joined;
+    return joined.substring(0, 40).trim();
   }
 
   void _onClearPublished(

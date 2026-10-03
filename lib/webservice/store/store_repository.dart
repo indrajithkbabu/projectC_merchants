@@ -4,6 +4,7 @@ import 'package:project_c/helper/app_log.dart';
 import 'package:project_c/models/catalog/catalog_page.dart';
 import 'package:project_c/models/catalog/catalog_store.dart';
 import 'package:project_c/models/catalog/store_member_models.dart';
+import 'package:project_c/services/store_home_prefetcher.dart';
 import 'package:project_c/session/catalog_session.dart';
 import 'package:project_c/webservice/profile/profile_repository.dart';
 import 'package:project_c/webservice/store/store_request.dart';
@@ -119,6 +120,10 @@ class StoreRepositoryImpl implements StoreRepository {
         );
       }
     }
+    // Drop stale /home warm so Stores tab shows the new store without a
+    // manual pull-to-refresh after create → team → listing.
+    StoreHomePrefetcher.instance.invalidate();
+    StoreHomePrefetcher.instance.prefetch();
     return store;
   }
 

@@ -1,5 +1,22 @@
 import 'package:equatable/equatable.dart';
 
+/// Per-listing import status relative to the viewer's destination stores.
+enum ListingImportAvailability { available, alreadyAdded, pending, unavailable }
+
+ListingImportAvailability listingAvailabilityFor(List<ImportTarget> targets) {
+  if (targets.isEmpty) return ListingImportAvailability.unavailable;
+  if (targets.any((t) => t.canRequest)) {
+    return ListingImportAvailability.available;
+  }
+  if (targets.any((t) => t.pending)) {
+    return ListingImportAvailability.pending;
+  }
+  if (targets.any((t) => t.alreadyAdded)) {
+    return ListingImportAvailability.alreadyAdded;
+  }
+  return ListingImportAvailability.unavailable;
+}
+
 class ImportTarget extends Equatable {
   const ImportTarget({
     required this.id,

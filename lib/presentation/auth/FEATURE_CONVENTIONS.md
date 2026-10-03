@@ -13,6 +13,8 @@ This file defines what to follow for UI and logic inside `lib/presentation/auth/
 - Use `AppTextStyles` for explicit text styling.
 - Use `AppColors`; avoid one-off hardcoded colors.
 - Use shared controls such as `CustomNumericKeypad` and `KeypadCtaBar`.
+- OTP copy: “We sent an SMS…” on one line; masked mobile number centered on the next.
+- **OTP auto-read:** On Android, `OtpRoute` uses SMS User Consent (`otp_autofill` via `OtpSmsAutofill`) — no `READ_SMS`. When the SMS arrives, the system consent dialog appears; after Allow, digits fill and verify runs automatically (`AuthOtpAutoFilled` → same verify path as Continue). Manual keypad + Continue still work. Listener restarts on resend / failed verify / dismissed consent. iOS uses a hidden `AutofillHints.oneTimeCode` field (no system keyboard for digit entry). **Requires a full app rebuild** after adding/changing the native plugin (hot restart is not enough).
 
 ## Logic Ownership
 - Auth presentation screens should only consume auth state and dispatch auth actions.
@@ -23,6 +25,7 @@ This file defines what to follow for UI and logic inside `lib/presentation/auth/
 - After verify, navigate using `postAuthRoute` from `profile.onboarding`.
 - OTP is India-only: reject non-`IN` country changes; require 10-digit mobile starting 6–9 before request.
 - Phone country field tap shows a snackbar instead of opening the picker for other countries.
+- Auto-read fills via `AuthOtpAutoFilled` (does not bypass `AuthBloc` / verify / post-auth navigation).
 
 ## Route and Navigation Notes
 - Register routes centrally in shared navigation files.

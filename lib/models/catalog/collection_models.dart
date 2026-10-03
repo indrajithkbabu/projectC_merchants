@@ -8,6 +8,7 @@ class CatalogPhoto extends Equatable {
     required this.url,
     this.id,
     this.quality,
+    this.thumbhash,
   });
 
   final String? id;
@@ -15,6 +16,7 @@ class CatalogPhoto extends Equatable {
   final int height;
   final String url;
   final String? quality;
+  final String? thumbhash;
 
   factory CatalogPhoto.fromJson(Map<String, dynamic> json) {
     return CatalogPhoto(
@@ -23,11 +25,21 @@ class CatalogPhoto extends Equatable {
       height: (json['height'] as num?)?.toInt() ?? 0,
       url: json['url'] as String? ?? '',
       quality: json['quality'] as String?,
+      thumbhash: json['thumbhash'] as String? ?? json['thumbHash'] as String?,
     );
   }
 
+  Map<String, Object?> toJson() => {
+    'id': id,
+    'width': width,
+    'height': height,
+    'url': url,
+    'quality': quality,
+    'thumbhash': thumbhash,
+  };
+
   @override
-  List<Object?> get props => [id, width, height, url, quality];
+  List<Object?> get props => [id, width, height, url, quality, thumbhash];
 }
 
 class CollectionPermissions extends Equatable {

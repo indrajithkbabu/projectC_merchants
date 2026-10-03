@@ -12,16 +12,37 @@ class ProductDetailsLoadPhotos extends ProductDetailsEvent {
 }
 
 class ProductDetailsActivateProduct extends ProductDetailsEvent {
-  const ProductDetailsActivateProduct(this.product);
+  const ProductDetailsActivateProduct(
+    this.product, {
+    this.storeId,
+    this.storeName,
+    this.storeLink,
+    this.seedCategory,
+  });
 
   final StoreProduct product;
+  final String? storeId;
+  final String? storeName;
+  final String? storeLink;
+  final String? seedCategory;
 
   @override
-  List<Object?> get props => [product];
+  List<Object?> get props => [
+        product,
+        storeId,
+        storeName,
+        storeLink,
+        seedCategory,
+      ];
 }
 
 class ProductDetailsSharePressed extends ProductDetailsEvent {
-  const ProductDetailsSharePressed();
+  const ProductDetailsSharePressed({required this.imagePath});
+
+  final String imagePath;
+
+  @override
+  List<Object?> get props => [imagePath];
 }
 
 class ProductDetailsEditPressed extends ProductDetailsEvent {

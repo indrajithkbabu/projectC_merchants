@@ -8,9 +8,10 @@ import 'package:project_c/helper/widgets/app_back_button.dart';
 import 'package:project_c/helper/widgets/primary_button.dart';
 import 'package:project_c/helper/widgets/screen_wrapper.dart';
 import 'package:project_c/navigation/routes.dart';
-import 'package:project_c/presentation/store_setup/store_setup_widgets/store_images_picker_strip.dart';
 import 'package:project_c/presentation/store_setup/store_setup_widgets/store_link_card.dart';
-import 'package:project_c/presentation/store_setup/store_setup_widgets/store_name_field.dart';
+import 'package:project_c/presentation/store_setup/store_setup_widgets/store_setup_identity_card.dart';
+import 'package:project_c/presentation/store_setup/store_setup_widgets/store_setup_photos_preview_sheet.dart';
+import 'package:project_c/webservice/store/store_request.dart';
 
 class StoreSetupRoute extends StatefulWidget {
   const StoreSetupRoute({super.key});
@@ -21,6 +22,7 @@ class StoreSetupRoute extends StatefulWidget {
 
 class _StoreSetupRouteState extends State<StoreSetupRoute> {
   late final TextEditingController _storeNameController;
+  late final FocusNode _nameFocus;
 
   @override
   void initState() {
@@ -28,12 +30,27 @@ class _StoreSetupRouteState extends State<StoreSetupRoute> {
     _storeNameController = TextEditingController(
       text: context.read<StoreSetupBloc>().state.storeName,
     );
+    _nameFocus = FocusNode();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _nameFocus.requestFocus();
+    });
   }
 
   @override
   void dispose() {
     _storeNameController.dispose();
+    _nameFocus.dispose();
     super.dispose();
+  }
+
+  void _onPhotoAction(StoreSetupState state) {
+    if (state.isPickingImages || state.isSubmitting) return;
+    if (state.imagePaths.isEmpty) {
+      context.read<StoreSetupBloc>().add(const StoreImagesPickRequested());
+      return;
+    }
+    showStoreSetupPhotosPreviewSheet(context);
   }
 
   @override
@@ -72,7 +89,7 @@ class _StoreSetupRouteState extends State<StoreSetupRoute> {
         ),
       ],
       child: ScreenWrapper(
-        backgroundColor: AppColors.background,
+        backgroundColor: AppColors.scaffold,
         statusBarIconBrightness: Brightness.dark,
         child: BlocBuilder<StoreSetupBloc, StoreSetupState>(
           builder: (context, state) {
@@ -87,69 +104,57 @@ class _StoreSetupRouteState extends State<StoreSetupRoute> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        AppBackButton(
-                          onPressed: () => Navigator.of(context).maybePop(),
-                        ),
-                        const SizedBox(height: 12),
-                        Center(
-                          child: Container(
-                            width: 72,
-                            height: 72,
-                            decoration: BoxDecoration(
-                              color: AppColors.primary,
-                              borderRadius: BorderRadius.circular(18),
+                        Row(
+                          children: [
+                            SizedBox(
+                              width: 40,
+                              child: AppBackButton(
+                                color: AppColors.textPrimary,
+                                onPressed:
+                                    () => Navigator.of(context).maybePop(),
+                              ),
                             ),
-                            child: const Icon(
-                              Icons.storefront_rounded,
-                              color: AppColors.textOnPrimary,
-                              size: 36,
+                            const SizedBox(width: 4),
+                            Expanded(
+                              child: Text(
+                                'Create your store',
+                                style: AppTextStyles.headline(
+                                  fontSize: 20,
+                                  fontWeight: FontWeight.w700,
+                                ),
+                              ),
                             ),
-                          ),
-                        ),
-                        const SizedBox(height: 22),
-                        Center(
-                          child: Text(
-                            'Create your store',
-                            style: AppTextStyles.title(),
-                            textAlign: TextAlign.center,
-                          ),
+                          ],
                         ),
                         const SizedBox(height: 10),
-                        Center(
-                          child: Text(
-                            "Like a channel - a public home for your catalogue with its own link.",
-                            style: AppTextStyles.bodySecondary(),
-                            textAlign: TextAlign.center,
-                          ),
+                        Text(
+                          'Like a channel — a public home for your catalogue with its own link.',
+                          style: AppTextStyles.bodySecondary(fontSize: 14),
                         ),
-                        const SizedBox(height: 24),
-                        StoreNameField(
+                        const SizedBox(height: 4),
+                        Text(
+                          'You can upload up to ${StoreRequest.maxStoreImages} store photos.',
+                          style: AppTextStyles.caption(),
+                        ),
+                        const SizedBox(height: 16),
+                        StoreSetupIdentityCard(
                           controller: _storeNameController,
-                          onChanged:
+                          focusNode: _nameFocus,
+                          imagePaths: state.imagePaths,
+                          isPickingImages: state.isPickingImages,
+                          onNameChanged:
                               (value) => context.read<StoreSetupBloc>().add(
                                 StoreNameChanged(value),
                               ),
+                          onPickImages: () => _onPhotoAction(state),
+                          onPreviewImages: () => _onPhotoAction(state),
                         ),
                         const SizedBox(height: 14),
                         StoreLinkCard(state: state),
-                        const SizedBox(height: 14),
+                        const SizedBox(height: 10),
                         Text(
-                          'Anyone with this link can view your products - no account needed.',
+                          'Anyone with this link can view your products — no account needed.',
                           style: AppTextStyles.caption(),
-                        ),
-                        const SizedBox(height: 22),
-                        StoreImagesPickerStrip(
-                          imagePaths: state.imagePaths,
-                          onAdd:
-                              state.isPickingImages || state.isSubmitting
-                                  ? () {}
-                                  : () => context.read<StoreSetupBloc>().add(
-                                    const StoreImagesPickRequested(),
-                                  ),
-                          onRemoveAt:
-                              (index) => context.read<StoreSetupBloc>().add(
-                                StoreImageRemoved(index),
-                              ),
                         ),
                       ],
                     ),

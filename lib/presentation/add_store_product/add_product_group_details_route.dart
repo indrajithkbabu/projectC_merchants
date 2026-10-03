@@ -277,7 +277,9 @@ class _AddProductGroupDetailsRouteState
           ),
           const SizedBox(height: 6),
           Text(
-            'Refine individual photos from the preview after applying.',
+            state.isEditMode
+                ? 'Tap a photo to crop, draw, or add text. Save on the preview screen.'
+                : 'Refine individual photos from the preview after applying.',
             style: AppTextStyles.caption(),
           ),
         ],
@@ -528,7 +530,7 @@ class _EditableItemCard extends StatelessWidget {
                       borderRadius: BorderRadius.circular(8),
                     ),
                     child: const Icon(
-                      Icons.photo_camera_outlined,
+                      Icons.edit_outlined,
                       size: 14,
                       color: Colors.white,
                     ),

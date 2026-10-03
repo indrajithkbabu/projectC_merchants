@@ -8,7 +8,9 @@ import 'package:project_c/helper/colors.dart';
 import 'package:project_c/helper/text_styles.dart';
 import 'package:project_c/helper/widgets/floating_bottom_nav_bar.dart';
 import 'package:project_c/helper/widgets/screen_wrapper.dart';
+import 'package:project_c/models/product_view_mode.dart';
 import 'package:project_c/navigation/routes.dart';
+import 'package:project_c/services/product_view_preferences.dart';
 import 'package:project_c/services/screenshot_protection_service.dart';
 
 class SettingsTab extends StatelessWidget {
@@ -65,6 +67,7 @@ class SettingsTab extends StatelessWidget {
   Widget build(BuildContext context) {
     final bottomPad = FloatingBottomNavBar.reservedHeight(context) + 8;
     final protection = ServiceLocator.get<ScreenshotProtectionService>();
+    final viewPrefs = ServiceLocator.get<ProductViewPreferences>();
     return BlocBuilder<AccountProfileBloc, AccountProfileState>(
       builder: (context, state) {
         final profile = state.profile;
@@ -98,6 +101,31 @@ class SettingsTab extends StatelessWidget {
                     value: profile!.ownStore!.name,
                   ),
               ],
+            ),
+            const SizedBox(height: 16),
+            Text(
+              'View products',
+              style: AppTextStyles.label(
+                fontWeight: FontWeight.w600,
+                color: AppColors.textSecondary,
+              ),
+            ),
+            const SizedBox(height: 8),
+            ListenableBuilder(
+              listenable: viewPrefs,
+              builder: (context, _) {
+                return _SettingsGroup(
+                  children: [
+                    for (final mode in ProductViewMode.values)
+                      _SettingsRadioRow(
+                        label: mode.label,
+                        subtitle: mode.subtitle,
+                        selected: viewPrefs.mode == mode,
+                        onTap: () => viewPrefs.setMode(mode),
+                      ),
+                  ],
+                );
+              },
             ),
             const SizedBox(height: 16),
             _SettingsGroup(
@@ -200,6 +228,58 @@ class _SettingsRow extends StatelessWidget {
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+class _SettingsRadioRow extends StatelessWidget {
+  const _SettingsRadioRow({
+    required this.label,
+    required this.subtitle,
+    required this.selected,
+    required this.onTap,
+  });
+
+  final String label;
+  final String subtitle;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(14),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        child: Row(
+          children: [
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(label, style: AppTextStyles.body()),
+                  const SizedBox(height: 2),
+                  Text(
+                    subtitle,
+                    style: AppTextStyles.caption(
+                      color: AppColors.textSecondary,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(width: 12),
+            Icon(
+              selected
+                  ? Icons.radio_button_checked_rounded
+                  : Icons.radio_button_off_rounded,
+              color: selected ? AppColors.primary : AppColors.textSecondary,
+              size: 22,
+            ),
+          ],
+        ),
       ),
     );
   }

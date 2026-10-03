@@ -4,6 +4,7 @@ import 'package:image_picker/image_picker.dart';
 import 'package:project_c/bloc/add_store_product/add_store_product_bloc.dart';
 import 'package:project_c/helper/app_padding.dart';
 import 'package:project_c/helper/colors.dart';
+import 'package:project_c/helper/product_image_cropper.dart';
 import 'package:project_c/helper/text_styles.dart';
 import 'package:project_c/helper/widgets/app_back_button.dart';
 import 'package:project_c/helper/widgets/primary_button.dart';
@@ -68,9 +69,89 @@ class _AddProductFormRouteState extends State<AddProductFormRoute> {
       },
     );
     if (!mounted || source == null) return;
+
+    final picker = ImagePicker();
+    final rawPaths = <String>[];
+    try {
+      if (source == ImageSource.camera) {
+        final photo = await picker.pickImage(
+          source: ImageSource.camera,
+          imageQuality: 85,
+          maxWidth: 1920,
+          maxHeight: 1920,
+        );
+        if (photo != null) rawPaths.add(photo.path);
+      } else {
+        final photos = await picker.pickMultiImage(
+          imageQuality: 85,
+          maxWidth: 1920,
+          maxHeight: 1920,
+        );
+        for (final photo in photos) {
+          rawPaths.add(photo.path);
+        }
+      }
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Unable to open image picker right now.')),
+      );
+      return;
+    }
+    if (!mounted || rawPaths.isEmpty) return;
     context.read<AddStoreProductBloc>().add(
-      AddStoreProductAddMoreImagesPressed(source),
+      AddStoreProductImagesAppended(rawPaths),
     );
+  }
+
+  Future<void> _cropSelectedImage(String imageId) async {
+    final bloc = context.read<AddStoreProductBloc>();
+    final images = bloc.state.selectedImages;
+    final match = images.where((e) => e.id == imageId);
+    if (match.isEmpty) return;
+    final path = match.first.filePath?.trim();
+    if (path == null || path.isEmpty) return;
+
+    final cropped = await ProductImageCropper.cropOne(
+      path,
+      context: context,
+    );
+    if (!mounted || cropped == null || cropped == path) return;
+    bloc.add(
+      AddStoreProductImageReplaced(imageId: imageId, filePath: cropped),
+    );
+  }
+
+  Future<void> _cropAllSelectedImages() async {
+    final bloc = context.read<AddStoreProductBloc>();
+    final images = bloc.state.selectedImages;
+    if (images.isEmpty) return;
+
+    final paths = [
+      for (final image in images)
+        if (image.filePath != null && image.filePath!.trim().isNotEmpty)
+          image.filePath!.trim(),
+    ];
+    if (paths.isEmpty) return;
+
+    final cropped = await ProductImageCropper.cropGroup(
+      paths,
+      context: context,
+    );
+    if (!mounted) return;
+
+    var pathIndex = 0;
+    for (final image in images) {
+      final original = image.filePath?.trim();
+      if (original == null || original.isEmpty) continue;
+      if (pathIndex >= cropped.length) break;
+      final next = cropped[pathIndex++];
+      if (next != original) {
+        bloc.add(
+          AddStoreProductImageReplaced(imageId: image.id, filePath: next),
+        );
+      }
+    }
   }
 
   Future<void> _openImagePreview({required bool readOnly}) async {
@@ -87,6 +168,8 @@ class _AddProductFormRouteState extends State<AddProductFormRoute> {
               padding: AppPadding.screen(top: 12, bottom: 24),
               child: BlocBuilder<AddStoreProductBloc, AddStoreProductState>(
                 builder: (context, state) {
+                  final images = state.selectedImages;
+                  final canCrop = !readOnly && images.isNotEmpty;
                   return Column(
                     mainAxisSize: MainAxisSize.min,
                     children: [
@@ -99,6 +182,18 @@ class _AddProductFormRouteState extends State<AddProductFormRoute> {
                               fontWeight: FontWeight.w700,
                             ),
                           ),
+                          if (canCrop && images.length > 1) ...[
+                            const SizedBox(width: 4),
+                            IconButton(
+                              tooltip: 'Edit all',
+                              onPressed:
+                                  state.isPickingImages
+                                      ? null
+                                      : () => _cropAllSelectedImages(),
+                              icon: const Icon(Icons.edit_outlined),
+                              color: AppColors.accent,
+                            ),
+                          ],
                           const Spacer(),
                           IconButton(
                             onPressed: () => Navigator.of(sheetContext).pop(),
@@ -108,9 +203,18 @@ class _AddProductFormRouteState extends State<AddProductFormRoute> {
                       ),
                       const SizedBox(height: 8),
                       ProductImageCarousel(
-                        images: state.selectedImages,
+                        key: ValueKey(
+                          images
+                              .map((e) => '${e.id}:${e.filePath}')
+                              .join(','),
+                        ),
+                        images: images,
                         isPicking: state.isPickingImages,
                         readOnly: readOnly,
+                        onCrop:
+                            canCrop
+                                ? (imageId) => _cropSelectedImage(imageId)
+                                : null,
                         onDelete:
                             readOnly
                                 ? null

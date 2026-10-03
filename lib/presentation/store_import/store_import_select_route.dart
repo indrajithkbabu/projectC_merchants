@@ -9,6 +9,7 @@ import 'package:project_c/helper/text_styles.dart';
 import 'package:project_c/helper/widgets/app_back_button.dart';
 import 'package:project_c/helper/widgets/primary_button.dart';
 import 'package:project_c/helper/widgets/screen_wrapper.dart';
+import 'package:project_c/models/catalog/import_models.dart';
 import 'package:project_c/models/store_product.dart';
 import 'package:project_c/navigation/routes.dart';
 import 'package:project_c/presentation/store_import/store_import_pending_route.dart';
@@ -328,7 +329,7 @@ class _ImportProductTile extends StatelessWidget {
                     ),
                     const SizedBox(height: 2),
                     Text(
-                      _statusLabel ?? product.meta,
+                      product.meta,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: AppTextStyles.caption(

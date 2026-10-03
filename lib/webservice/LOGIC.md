@@ -20,8 +20,10 @@ repositories; repositories call request classes; request classes use
 5. Serialize refresh (single in-flight) inside `CatalogApiClient`.
 6. Debug logs via `AppLog` only in debug mode.
 7. Every call logs full URL, sanitized body, and response. Tokens/OTP are redacted.
-8. Collection create/update photos use **multipart** on `/collections` (and
-   `.../photos/delete` for removals). No S3 upload-ticket client flow.
+8. Collection photos use the **direct S3** pipeline (`/uploads/presign` staging
+   keys + S3 PUT of compressed bytes + JSON commit/append with
+   `clientRequestId` / `Idempotency-Key`). Multipart create/update remains as a
+   legacy fallback. Removals still use `.../photos/delete`.
 9. `failedPhotos` UI copy must use mapped codes — never server `message` strings.
 
 ## Scaling

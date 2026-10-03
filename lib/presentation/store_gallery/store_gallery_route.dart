@@ -11,7 +11,10 @@ import 'package:project_c/navigation/routes.dart';
 import 'package:project_c/presentation/store_gallery/store_gallery_widgets/store_gallery_body.dart';
 
 class StoreGalleryRoute extends StatelessWidget {
-  const StoreGalleryRoute({super.key});
+  const StoreGalleryRoute({super.key, this.focusProductId});
+
+  /// When set (e.g. from search → store group), scroll to and highlight that listing.
+  final String? focusProductId;
 
   void _popGallery(BuildContext context, StoreGalleryState state) {
     Navigator.of(context).pop(<String, Object?>{
@@ -108,6 +111,7 @@ class StoreGalleryRoute extends StatelessWidget {
                 ),
                 Expanded(
                   child: StoreGalleryBody(
+                    focusProductId: focusProductId,
                     onImageTap: (product, imageIndex) {
                       _openProductDetails(
                         context,

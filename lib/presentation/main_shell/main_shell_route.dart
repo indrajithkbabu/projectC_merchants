@@ -1,3 +1,4 @@
+import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:project_c/bloc/account_profile/account_profile_bloc.dart';
@@ -5,6 +6,7 @@ import 'package:project_c/bloc/auth/auth_bloc.dart';
 import 'package:project_c/bloc/contacts/contacts_bloc.dart';
 import 'package:project_c/bloc/store_listing/store_listing_bloc.dart';
 import 'package:project_c/helper/colors.dart';
+import 'package:project_c/helper/product_image.dart';
 import 'package:project_c/helper/text_styles.dart';
 import 'package:project_c/helper/widgets/floating_bottom_nav_bar.dart';
 import 'package:project_c/helper/widgets/screen_wrapper.dart';
@@ -73,11 +75,16 @@ class _MainShellRouteState extends State<MainShellRoute> {
               child: IndexedStack(
                 index: _index,
                 sizing: StackFit.expand,
-                children: const [
-                  StoreListingRoute(embeddedInShell: true),
-                  ContactsTab(),
-                  SettingsTab(),
-                  ProfileTab(),
+                children: [
+                  StoreListingRoute(
+                    embeddedInShell: true,
+                    onProfileAvatarTap: () {
+                      setState(() => _index = FloatingNavTab.profile.index);
+                    },
+                  ),
+                  const ContactsTab(),
+                  const SettingsTab(),
+                  const ProfileTab(),
                 ],
               ),
             ),
@@ -109,9 +116,17 @@ class _MainShellRouteState extends State<MainShellRoute> {
                                   prev.profile?.displayName !=
                                       curr.profile?.displayName ||
                                   prev.profile?.firstName !=
-                                      curr.profile?.firstName,
+                                      curr.profile?.firstName ||
+                                  prev.profile?.effectiveProfileImageUrl !=
+                                      curr.profile?.effectiveProfileImageUrl,
                           builder: (context, state) {
                             final initials = _profileInitials(state);
+                            final imageUrl =
+                                state.profile?.effectiveProfileImageUrl
+                                    .trim() ??
+                                '';
+                            final selected =
+                                _index == FloatingNavTab.profile.index;
                             return FloatingBottomNavBar(
                               currentIndex: _index,
                               onChanged: (value) {
@@ -157,26 +172,10 @@ class _MainShellRouteState extends State<MainShellRoute> {
                                   tab: FloatingNavTab.profile,
                                   label: 'Profile',
                                   icon: Icons.account_circle_outlined,
-                                  avatar: CircleAvatar(
-                                    radius: 11,
-                                    backgroundColor:
-                                        _index == FloatingNavTab.profile.index
-                                            ? AppColors.primary
-                                            : AppColors.surfaceSecondary,
-                                    child: Text(
-                                      initials,
-                                      style: AppTextStyles.caption(
-                                        fontSize: 9,
-                                        fontWeight: FontWeight.w700,
-                                        color:
-                                            _index ==
-                                                    FloatingNavTab
-                                                        .profile
-                                                        .index
-                                                ? AppColors.textOnPrimary
-                                                : AppColors.navBarInactive,
-                                      ),
-                                    ),
+                                  avatar: _NavProfileAvatar(
+                                    initials: initials,
+                                    imageUrl: imageUrl,
+                                    selected: selected,
                                   ),
                                 ),
                               ],
@@ -206,5 +205,51 @@ class _MainShellRouteState extends State<MainShellRoute> {
       return first.substring(0, first.length.clamp(0, 2)).toUpperCase();
     }
     return 'Me';
+  }
+}
+
+/// Compact Profile tab avatar: photo when uploaded, otherwise initials.
+class _NavProfileAvatar extends StatelessWidget {
+  const _NavProfileAvatar({
+    required this.initials,
+    required this.imageUrl,
+    required this.selected,
+  });
+
+  final String initials;
+  final String imageUrl;
+  final bool selected;
+
+  @override
+  Widget build(BuildContext context) {
+    final hasPhoto = imageUrl.isNotEmpty;
+    return CircleAvatar(
+      radius: 11,
+      backgroundColor:
+          selected ? AppColors.primary : AppColors.surfaceSecondary,
+      backgroundImage:
+          hasPhoto
+              ? CachedNetworkImageProvider(
+                imageUrl,
+                cacheManager: CatalogImageCache.instance,
+              )
+              : null,
+      onBackgroundImageError:
+          hasPhoto ? (_, __) {} : null,
+      child:
+          hasPhoto
+              ? null
+              : Text(
+                initials,
+                style: AppTextStyles.caption(
+                  fontSize: 9,
+                  fontWeight: FontWeight.w700,
+                  color:
+                      selected
+                          ? AppColors.textOnPrimary
+                          : AppColors.navBarInactive,
+                ),
+              ),
+    );
   }
 }

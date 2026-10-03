@@ -9,6 +9,10 @@ class StoreChannel extends Equatable {
     required this.avatarColor,
     required this.products,
     this.isOwn = false,
+    this.coverImageUrl = '',
+    this.imageUrls = const [],
+    this.phone = '',
+    this.contactName = '',
   });
 
   final String id;
@@ -18,13 +22,33 @@ class StoreChannel extends Equatable {
   final List<StoreProduct> products;
   final bool isOwn;
 
+  /// Store logo / cover from catalog (may be empty).
+  final String coverImageUrl;
+
+  /// Showcase images for avatar preview (cover first when present).
+  final List<String> imageUrls;
+
+  /// Phone from `/home` when the API provides it.
+  final String phone;
+
+  /// Device-contact display name for [phone], when matched.
+  final String contactName;
+
   String get storeLink => '$handle.jewelflow.app';
+
+  /// Subtitle under the store name: contact name → phone (no store link).
+  String get listingSubtitle {
+    final contact = contactName.trim();
+    if (contact.isNotEmpty) return contact;
+    return phone.trim();
+  }
 
   String get initials {
     final parts = name.trim().split(RegExp(r'\s+'));
     if (parts.length >= 2) {
       return '${parts.first[0]}${parts[1][0]}'.toUpperCase();
     }
+    if (name.isEmpty) return '?';
     return name.substring(0, name.length.clamp(0, 2)).toUpperCase();
   }
 
@@ -35,6 +59,10 @@ class StoreChannel extends Equatable {
     int? avatarColor,
     List<StoreProduct>? products,
     bool? isOwn,
+    String? coverImageUrl,
+    List<String>? imageUrls,
+    String? phone,
+    String? contactName,
   }) {
     return StoreChannel(
       id: id ?? this.id,
@@ -43,6 +71,10 @@ class StoreChannel extends Equatable {
       avatarColor: avatarColor ?? this.avatarColor,
       products: products ?? this.products,
       isOwn: isOwn ?? this.isOwn,
+      coverImageUrl: coverImageUrl ?? this.coverImageUrl,
+      imageUrls: imageUrls ?? this.imageUrls,
+      phone: phone ?? this.phone,
+      contactName: contactName ?? this.contactName,
     );
   }
 
@@ -182,5 +214,16 @@ class StoreChannel extends Equatable {
   }
 
   @override
-  List<Object?> get props => [id, name, handle, avatarColor, products, isOwn];
+  List<Object?> get props => [
+    id,
+    name,
+    handle,
+    avatarColor,
+    products,
+    isOwn,
+    coverImageUrl,
+    imageUrls,
+    phone,
+    contactName,
+  ];
 }

@@ -73,17 +73,21 @@ class StoreGalleryState extends Equatable {
   static List<StoreGalleryDaySection> buildSections(
     List<StoreProduct> products,
   ) {
-    final sorted = List<StoreProduct>.from(products)
-      ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
-
+    // Preserve incoming list order (same as store profile). Do not sort by
+    // createdAt — mappers default it to DateTime.now() and that reshuffles.
     final grouped = <DateTime, List<StoreProduct>>{};
-    for (final product in sorted) {
-      grouped.putIfAbsent(product.addedDate, () => []).add(product);
+    final dateOrder = <DateTime>[];
+    for (final product in products) {
+      final day = product.addedDate;
+      if (!grouped.containsKey(day)) {
+        dateOrder.add(day);
+        grouped[day] = [];
+      }
+      grouped[day]!.add(product);
     }
 
-    final dates = grouped.keys.toList()..sort((a, b) => b.compareTo(a));
     return [
-      for (final date in dates)
+      for (final date in dateOrder)
         StoreGalleryDaySection(
           date: date,
           label: _dateLabel(date),

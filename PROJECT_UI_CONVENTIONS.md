@@ -70,10 +70,15 @@ Common picks:
   - `lib/navigation/routes.dart`
   - `lib/navigation/route_initializer.dart`
 - Current route flow (auth onboarding scope):
-  - `onboarding_route` -> `auth_phone_route` -> `auth_otp_route` -> `profile_setup_route` -> `store_setup_route` -> `add_team_route` -> `store_listing_route` (main shell with floating nav) -> Stores / Contacts / Settings / Profile tabs
-  - From store profile: `store_gallery_route` (iOS-style product photo gallery)
+  - `onboarding_route` -> `auth_phone_route` -> `auth_otp_route` -> `profile_setup_route` -> `store_listing_route` (main shell with floating nav) -> Stores / Contacts / Settings / Profile tabs
+  - Store creation is deferred: Profile tab (or Contacts empty CTA) -> `store_setup_route` -> `add_team_route` -> `store_listing_route`
+  - Contacts tab: Invite Friends → `invite_friends_route` (Share + phone contacts); default list shows peer stores only; search shows matching stores then invite contacts
+  - Contacts invite / Share JewelFlow uses WhatsApp copy `Hey, I'm using JewelFlow… Download it here: https://…`
+  - After store create, home `/home` warm cache is invalidated so the new store appears on Stores without a manual refresh
+  - From store profile: `store_gallery_route` (iOS-style product photo gallery); app-bar search icon → `store_search_route`
+  - Stores home search field → `global_search_route` (Discover / suggestions / results / filters via catalog search APIs); Sort & Filter → `search_filters_route`
   - Own store profile: inbox badge → `store_import_requests_route` (accept / reject incoming; outgoing waits on source)
-  - From another store profile: `store_import_select_route` -> pending -> approved (catalog import requests)
+  - From another store profile (only if viewer has own store): `store_import_select_route` -> pending -> approved (catalog import requests)
   - `country_picker_route` is opened from phone screen.
 
 ## Floating bottom navigation
@@ -90,27 +95,43 @@ Common picks:
   - `AppBackButton`
   - `ScreenWrapper`
   - `FloatingBottomNavBar`
+  - `NetworkStatusGate` (app-wide; do not re-wrap per screen)
+  - `showMediaSourceSheet` / `MediaPickSource` (camera vs gallery chooser; no Cancel)
 
 Do not duplicate these widgets inside feature folders.
+
+## Network status banner (PhonePe-style)
+- Package: `connectivity_plus` (Wi‑Fi / mobile / ethernet transport; not a DNS probe).
+- Cubit: `NetworkStatusCubit` in `lib/bloc/network_status/` — started once from `App`.
+- Layout: `NetworkStatusGate` via `MaterialApp.builder` so **every** route is covered. Banner sits in a **Column** and **pushes** the navigator down (never overlays / covers content). While visible it owns the status-bar inset (`MediaQuery` top padding cleared for descendants so `ScreenWrapper` does not double-pad).
+- Offline: red top strip (`AppColors.error`) + copy **"No internet connection"**; content is wrapped in `AbsorbPointer(absorbing: true)` so taps are blocked.
+- Restored: green top strip (`AppColors.success`) + **"Back online"** for ~2s, then auto-hides (no green flash on cold start when already online).
+- Do not add per-screen offline banners; do not bypass `MaterialApp.builder` for this.
 
 ## Current App Defaults
 - **Default country:** India (`+91`) from `CountryModel.defaultCountry`.
 - **OTP scope:** Indian mobile numbers only (`+91`, 10 digits starting 6–9). Country picker stays available for UX but selecting another country shows a snackbar; API may return `UNSUPPORTED_PHONE_COUNTRY`.
-- **OTP behavior:** Catalog API SMS OTP; retain `challengeId`; resend cooldown from API (typically 60s). No hardcoded demo code.
+- **OTP behavior:** Catalog API SMS OTP; retain `challengeId`; resend cooldown from API (typically 60s). No hardcoded demo code. Android auto-reads via SMS User Consent (`otp_autofill` / `OtpSmsAutofill`) then auto-verifies; manual entry still available.
 - **API base:** Flavor `baseUrl` includes `/v1/catalog`. Networking lives under `lib/webservice/` + `lib/resources/endpoints.dart`.
-- **Collection create:** Multipart `POST /stores/:id/collections` with `photos` file parts (no signed S3 upload / complete / worker).
+- **Collection create:** Direct-to-S3 two-phase upload — on-device JPEG compress
+  (max edge 2560) + ThumbHash, staging `POST /stores/:id/uploads/presign`, PUT
+  compressed bytes to S3 (retry/renew), then JSON `POST /stores/:id/collections`
+  with `photos` + `clientRequestId` / `Idempotency-Key`. Legacy multipart remains
+  as a fallback path only.
 - **Country picker package:** `country_picker` (English country names, searchable list).
 - **Font family:** Inter everywhere via `AppTheme` + `AppTextStyles`.
 - **Main horizontal spacing:** 15 via `AppPadding.horizontal`.
 - **Back navigation control:** icon-only `AppBackButton`.
 - **Screenshot / screen recording:** Blocked app-wide by default via `ScreenshotProtectionService` + `no_screenshot`. Settings → **Allow screenshots** turns capture on. While blocked, detected capture attempts show a snackbar. Preference persists in `AppSettingsStorage` (not cleared on logout).
+- **Network banner:** App-wide via `NetworkStatusCubit` + `NetworkStatusGate` (`connectivity_plus`). Red offline / brief green restored; pushes layout down (no overlay); `AbsorbPointer` while offline.
 
 ## Auth Flow Implementation Rules
-- `AuthBloc` owns phone input, OTP input, resend timer, and verification state.
+- `AuthBloc` owns phone input, OTP input, resend timer, verification state, and OTP auto-fill (`AuthOtpAutoFilled`).
 - Phone and OTP screens must use:
   - `CustomNumericKeypad` (no system keyboard for number entry)
   - `KeypadCtaBar` for primary action above keypad
   - `MultiBlocListener` for navigation, errors, and success events
+- OTP screen starts Android SMS User Consent listening on enter / resend (`otp_autofill`); auto-verify must go through `AuthBloc` (same as Continue).
 - Keep side-effects (navigation/snackbar) in listeners, not in widget build methods.
 - Validate Indian mobile locally before `OTP request`; map `UNSUPPORTED_PHONE_COUNTRY` via `CatalogErrorMapper`.
 

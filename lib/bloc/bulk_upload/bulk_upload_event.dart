@@ -16,12 +16,54 @@ class BulkUploadTitleChanged extends BulkUploadEvent {
   List<Object?> get props => [value];
 }
 
-class BulkUploadTitleOnlyPressed extends BulkUploadEvent {
-  const BulkUploadTitleOnlyPressed();
+class BulkUploadDescriptionChanged extends BulkUploadEvent {
+  const BulkUploadDescriptionChanged(this.value);
+
+  final String value;
+
+  @override
+  List<Object?> get props => [value];
 }
 
-class BulkUploadClearOpenTitleOnlyForm extends BulkUploadEvent {
-  const BulkUploadClearOpenTitleOnlyForm();
+class BulkUploadTagDraftChanged extends BulkUploadEvent {
+  const BulkUploadTagDraftChanged(this.value);
+
+  final String value;
+
+  @override
+  List<Object?> get props => [value];
+}
+
+class BulkUploadTagAdded extends BulkUploadEvent {
+  const BulkUploadTagAdded(this.tag);
+
+  final String tag;
+
+  @override
+  List<Object?> get props => [tag];
+}
+
+class BulkUploadTagRemoved extends BulkUploadEvent {
+  const BulkUploadTagRemoved(this.tag);
+
+  final String tag;
+
+  @override
+  List<Object?> get props => [tag];
+}
+
+class BulkUploadSuggestedTagTapped extends BulkUploadEvent {
+  const BulkUploadSuggestedTagTapped(this.tag);
+
+  final String tag;
+
+  @override
+  List<Object?> get props => [tag];
+}
+
+/// Publish via title-only create (no weight/purity/size specs).
+class BulkUploadTitleOnlyPressed extends BulkUploadEvent {
+  const BulkUploadTitleOnlyPressed();
 }
 
 class BulkUploadAddDetailsPressed extends BulkUploadEvent {

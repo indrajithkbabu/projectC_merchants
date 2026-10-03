@@ -4,9 +4,11 @@ import 'package:bloc/bloc.dart';
 import 'package:equatable/equatable.dart';
 import 'package:project_c/di/service_locator.dart';
 import 'package:project_c/helper/app_log.dart';
+import 'package:project_c/helper/device_contact_names.dart';
 import 'package:project_c/models/catalog/catalog_profile.dart';
 import 'package:project_c/models/country_model.dart';
 import 'package:project_c/navigation/routes.dart';
+import 'package:project_c/services/store_home_prefetcher.dart';
 import 'package:project_c/webservice/auth/auth_repository.dart';
 import 'package:project_c/webservice/catalog_error_mapper.dart';
 import 'package:project_c/webservice/profile/profile_repository.dart';
@@ -27,6 +29,7 @@ class AuthBloc extends Bloc<AuthEvent, AuthState> {
     on<AuthBackspacePressed>(_onBackspacePressed);
     on<AuthPhoneContinuePressed>(_onPhoneContinue);
     on<AuthOtpContinuePressed>(_onOtpContinue);
+    on<AuthOtpAutoFilled>(_onOtpAutoFilled);
     on<AuthResendPressed>(_onResendPressed);
     on<AuthTimerTicked>(_onTimerTicked);
     on<AuthClearMessage>(_onClearMessage);
@@ -176,7 +179,28 @@ class AuthBloc extends Bloc<AuthEvent, AuthState> {
     AuthOtpContinuePressed event,
     Emitter<AuthState> emit,
   ) async {
+    await _verifyOtp(emit);
+  }
+
+  /// SMS / iOS autofill: set digits then verify (same path as Continue).
+  Future<void> _onOtpAutoFilled(
+    AuthOtpAutoFilled event,
+    Emitter<AuthState> emit,
+  ) async {
+    if (state.isSubmitting || state.isVerified) return;
+    final digits = event.code.replaceAll(RegExp(r'\D'), '');
+    if (digits.length < 6) return;
+    final code = digits.substring(0, 6);
+    AppLog.d(_tag, 'OTP auto-filled (len=${code.length}) autoSubmit=${event.autoSubmit}');
+    emit(state.copyWith(otpDigits: code, clearError: true));
+    if (event.autoSubmit) {
+      await _verifyOtp(emit);
+    }
+  }
+
+  Future<void> _verifyOtp(Emitter<AuthState> emit) async {
     if (state.otpDigits.length != 6) return;
+    if (state.isSubmitting) return;
     final challengeId = state.challengeId;
     if (challengeId == null || challengeId.isEmpty) {
       emit(
@@ -201,6 +225,11 @@ class AuthBloc extends Bloc<AuthEvent, AuthState> {
       } catch (_) {}
 
       final nextRoute = _routeForOnboarding(profile.onboarding);
+      // Warm /home + contact names while OTP navigates to the main shell.
+      if (nextRoute == Routes.storeListingRoute) {
+        StoreHomePrefetcher.instance.prefetch();
+        DeviceContactNames.prefetch();
+      }
       AppLog.d(_tag, 'OTP verified → $nextRoute');
       emit(
         state.copyWith(
@@ -286,6 +315,10 @@ class AuthBloc extends Bloc<AuthEvent, AuthState> {
         emit(state.copyWith(isRestoringSession: false));
         return;
       }
+      // Tokens ready — overlap GET /home + device contacts with /me so the
+      // listing paints with contact names already resolved.
+      StoreHomePrefetcher.instance.prefetch();
+      DeviceContactNames.prefetch();
       final profile = await _profileRepository.fetchMe();
       final nextRoute = _routeForOnboarding(profile.onboarding);
       AppLog.d(
@@ -319,6 +352,8 @@ class AuthBloc extends Bloc<AuthEvent, AuthState> {
         '  A4=FAIL if crash or stuck restoring\n'
         '──────── A.ENTRY END ────────',
       );
+      StoreHomePrefetcher.instance.invalidate();
+      DeviceContactNames.invalidate();
       await _authRepository.logout();
       emit(
         state.copyWith(
@@ -383,6 +418,8 @@ class AuthBloc extends Bloc<AuthEvent, AuthState> {
       'AuthLoggedOut → clearing AuthBloc\n'
       '  A4 helper: after DELETE /me you should see this then auth_phone_route',
     );
+    StoreHomePrefetcher.instance.invalidate();
+    DeviceContactNames.invalidate();
     await _authRepository.logout();
     emit(const AuthState());
   }
@@ -392,8 +429,8 @@ class AuthBloc extends Bloc<AuthEvent, AuthState> {
       case CatalogOnboarding.nameRequired:
         return Routes.profileSetupRoute;
       case CatalogOnboarding.storeOptional:
-        return Routes.storeSetupRoute;
       case CatalogOnboarding.complete:
+        // Store creation is deferred to Profile tab; land on main shell.
         return Routes.storeListingRoute;
     }
   }

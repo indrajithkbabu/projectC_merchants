@@ -1,7 +1,5 @@
 part of 'store_import_bloc.dart';
 
-enum ListingImportAvailability { available, alreadyAdded, pending, unavailable }
-
 class StoreImportState extends Equatable {
   const StoreImportState({
     required this.sourceStore,

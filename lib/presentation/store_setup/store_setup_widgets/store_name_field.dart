@@ -28,12 +28,12 @@ class StoreNameField extends StatelessWidget {
         TextField(
           controller: controller,
           onChanged: onChanged,
-          style: AppTextStyles.body(fontSize: 30, fontWeight: FontWeight.w400),
+          style: AppTextStyles.body(fontSize: 22, fontWeight: FontWeight.w400),
           textInputAction: TextInputAction.done,
           decoration: InputDecoration(
             hintText: 'Enter store name',
             hintStyle: AppTextStyles.hint(
-              fontSize: 30,
+              fontSize: 18,
               fontWeight: FontWeight.w400,
             ),
             enabledBorder: const UnderlineInputBorder(

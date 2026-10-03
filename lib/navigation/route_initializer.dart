@@ -20,6 +20,7 @@ import 'package:project_c/models/store_channel.dart';
 import 'package:project_c/models/product_details_feed_item.dart';
 import 'package:project_c/models/store_product.dart';
 import 'package:project_c/navigation/routes.dart';
+import 'package:project_c/navigation/smooth_fade_page_route.dart';
 import 'package:project_c/presentation/add_store_product/add_product_form_route.dart';
 import 'package:project_c/presentation/add_store_product/add_product_gallery_route.dart';
 import 'package:project_c/presentation/add_store_product/add_product_group_details_route.dart';
@@ -31,10 +32,15 @@ import 'package:project_c/presentation/auth/otp_route.dart';
 import 'package:project_c/presentation/auth/phone_route.dart';
 import 'package:project_c/presentation/home/home_placeholder_route.dart';
 import 'package:project_c/presentation/bootstrap/bootstrap_route.dart';
+import 'package:project_c/presentation/main_shell/invite_friends_route.dart';
 import 'package:project_c/presentation/main_shell/main_shell_route.dart';
 import 'package:project_c/presentation/onboarding/onboarding_route.dart';
 import 'package:project_c/presentation/product_details/product_details_route.dart';
 import 'package:project_c/presentation/profile/profile_route.dart';
+import 'package:project_c/presentation/search/global_search_route.dart';
+import 'package:project_c/presentation/search/search_filters_route.dart';
+import 'package:project_c/presentation/search/search_models.dart';
+import 'package:project_c/presentation/search/store_search_route.dart';
 import 'package:project_c/presentation/store_gallery/store_gallery_route.dart';
 import 'package:project_c/presentation/store_import/store_import_approved_route.dart';
 import 'package:project_c/presentation/store_import/store_import_pending_route.dart';
@@ -92,8 +98,16 @@ PageRoute? onGenerateRoutes(RouteSettings settings) {
       return _collectionBrowseRoute(settings);
     case Routes.productDetailsRoute:
       return _productDetailsRoute(settings);
+    case Routes.globalSearchRoute:
+      return _globalSearchRoute(settings);
+    case Routes.storeSearchRoute:
+      return _storeSearchRoute(settings);
+    case Routes.searchFiltersRoute:
+      return _searchFiltersRoute(settings);
     case Routes.countryPickerRoute:
       return _countryPickerRoute(settings);
+    case Routes.inviteFriendsRoute:
+      return _inviteFriendsRoute(settings);
     case Routes.homePlaceholderRoute:
       return _homePlaceholderRoute(settings);
 
@@ -191,6 +205,29 @@ PageRoute? _addTeamRoute(RouteSettings settings) {
   );
 }
 
+PageRoute? _inviteFriendsRoute(RouteSettings settings) {
+  final args = settings.arguments;
+  final existing =
+      args is Map && args['contactsBloc'] is ContactsBloc
+          ? args['contactsBloc'] as ContactsBloc
+          : null;
+  return _buildAnimatedRoute(
+    settings: settings,
+    builder: (context) {
+      if (existing != null) {
+        return BlocProvider<ContactsBloc>.value(
+          value: existing,
+          child: const InviteFriendsRoute(),
+        );
+      }
+      return BlocProvider(
+        create: (_) => ContactsBloc(),
+        child: const InviteFriendsRoute(),
+      );
+    },
+  );
+}
+
 PageRoute? _storeListingRoute(RouteSettings settings) {
   final args = settings.arguments;
   if (args is Map) {
@@ -265,6 +302,10 @@ PageRoute? _storeProfileRoute(RouteSettings settings) {
               : (isOwnStore
                   ? List<StoreProduct>.from(session.products)
                   : const <StoreProduct>[]));
+  final focusProductId =
+      args is Map && args['focusProductId'] is String
+          ? (args['focusProductId'] as String).trim()
+          : '';
 
   return _buildAnimatedRoute(
     settings: settings,
@@ -278,9 +319,12 @@ PageRoute? _storeProfileRoute(RouteSettings settings) {
                 isOwnStore: isOwnStore,
                 storeId: storeId,
                 storeLink: storeLink,
+                coverImageUrl: channel?.coverImageUrl,
                 avatarColor: avatarColor,
               ),
-          child: const StoreProfileRoute(),
+          child: StoreProfileRoute(
+            focusProductId: focusProductId.isEmpty ? null : focusProductId,
+          ),
         ),
   );
 }
@@ -308,6 +352,10 @@ PageRoute? _storeGalleryRoute(RouteSettings settings) {
       args is Map && args['isOwnStore'] is bool
           ? args['isOwnStore'] as bool
           : false;
+  final focusProductId =
+      args is Map && args['focusProductId'] is String
+          ? (args['focusProductId'] as String).trim()
+          : '';
 
   return _buildAnimatedRoute(
     settings: settings,
@@ -321,7 +369,9 @@ PageRoute? _storeGalleryRoute(RouteSettings settings) {
                 storeId: storeId,
                 isOwnStore: isOwnStore,
               ),
-          child: const StoreGalleryRoute(),
+          child: StoreGalleryRoute(
+            focusProductId: focusProductId.isEmpty ? null : focusProductId,
+          ),
         ),
   );
 }
@@ -703,6 +753,12 @@ PageRoute? _productDetailsRoute(RouteSettings settings) {
       args is Map && args['galleryFeedIndex'] is int
           ? args['galleryFeedIndex'] as int
           : 0;
+  final seedCategory =
+      args is Map && args['category'] is String
+          ? (args['category'] as String).trim()
+          : '';
+  final showStoreGroupLink =
+      args is Map && args['showStoreGroupLink'] == true;
 
   return _buildAnimatedRoute(
     settings: settings,
@@ -718,8 +774,96 @@ PageRoute? _productDetailsRoute(RouteSettings settings) {
                 initialImageIndex: imageIndex,
                 galleryFeed: galleryFeed,
                 galleryFeedIndex: galleryFeedIndex,
+                seedCategory: seedCategory,
+                showStoreGroupLink: showStoreGroupLink,
               ),
           child: const ProductDetailsRoute(),
+        ),
+  );
+}
+
+PageRoute? _globalSearchRoute(RouteSettings settings) {
+  final args = settings.arguments;
+  final initialQuery =
+      args is Map && args['initialQuery'] is String
+          ? args['initialQuery'] as String
+          : null;
+  final initialCategory =
+      args is Map && args['initialCategory'] is String
+          ? args['initialCategory'] as String
+          : null;
+  return SmoothFadePageRoute<void>(
+    settings: settings,
+    builder:
+        (context) => GlobalSearchRoute(
+          initialQuery: initialQuery,
+          initialCategory: initialCategory,
+        ),
+  );
+}
+
+PageRoute? _storeSearchRoute(RouteSettings settings) {
+  final args = settings.arguments;
+  final storeId =
+      args is Map && args['storeId'] is String
+          ? args['storeId'] as String
+          : '';
+  final storeName =
+      args is Map && args['storeName'] is String
+          ? args['storeName'] as String
+          : 'Store';
+  final storeCity =
+      args is Map && args['storeCity'] is String
+          ? args['storeCity'] as String
+          : null;
+  final productCount =
+      args is Map && args['productCount'] is int
+          ? args['productCount'] as int
+          : null;
+  return _buildAnimatedRoute(
+    settings: settings,
+    builder:
+        (context) => StoreSearchRoute(
+          storeId: storeId,
+          storeName: storeName,
+          storeCity: storeCity,
+          productCount: productCount,
+        ),
+  );
+}
+
+PageRoute? _searchFiltersRoute(RouteSettings settings) {
+  final args = settings.arguments;
+  if (args is! Map) return null;
+  final scope =
+      args['scope'] is SearchFilterScope
+          ? args['scope'] as SearchFilterScope
+          : SearchFilterScope.global;
+  final initial =
+      args['initial'] is SearchFilterSelection
+          ? args['initial'] as SearchFilterSelection
+          : const SearchFilterSelection();
+  final initialCatalog =
+      args['initialCatalog'] is SearchFilterCatalog
+          ? args['initialCatalog'] as SearchFilterCatalog
+          : const SearchFilterCatalog();
+  final initialTotal =
+      args['initialTotal'] is int ? args['initialTotal'] as int : 0;
+  final loadPreview = args['loadPreview'];
+  if (loadPreview is! SearchFilterPreviewLoader) return null;
+  final storeName =
+      args['storeName'] is String ? args['storeName'] as String : null;
+
+  return _buildAnimatedRoute(
+    settings: settings,
+    builder:
+        (context) => SearchFiltersRoute(
+          scope: scope,
+          initial: initial,
+          initialCatalog: initialCatalog,
+          initialTotal: initialTotal,
+          loadPreview: loadPreview,
+          storeName: storeName,
         ),
   );
 }

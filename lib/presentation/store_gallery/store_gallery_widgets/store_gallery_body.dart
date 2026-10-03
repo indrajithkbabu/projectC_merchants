@@ -9,9 +9,14 @@ import 'package:project_c/helper/text_styles.dart';
 import 'package:project_c/models/store_product.dart';
 
 class StoreGalleryBody extends StatefulWidget {
-  const StoreGalleryBody({super.key, required this.onImageTap});
+  const StoreGalleryBody({
+    super.key,
+    required this.onImageTap,
+    this.focusProductId,
+  });
 
   final void Function(StoreProduct product, int imageIndex) onImageTap;
+  final String? focusProductId;
 
   @override
   State<StoreGalleryBody> createState() => _StoreGalleryBodyState();
@@ -19,6 +24,19 @@ class StoreGalleryBody extends StatefulWidget {
 
 class _StoreGalleryBodyState extends State<StoreGalleryBody> {
   double _pinchStartColumns = StoreGalleryState.minColumns.toDouble();
+  final ScrollController _scrollController = ScrollController();
+  final Map<String, GlobalKey> _productKeys = {};
+  bool _didScrollToFocus = false;
+
+  @override
+  void dispose() {
+    _scrollController.dispose();
+    super.dispose();
+  }
+
+  GlobalKey _keyFor(String productId) {
+    return _productKeys.putIfAbsent(productId, GlobalKey.new);
+  }
 
   void _onScaleStart(ScaleStartDetails details) {
     _pinchStartColumns =
@@ -42,6 +60,24 @@ class _StoreGalleryBodyState extends State<StoreGalleryBody> {
     }
   }
 
+  void _scheduleScrollToFocus() {
+    final focusId = widget.focusProductId?.trim() ?? '';
+    if (focusId.isEmpty || _didScrollToFocus) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || _didScrollToFocus) return;
+      final key = _productKeys[focusId];
+      final ctx = key?.currentContext;
+      if (ctx == null) return;
+      _didScrollToFocus = true;
+      Scrollable.ensureVisible(
+        ctx,
+        duration: const Duration(milliseconds: 280),
+        curve: Curves.easeOut,
+        alignment: 0.12,
+      );
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     return BlocBuilder<StoreGalleryBloc, StoreGalleryState>(
@@ -54,6 +90,8 @@ class _StoreGalleryBodyState extends State<StoreGalleryBody> {
             ),
           );
         }
+
+        _scheduleScrollToFocus();
 
         return RawGestureDetector(
           gestures: {
@@ -68,6 +106,7 @@ class _StoreGalleryBodyState extends State<StoreGalleryBody> {
                 ),
           },
           child: CustomScrollView(
+            controller: _scrollController,
             physics: const BouncingScrollPhysics(),
             slivers: [
               for (var dayIndex = 0; dayIndex < state.sections.length; dayIndex++)
@@ -88,6 +127,7 @@ class _StoreGalleryBodyState extends State<StoreGalleryBody> {
     int columns, {
     required bool isLastDay,
   }) {
+    final focusId = widget.focusProductId?.trim() ?? '';
     final slivers = <Widget>[
       SliverToBoxAdapter(
         child: Padding(
@@ -107,16 +147,24 @@ class _StoreGalleryBodyState extends State<StoreGalleryBody> {
 
     for (var i = 0; i < day.products.length; i++) {
       final section = day.products[i];
+      final productId = section.product.id;
+      final isFocused = focusId.isNotEmpty && productId == focusId;
+      final sectionKey = _keyFor(productId);
+
       if (!day.isSingleProduct) {
         slivers.add(
           SliverToBoxAdapter(
             child: Padding(
+              key: sectionKey,
               padding: AppPadding.screen(top: i == 0 ? 0 : 18, bottom: 8),
               child: Text(
                 section.product.title,
                 style: AppTextStyles.body(
                   fontWeight: FontWeight.w600,
-                  color: AppColors.textOnPrimary,
+                  color:
+                      isFocused
+                          ? AppColors.primary
+                          : AppColors.textOnPrimary,
                 ),
               ),
             ),
@@ -125,21 +173,40 @@ class _StoreGalleryBodyState extends State<StoreGalleryBody> {
       }
 
       slivers.add(
-        SliverGrid(
-          gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-            crossAxisCount: columns,
-            mainAxisSpacing: 1.5,
-            crossAxisSpacing: 1.5,
+        SliverToBoxAdapter(
+          child: KeyedSubtree(
+            key: day.isSingleProduct ? sectionKey : null,
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                border:
+                    isFocused
+                        ? Border.all(color: AppColors.primary, width: 2)
+                        : null,
+              ),
+              child: GridView.builder(
+                shrinkWrap: true,
+                physics: const NeverScrollableScrollPhysics(),
+                padding: EdgeInsets.zero,
+                gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                  crossAxisCount: columns,
+                  mainAxisSpacing: 1.5,
+                  crossAxisSpacing: 1.5,
+                ),
+                itemCount: section.tileCount,
+                itemBuilder: (context, index) {
+                  final path =
+                      section.imagePaths.isEmpty
+                          ? null
+                          : section.imagePaths[index];
+                  return _GalleryTile(
+                    path: path,
+                    tone: section.product.toneIndex,
+                    onTap: () => widget.onImageTap(section.product, index),
+                  );
+                },
+              ),
+            ),
           ),
-          delegate: SliverChildBuilderDelegate((context, index) {
-            final path =
-                section.imagePaths.isEmpty ? null : section.imagePaths[index];
-            return _GalleryTile(
-              path: path,
-              tone: section.product.toneIndex,
-              onTap: () => widget.onImageTap(section.product, index),
-            );
-          }, childCount: section.tileCount),
         ),
       );
     }
@@ -177,46 +244,16 @@ class _GalleryTile extends StatelessWidget {
   }
 
   Widget _tileImage() {
-    if (path == null || path!.isEmpty) {
-      return _placeholder();
-    }
-    if (!ProductImagePaths.isDisplayable(path!)) {
-      return _placeholder();
-    }
-    return ProductMediaImage(path: path!);
-  }
-
-  Widget _placeholder() {
-    final colors = switch (tone % 4) {
-      0 => [
-        AppColors.surfaceSecondary,
-        AppColors.primary.withValues(alpha: 0.45),
-      ],
-      1 => [
-        AppColors.surfaceSecondary,
-        AppColors.primaryDark.withValues(alpha: 0.42),
-      ],
-      2 => [AppColors.surfaceSecondary, AppColors.accent.withValues(alpha: 0.35)],
-      _ => [
-        AppColors.surfaceSecondary,
-        AppColors.success.withValues(alpha: 0.38),
-      ],
-    };
-    return DecoratedBox(
-      decoration: BoxDecoration(
-        gradient: LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: colors,
-        ),
-      ),
-      child: const Center(
+    final value = path?.trim() ?? '';
+    if (value.isEmpty || !ProductImagePaths.isDisplayable(value)) {
+      return ColoredBox(
+        color: AppColors.surfaceSecondary,
         child: Icon(
           Icons.diamond_outlined,
-          size: 18,
-          color: AppColors.textOnPrimary,
+          color: AppColors.textSecondary.withValues(alpha: 0.5),
         ),
-      ),
-    );
+      );
+    }
+    return ProductMediaImage(path: value, fit: BoxFit.cover);
   }
 }
