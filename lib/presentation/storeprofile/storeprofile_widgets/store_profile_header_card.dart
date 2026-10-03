@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:project_c/bloc/storeprofile/store_profile_bloc.dart';
 import 'package:project_c/helper/colors.dart';
+import 'package:project_c/helper/product_image.dart';
 import 'package:project_c/helper/text_styles.dart';
 import 'package:project_c/presentation/team/team_widgets/team_member_avatar.dart';
 
@@ -24,10 +25,11 @@ class StoreProfileLogo extends StatelessWidget {
         child: SizedBox(
           width: size,
           height: size,
-          child: Image.network(
-            url,
-            fit: BoxFit.cover,
-            errorBuilder: (_, __, ___) => _FallbackLogo(size: size),
+          child: ProductMediaImage(
+            path: url,
+            width: size,
+            height: size,
+            error: _FallbackLogo(size: size),
           ),
         ),
       );

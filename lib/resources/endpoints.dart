@@ -32,7 +32,9 @@ class Endpoints {
       '/stores/$storeId/members/$userId';
   static String storeLeave(String storeId) => '/stores/$storeId/leave';
 
-  // Collections (multipart photos on create/update)
+  // Collections (direct S3 presign + JSON commit; multipart kept for legacy)
+  static String storeUploadsPresign(String storeId) =>
+      '/stores/$storeId/uploads/presign';
   static String storeCollections(String storeId) =>
       '/stores/$storeId/collections';
   static String storeCollection(String storeId, String listingId) =>
@@ -55,6 +57,13 @@ class Endpoints {
     String listingId,
     String subGroupId,
   ) => '/stores/$storeId/collections/$listingId/subgroups/$subGroupId';
+
+  // Search & filter
+  static const String searchMeta = '/search/meta';
+  static const String searchSuggest = '/search/suggest';
+  static const String search = '/search';
+  static String storeFacets(String storeId) => '/stores/$storeId/facets';
+  static String storeSearch(String storeId) => '/stores/$storeId/search';
 
   // Imports
   static const String importTargets = '/import-targets';

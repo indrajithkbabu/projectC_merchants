@@ -11,77 +11,85 @@ This file defines what to follow for UI and logic inside `lib/presentation/add_s
 - Use `AppTextStyles` and `AppColors` for all text and color usage.
 - Reuse shared controls before introducing new one-off components.
 - `BulkItemTile` / group-route thumbnails use `ProductMediaImage` (local file **or** network URL).
+- Product photo editing uses shared `ProductImageCropper` → WhatsApp-style
+  `ProductImageEditorPage` (`pro_image_editor`): crop/rotate, text, freehand pencil,
+  round/square/arrow marks, emoji. **Not forced after pick** — after camera/gallery
+  selection the flow goes straight to the title screen. Edit is optional from the
+  photos sheet (current photo or **Edit all**). Cancel keeps the original path.
+  Edit form replace clears `assetId` so the edited file is uploaded as a new local
+  and the previous photo id is deleted on save.
 
 ## Logic Ownership
 - This feature handles product **creation** and **edit** presentation.
-- Create (title-only): multipart `POST /collections` with `name`/`tag`/`description` + `photos`
-  (1–50 photos, each ≤500 MB; picker downscales to ~1920px / quality 85).
-  Multi-photo create uploads the first photo on `POST`, then appends the rest in
-  batches of 2 via multipart `PATCH` (on nginx **413**, retries that batch one
-  file at a time) to avoid body-size failures.
-- Create (weight/purity/size path): same create endpoint with JSON `specifications` +
-  `usePrecisionTag`, then `POST .../subgroups` for Precise/Standalone clusters that
-  share identical specs. Group-tagged items stay in `mainGroupPhotos`.
+- Create (title-only): direct S3 pipeline via `ProductUploadCoordinator` —
+  compress to JPEG (true max edge 2560 / quality 85) + ThumbHash from RGBA
+  on-device, `POST .../uploads/presign` (staging keys), concurrent S3 PUT of the
+  exact compressed bytes (3 at a time; silent retries 2s/4s/8s; renew URL if
+  expired/403), then JSON `POST /collections` with
+  `photos: [{key, thumbhash, width, height, bytes, originalName}]` plus
+  `clientRequestId` / `Idempotency-Key` (1–50 photos, each ≤500 MB before compress).
+  **Required:** `name`/`title`. **Optional:** `tag`, `description` (API tag ≤40,
+  description ≤1000).
+- Create (weight/purity/size path): same direct-S3 create with JSON
+  `specifications` + `usePrecisionTag` + optional `tag`/`description`, then
+  `POST .../subgroups` for Precise/Standalone clusters that share identical specs.
+  Group-tagged items stay in `mainGroupPhotos`.
 - Specs are all-or-nothing on the API: `weight`, `otherDeduction`, `purity`, `wastage`,
   `size`, `metalType`, `category`. Deduction type matches weight type; deduction must
   be strictly less than weight. Wastage Varied → `0`; Size Varied → `free_size`.
 - Edit (`mode: edit` form):
   - Photos unchanged → JSON metadata PATCH.
-  - New locals → multipart PATCH append photos (+ metadata).
+  - New locals → S3 presign/PUT then `POST .../photos` JSON append (+ metadata PATCH).
   - Removed existing → `POST .../photos/delete` with `photoIds` (after adds so ≥1 remains).
   - Same listing id throughout (no create+delete republish).
   - `name` / `tag` / `description` are collection-level. There is no API to change title, tags, or description for only one photo. Edit-form helper copy states this when more than one photo is present.
-- Edit photo UI matches create (add/delete/reorder via carousel); require at least one photo.
+- Edit photo UI matches create (add/delete/reorder via carousel + edit / edit-all);
+  require at least one photo.
   Server order for kept photos may not change on reorder-only edits.
-- Partial `failedPhotos` on 201/200: keep the collection and show a snackbar summary.
+- Partial S3 / commit failures: keep the collection for successful photos and show a snackbar summary.
 - Use listeners for side effects and post-submit navigation.
 - Keep non-product-creation domain logic out of this feature presentation layer.
 
-## Create flow (bulk group title)
+## Create flow (unified group screen)
 - After photos are picked (store profile picker **or** gallery continue), create always opens
   `add_product_group_route` first. Do not send **edit** (`mode: edit`) through this screen.
 - Gallery continue → `add_product_group_route` (not directly to the form).
-- Screen 01: horizontal photo strip (scrolls when thumbs overflow), group title,
-  then two actions. Title is required. Tap a strip photo → bottomsheet carousel
-  (add / delete, same pattern as `add_product_form_route`; keep ≥1 photo).
-  Edit/refine hydrate is preview-only (read-only sheet).
-- Group / multi details photo strips use the same bottomsheet preview.
-- **Upload with title only** continues the existing form (`add_product_form_route`)
-  with `title` + `selectedItems` + `storeId`. Publish still uses `POST /collections`
-  without specifications.
-- **Add weight, purity & size** uses `BulkUploadBloc`:
-  - Group form (02): weight Fixed/Range, optional stone deduction (`otherDeduction`),
-    live net; purity Fixed/Varied; wastage %; size Free/Fixed/Varied;
-    metal/gemstone chips; category dropdown.
-  - Preview (03/06): photo grid only (no `{groupTitle} {n}` captions, no
-    Group / Precise / Standalone text tags). Pinch-to-zoom column count matches
-    collection browse (default 5, min 4). **Precise** items show a small blue
-    dot on the photo (same pattern as collection browse). Standalone / Group
-    have no dot.
-  - Tap item → precise form (04). Select → **Edit** or **Delete** only (no Ungroup on preview).
-    Single-item details: editable name + photo (change/remove) plus the weight/purity form.
-    Multi-select Edit: treat as one batch — photo strip + shared specs only (no per-item
-    name fields). Group-scope details allow editing the group title.
-  - Group apply marks all **Group**. Single/multi save marks those items **Precise**.
-    **Ungroup** is post-publish only (collection browse → Select → Ungroup → `photos/move`).
-  - Publish CTA (**Done** / **Save changes**): while uploading, the button shows a
-    fill + percentage (photo create/append batches, then subgroup steps) instead of
-    a spinner. Create: first photo + batch append + sub-groups for Precise items,
-    then show **Published** (06). **Done** / back pops preview → group → `store_profile_route`
-    with the product map so the grid updates. Only **add** products use Published.
+- Screen 01 (`add_product_group_route`): horizontal photo strip, **title** (required),
+  **tags** (optional — fixed type field + **plus** to commit; added chips render
+  **below** the field; suggested tags in a single-row horizontal scroll), then
+  **Add more details** (inline specs + optional **Add description** + expand).
+  Tap a strip photo → bottomsheet carousel (add / delete / optional edit; keep ≥1 photo).
+  Multi-photo pick goes straight to this screen (no forced crop).
+- **Without more details:** CTA **Publish to store** enqueues title-only create on
+  `ProductUploadCoordinator` and **immediately** pops to store profile (no button
+  loader). Store shows a pending shimmer slot; snackbar on success.
+- **With more details:** expand inline `ProductSpecForm` (same as
+  `add_product_group_details_route` group scope). CTA **Continue** →
+  `BulkUploadApplyGroupSpec` → preview. Hide collapses and reverts to title-only.
+- Preview (after more details): photo grid (pinch columns, Precise blue dot). Select →
+  **Edit** / **Delete** only. Tap item → precise form (`add_product_group_details_route`
+  single). Multi Edit → shared specs batch. Group apply marks **Group**; single/multi
+  save marks **Precise**. Create **Done** enqueues specs upload on
+  `ProductUploadCoordinator` and pops to store immediately (no progress button /
+  Published screen). **Ungroup** remains post-publish only (collection browse).
+  Edit-mode **Save changes** still waits on the preview button.
 
 ## Edit refine flow (no Published)
 - Product details Edit sheet:
   - **Edit title, tags & photos** → existing `add_product_form_route` `mode: edit`.
   - **Refine items & details** → hydrate `BulkUploadBloc.fromCollectionDetail` and open
     `add_product_group_preview_route` with `isEditMode: true`.
-- Hydration: `groupTitle` = collection name; main photos → Group + collection specs;
+- Hydration: `groupTitle` = collection name; `description` / `tags` from collection;
+  main photos → Group + collection specs;
   each sub-group photo → Precise (or Standalone if name contains `standalone`) + sub specs;
   `imagePath` may be a network URL.
 - In edit mode preview:
   - Never show `_PublishedView`.
   - CTA: **Save changes**.
-  - Save: PATCH collection specs + `usePrecisionTag`; then:
+  - Photo strip / details sheets stay add/delete-locked, but **image edit**
+    (crop / draw / text via `ProductImageCropper`) is enabled. Replaced locals
+    are uploaded on save (append new photo, delete old id; remaps item ids).
+  - Save: sync edited photos → PATCH collection specs + `usePrecisionTag`; then:
   - `POST .../subgroups` for Precise/Standalone items still in `mainGroupPhotos`
   - `PATCH .../subgroups/:id` for Precise/Standalone items already in a sub-group
     (name / specs / `usePrecisionTag`)
@@ -102,9 +110,12 @@ This file defines what to follow for UI and logic inside `lib/presentation/add_s
 - Pop result includes product map plus optional `revision` / `apiTag` for details refresh.
 
 ## Folder Scope
-- `add_product_form_route.dart`, `add_product_gallery_route.dart`: add-product routes.
-- `add_product_group_route.dart`: group title after photo pick (create only).
-- `add_product_group_details_route.dart`: group / single / multi spec form.
+- `add_product_form_route.dart`, `add_product_gallery_route.dart`: add-product routes
+  (form is **edit** metadata/photos; create uses group route).
+- `add_product_group_route.dart`: create — title / tags / description + optional
+  more details (weight/purity/size), then title-only publish **or** preview.
+- `add_product_group_details_route.dart`: single / multi precise refine from preview
+  (group-scope form also still works if navigated).
 - `add_product_group_preview_route.dart`: item grid, select actions, publish / edit save.
 - `edit_product_specs_route.dart`: collection-level weight/purity/size edit.
 - `add_store_product_widgets/`: widgets scoped to add-product screens.

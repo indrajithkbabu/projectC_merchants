@@ -1,5 +1,10 @@
 import 'package:flutter_simple_dependency_injection/injector.dart';
+import 'package:project_c/services/catalog_direct_upload_service.dart';
+import 'package:project_c/services/product_details_preferences.dart';
+import 'package:project_c/services/product_upload_coordinator.dart';
+import 'package:project_c/services/product_view_preferences.dart';
 import 'package:project_c/services/screenshot_protection_service.dart';
+import 'package:project_c/services/search_recent_preferences.dart';
 import 'package:project_c/session/catalog_session.dart';
 import 'package:project_c/storage/app_settings_storage.dart';
 import 'package:project_c/storage/session_storage.dart';
@@ -12,6 +17,8 @@ import 'package:project_c/webservice/import/import_repository.dart';
 import 'package:project_c/webservice/import/import_request.dart';
 import 'package:project_c/webservice/profile/profile_repository.dart';
 import 'package:project_c/webservice/profile/profile_request.dart';
+import 'package:project_c/webservice/search/search_repository.dart';
+import 'package:project_c/webservice/search/search_request.dart';
 import 'package:project_c/webservice/store/store_repository.dart';
 import 'package:project_c/webservice/store/store_request.dart';
 
@@ -32,6 +39,15 @@ class ServiceLocator {
     final screenshotProtection = ScreenshotProtectionService(
       storage: appSettings,
     );
+    final productViewPreferences = ProductViewPreferences(
+      storage: appSettings,
+    );
+    final productDetailsPreferences = ProductDetailsPreferences(
+      storage: appSettings,
+    );
+    final searchRecentPreferences = SearchRecentPreferences(
+      storage: appSettings,
+    );
     final apiClient = CatalogApiClient(sessionStorage: storage);
     final session = CatalogSession(storage: storage, apiClient: apiClient);
 
@@ -39,6 +55,18 @@ class ServiceLocator {
     injector.map<AppSettingsStorage>((_) => appSettings, isSingleton: true);
     injector.map<ScreenshotProtectionService>(
       (_) => screenshotProtection,
+      isSingleton: true,
+    );
+    injector.map<ProductViewPreferences>(
+      (_) => productViewPreferences,
+      isSingleton: true,
+    );
+    injector.map<ProductDetailsPreferences>(
+      (_) => productDetailsPreferences,
+      isSingleton: true,
+    );
+    injector.map<SearchRecentPreferences>(
+      (_) => searchRecentPreferences,
       isSingleton: true,
     );
     injector.map<CatalogApiClient>((_) => apiClient, isSingleton: true);
@@ -89,6 +117,19 @@ class ServiceLocator {
       (i) => CollectionRepositoryImpl(request: i.get<CollectionRequest>()),
       isSingleton: true,
     );
+    injector.map<CatalogDirectUploadService>(
+      (i) => CatalogDirectUploadService(
+        collectionRepository: i.get<CollectionRepository>(),
+      ),
+      isSingleton: true,
+    );
+    injector.map<ProductUploadCoordinator>(
+      (i) => ProductUploadCoordinator(
+        collectionRepository: i.get<CollectionRepository>(),
+        directUploadService: i.get<CatalogDirectUploadService>(),
+      ),
+      isSingleton: true,
+    );
 
     injector.map<ImportApiRequest>(
       (i) => ImportApiRequest(apiClient: i.get<CatalogApiClient>()),
@@ -96,6 +137,15 @@ class ServiceLocator {
     );
     injector.map<ImportRepository>(
       (i) => ImportRepositoryImpl(request: i.get<ImportApiRequest>()),
+      isSingleton: true,
+    );
+
+    injector.map<SearchRequest>(
+      (i) => SearchRequest(apiClient: i.get<CatalogApiClient>()),
+      isSingleton: true,
+    );
+    injector.map<SearchRepository>(
+      (i) => SearchRepositoryImpl(request: i.get<SearchRequest>()),
       isSingleton: true,
     );
   }

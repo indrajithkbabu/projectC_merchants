@@ -24,6 +24,7 @@ abstract class ProfileRepository {
   Future<void> deleteAccount();
 }
 
+/// Cache-first: every successful API writes [CatalogSession], callers read cache.
 class ProfileRepositoryImpl implements ProfileRepository {
   ProfileRepositoryImpl({
     required ProfileRequest request,
@@ -36,12 +37,17 @@ class ProfileRepositoryImpl implements ProfileRepository {
   final ProfileRequest _request;
   final CatalogSession _session;
 
+  /// Persist [profile] then return the session snapshot (UI source of truth).
+  Future<CatalogProfile> _commit(CatalogProfile profile) async {
+    await _session.updateProfile(profile);
+    return _session.profile ?? profile;
+  }
+
   @override
   Future<CatalogProfile> fetchMe() async {
     AppLog.d(_tag, 'fetchMe');
     final profile = await _request.fetchMe();
-    await _session.updateProfile(profile);
-    return profile;
+    return _commit(profile);
   }
 
   @override
@@ -59,39 +65,48 @@ class ProfileRepositoryImpl implements ProfileRepository {
       lastName: lastName,
       profileImageFile: profileImageFile,
     );
-    await _session.updateProfile(profile);
-    return profile;
+    return _commit(profile);
   }
 
   @override
   Future<CatalogProfile> uploadProfileImage(File file) async {
     AppLog.d(_tag, 'uploadProfileImage');
     final result = await _request.uploadProfileImage(file);
-    final current = _session.profile ?? await _request.fetchMe();
-    final updated = current.copyWith(
-      profileImage: result.profileImage,
-      profileImageUrl: result.profileImageUrl,
-    );
-    await _session.updateProfile(updated);
-    return updated;
+    try {
+      // Canonical GET after mutate → cache → return cache.
+      return await fetchMe();
+    } catch (e) {
+      AppLog.e(_tag, 'POST image ok but GET /me failed; merging locally', e);
+      final current = _session.profile;
+      if (current == null) rethrow;
+      return _commit(
+        current.copyWith(
+          profileImage: result.profileImage,
+          profileImageUrl: result.profileImageUrl,
+        ),
+      );
+    }
   }
 
   @override
   Future<CatalogProfile> deleteProfileImage() async {
     AppLog.d(_tag, 'deleteProfileImage');
     await _request.deleteProfileImage();
-    final current = _session.profile ?? await _request.fetchMe();
-    final updated = current.copyWith(clearProfileImage: true);
-    await _session.updateProfile(updated);
-    return updated;
+    try {
+      return await fetchMe();
+    } catch (e) {
+      AppLog.e(_tag, 'DELETE image ok but GET /me failed; clearing locally', e);
+      final current = _session.profile;
+      if (current == null) rethrow;
+      return _commit(current.copyWith(clearProfileImage: true));
+    }
   }
 
   @override
   Future<CatalogProfile> skipStoreOnboarding() async {
     AppLog.d(_tag, 'skipStoreOnboarding');
     final profile = await _request.skipStoreOnboarding();
-    await _session.updateProfile(profile);
-    return profile;
+    return _commit(profile);
   }
 
   @override

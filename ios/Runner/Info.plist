@@ -47,5 +47,10 @@
 	<true/>
 	<key>NSContactsUsageDescription</key>
 	<string>Jewel Flow needs access to your contacts so you can add teammates to your store.</string>
+	<key>LSApplicationQueriesSchemes</key>
+	<array>
+		<string>whatsapp</string>
+		<string>https</string>
+	</array>
 </dict>
 </plist>

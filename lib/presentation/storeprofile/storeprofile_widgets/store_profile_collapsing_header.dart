@@ -20,9 +20,9 @@ class StoreProfileCollapsingHeaderDelegate
     required this.onBack,
     required this.onAddProducts,
     required this.onImport,
+    required this.onSearch,
     required this.onAddMembers,
     required this.onCopyStoreLink,
-    required this.toolbarActions,
     this.onViewAll,
     this.onManageImages,
   });
@@ -35,9 +35,9 @@ class StoreProfileCollapsingHeaderDelegate
   final VoidCallback onBack;
   final VoidCallback onAddProducts;
   final VoidCallback onImport;
+  final VoidCallback onSearch;
   final VoidCallback? onAddMembers;
   final VoidCallback onCopyStoreLink;
-  final List<Widget> toolbarActions;
   final VoidCallback? onViewAll;
   final VoidCallback? onManageImages;
 
@@ -61,8 +61,15 @@ class StoreProfileCollapsingHeaderDelegate
   double get _collapsedExtent =>
       _toolbarHeight + _productsTopGap + _productsHeight + _productsBottomGap;
 
-  double get _expandedExtra =>
-      _expandedTopGap + _headerCardHeight + _actionsGap + _actionsHeight;
+  double get _expandedExtra {
+    final actionsExtra =
+        state.showActionsRow ? (_actionsGap + _actionsHeight) : 0.0;
+    return _expandedTopGap + _headerCardHeight + actionsExtra;
+  }
+
+  /// Own store → blue add. Other store (when importable) → blue download.
+  bool get _showPrimaryAction =>
+      state.isOwnStore || (!state.isOwnStore && state.canImport);
 
   @override
   double get minExtent => _collapsedExtent + (_expandedExtra * expandT);
@@ -87,8 +94,6 @@ class StoreProfileCollapsingHeaderDelegate
     final actionsT = Curves.easeOutCubic.transform(
       ((t - 0.35) / 0.65).clamp(0.0, 1.0),
     );
-    // Own-store + lives on the compact bar; fades out as expanded actions appear.
-    final addT = state.isOwnStore ? compactT : 0.0;
     final detailsHeight = _expandedExtra * t;
     final showExpanded = detailsHeight > 0.5 && expandedT > 0.02;
 
@@ -124,7 +129,7 @@ class StoreProfileCollapsingHeaderDelegate
                               onToggleDetails: onToggleDetails,
                               onManageImages: onManageImages,
                             ),
-                            if (actionsT > 0.02) ...[
+                            if (state.showActionsRow && actionsT > 0.02) ...[
                               const SizedBox(height: _actionsGap),
                               IgnorePointer(
                                 ignoring: actionsT < 0.5,
@@ -132,6 +137,7 @@ class StoreProfileCollapsingHeaderDelegate
                                   opacity: actionsT,
                                   child: StoreProfileActionsRow(
                                     isOwnStore: state.isOwnStore,
+                                    canImport: state.canImport,
                                     onAddProducts: onAddProducts,
                                     onImport: onImport,
                                   ),
@@ -169,27 +175,40 @@ class StoreProfileCollapsingHeaderDelegate
                       ),
                     ),
                   ),
-                  if (state.isOwnStore)
+                  if (_showPrimaryAction)
                     ClipRect(
                       child: SizedBox(
-                        width: 44 * addT.clamp(0.0, 1.0),
+                        // Collapse width with compactT so the icon only shows
+                        // when the header is not expanded (actions row covers it).
+                        width: 40 * compactT.clamp(0.0, 1.0),
                         child: Align(
                           alignment: Alignment.centerRight,
                           child: Opacity(
-                            opacity: addT,
+                            opacity: compactT,
                             child: IgnorePointer(
-                              ignoring: addT < 0.5,
-                              child: _ToolbarIconButton(
-                                icon: Icons.add_rounded,
-                                onTap: onAddProducts,
+                              ignoring: compactT < 0.5,
+                              child: _PrimaryToolbarButton(
+                                icon:
+                                    state.isOwnStore
+                                        ? Icons.add_rounded
+                                        : Icons.file_download_outlined,
+                                onTap:
+                                    state.isOwnStore
+                                        ? onAddProducts
+                                        : onImport,
                               ),
                             ),
                           ),
                         ),
                       ),
                     ),
-                  if (toolbarActions.isNotEmpty) const SizedBox(width: 8),
-                  ...toolbarActions,
+                  Padding(
+                    padding: const EdgeInsets.only(left: 4, right: 4),
+                    child: _ToolbarIconButton(
+                      icon: Icons.search_rounded,
+                      onTap: onSearch,
+                    ),
+                  ),
                 ],
               ),
             ),
@@ -236,7 +255,6 @@ class StoreProfileCollapsingHeaderDelegate
   bool shouldRebuild(covariant StoreProfileCollapsingHeaderDelegate oldDelegate) {
     return oldDelegate.state != state ||
         oldDelegate.expandT != expandT ||
-        oldDelegate.toolbarActions.length != toolbarActions.length ||
         (oldDelegate.onViewAll == null) != (onViewAll == null) ||
         (oldDelegate.onManageImages == null) != (onManageImages == null);
   }
@@ -257,26 +275,14 @@ class _CompactStoreIdentity extends StatelessWidget {
         ),
         const SizedBox(width: 8),
         Expanded(
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                state.storeName,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: AppTextStyles.headline(
-                  fontSize: 16,
-                  fontWeight: FontWeight.w700,
-                ),
-              ),
-              Text(
-                state.storeLink,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: AppTextStyles.caption(fontSize: 12),
-              ),
-            ],
+          child: Text(
+            state.storeName,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: AppTextStyles.headline(
+              fontSize: 16,
+              fontWeight: FontWeight.w700,
+            ),
           ),
         ),
         const SizedBox(width: 8),
@@ -285,6 +291,32 @@ class _CompactStoreIdentity extends StatelessWidget {
   }
 }
 
+/// Blue circular primary action (add products / import).
+class _PrimaryToolbarButton extends StatelessWidget {
+  const _PrimaryToolbarButton({required this.icon, required this.onTap});
+
+  final IconData icon;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: AppColors.primary,
+      shape: const CircleBorder(),
+      child: InkWell(
+        onTap: onTap,
+        customBorder: const CircleBorder(),
+        child: SizedBox(
+          width: 36,
+          height: 36,
+          child: Icon(icon, size: 20, color: AppColors.textOnPrimary),
+        ),
+      ),
+    );
+  }
+}
+
+/// Muted circular toolbar action (search).
 class _ToolbarIconButton extends StatelessWidget {
   const _ToolbarIconButton({required this.icon, required this.onTap});
 
@@ -302,7 +334,7 @@ class _ToolbarIconButton extends StatelessWidget {
         child: SizedBox(
           width: 36,
           height: 36,
-          child: Icon(icon, size: 18, color: AppColors.textPrimary),
+          child: Icon(icon, size: 20, color: AppColors.textPrimary),
         ),
       ),
     );

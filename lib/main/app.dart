@@ -4,12 +4,16 @@ import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:project_c/bloc/auth/auth_bloc.dart';
+import 'package:project_c/bloc/network_status/network_status_cubit.dart';
 import 'package:project_c/di/service_locator.dart';
 import 'package:project_c/helper/app_log.dart';
 import 'package:project_c/helper/app_theme.dart';
 import 'package:project_c/helper/colors.dart';
+import 'package:project_c/helper/widgets/network_status_gate.dart';
 import 'package:project_c/navigation/route_initializer.dart';
 import 'package:project_c/navigation/routes.dart';
+import 'package:project_c/services/product_details_preferences.dart';
+import 'package:project_c/services/product_view_preferences.dart';
 import 'package:project_c/services/screenshot_protection_service.dart';
 
 class App extends StatefulWidget {
@@ -26,6 +30,8 @@ class _AppState extends State<App> with WidgetsBindingObserver {
     WidgetsBinding.instance.addObserver(this);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _startScreenshotProtection();
+      ServiceLocator.get<ProductViewPreferences>().load();
+      ServiceLocator.get<ProductDetailsPreferences>().load();
     });
   }
 
@@ -50,8 +56,13 @@ class _AppState extends State<App> with WidgetsBindingObserver {
 
   @override
   Widget build(BuildContext context) {
-    return BlocProvider(
-      create: (_) => AuthBloc()..add(const AuthSessionRestoreRequested()),
+    return MultiBlocProvider(
+      providers: [
+        BlocProvider(
+          create: (_) => AuthBloc()..add(const AuthSessionRestoreRequested()),
+        ),
+        BlocProvider(create: (_) => NetworkStatusCubit()..start()),
+      ],
       child: BlocListener<AuthBloc, AuthState>(
         // After cold-start restore only: replace bootstrap with the real root.
         // OTP / in-flow postAuthRoute is handled by OtpRoute (unchanged).
@@ -93,6 +104,11 @@ class _AppState extends State<App> with WidgetsBindingObserver {
           theme: AppTheme.light,
           initialRoute: Routes.bootstrapRoute,
           onGenerateRoute: onGenerateRoutes,
+          builder: (context, child) {
+            return NetworkStatusGate(
+              child: child ?? const SizedBox.shrink(),
+            );
+          },
           supportedLocales: const [Locale('en')],
           localizationsDelegates: const [
             CountryLocalizations.delegate,

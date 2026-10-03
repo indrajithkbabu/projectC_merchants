@@ -8,6 +8,8 @@
 - Members list/remove, leave store, rename
 
 ## Notes
-- After create, refresh `/me` so `ownStore` is current.
+- After create, refresh `/me` so `ownStore` is current, then invalidate +
+  re-prefetch `StoreHomePrefetcher` so the Stores tab shows the new store
+  without a manual pull-to-refresh.
 - Contact batch failures must not undo store creation.
 - Team screen submits selected demo contact phones (device picker can replace later).

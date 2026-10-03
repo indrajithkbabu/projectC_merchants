@@ -24,6 +24,10 @@ class Routes {
   static const String editProductSpecsRoute = 'edit_product_specs_route';
   static const String collectionBrowseRoute = 'collection_browse_route';
   static const String productDetailsRoute = 'product_details_route';
+  static const String globalSearchRoute = 'global_search_route';
+  static const String storeSearchRoute = 'store_search_route';
+  static const String searchFiltersRoute = 'search_filters_route';
   static const String countryPickerRoute = 'country_picker_route';
+  static const String inviteFriendsRoute = 'invite_friends_route';
   static const String homePlaceholderRoute = 'home_placeholder_route';
 }

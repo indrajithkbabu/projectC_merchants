@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:project_c/models/catalog/catalog_page.dart';
+import 'package:project_c/models/catalog/catalog_upload_models.dart';
 import 'package:project_c/models/catalog/collection_models.dart';
 import 'package:project_c/models/catalog/collection_specifications.dart';
 import 'package:project_c/resources/endpoints.dart';
@@ -50,8 +51,83 @@ class CollectionRequest {
     return CollectionDetail.fromJson(json ?? const {});
   }
 
-  /// Multipart create: `name`, optional `tag`/`description`/`specifications`,
-  /// repeated `photos`.
+  /// Phase 1: pre-signed S3 PUT URLs for direct binary upload.
+  Future<CatalogPresignResult> presignUploads({
+    required String storeId,
+    required List<CatalogPresignFile> files,
+  }) async {
+    final json = await _api.sendJson(
+      method: HttpMethod.post,
+      path: Endpoints.storeUploadsPresign(storeId),
+      body: {
+        'files': [for (final f in files) f.toJson()],
+      },
+      requiresAuth: true,
+    );
+    return CatalogPresignResult.fromJson(json ?? const {});
+  }
+
+  /// Phase 2 JSON commit after direct S3 uploads (no multipart file parts).
+  Future<CollectionCreateResult> createCollectionFromUploads({
+    required String storeId,
+    required String name,
+    required List<CatalogUploadedPhoto> photos,
+    String tag = '',
+    String description = '',
+    Map<String, dynamic>? specifications,
+    bool usePrecisionTag = false,
+    String? clientRequestId,
+  }) async {
+    final requestId =
+        (clientRequestId != null && clientRequestId.trim().isNotEmpty)
+            ? clientRequestId.trim()
+            : 'req-${DateTime.now().microsecondsSinceEpoch}-${photos.length}';
+    final body = <String, dynamic>{
+      // Backend JSON commit docs use `title`; multipart / responses use `name`.
+      'title': name,
+      'name': name,
+      'tag': tag,
+      'description': description,
+      'usePrecisionTag': usePrecisionTag,
+      'clientRequestId': requestId,
+      'photos': [for (final photo in photos) photo.toJson()],
+    };
+    if (specifications != null) {
+      body['specifications'] = specifications;
+    }
+    final json = await _api.sendJson(
+      method: HttpMethod.post,
+      path: Endpoints.storeCollections(storeId),
+      body: body,
+      extraHeaders: {'Idempotency-Key': requestId},
+      requiresAuth: true,
+      timeout: const Duration(minutes: 2),
+    );
+    return CollectionCreateResult.fromJson(json ?? const {});
+  }
+
+  /// Append pre-signed uploaded photos to an existing collection.
+  Future<CollectionCreateResult> appendUploadedPhotos({
+    required String storeId,
+    required String listingId,
+    required List<CatalogUploadedPhoto> photos,
+    int? revision,
+  }) async {
+    final body = <String, dynamic>{
+      'photos': [for (final photo in photos) photo.toJson()],
+    };
+    if (revision != null) body['revision'] = revision;
+    final json = await _api.sendJson(
+      method: HttpMethod.post,
+      path: Endpoints.storeCollectionPhotos(storeId, listingId),
+      body: body,
+      requiresAuth: true,
+      timeout: const Duration(minutes: 2),
+    );
+    return CollectionCreateResult.fromJson(json ?? const {});
+  }
+
+  /// Legacy multipart create (kept for fallback / older server paths).
   Future<CollectionCreateResult> createCollection({
     required String storeId,
     required String name,

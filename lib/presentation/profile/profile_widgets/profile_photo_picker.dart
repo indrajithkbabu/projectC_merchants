@@ -1,7 +1,9 @@
 import 'dart:io';
 
+import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:project_c/helper/colors.dart';
+import 'package:project_c/helper/product_image.dart';
 import 'package:project_c/helper/text_styles.dart';
 
 class ProfilePhotoPicker extends StatelessWidget {
@@ -35,7 +37,11 @@ class ProfilePhotoPicker extends StatelessWidget {
     if (hasLocal) {
       provider = FileImage(File(localPath));
     } else if (hasNetwork) {
-      provider = NetworkImage(networkUrl);
+      // Disk+memory cache — same CatalogImageCache as product media.
+      provider = CachedNetworkImageProvider(
+        networkUrl,
+        cacheManager: CatalogImageCache.instance,
+      );
     }
 
     return Center(

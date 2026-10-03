@@ -8,7 +8,10 @@ Do not duplicate the `/v1/catalog` prefix here.
 Media (profile / store / collections):
 - Profile: multipart `PATCH /me` + `POST|DELETE /me/profile-image`
 - Store showcase: multipart create/append/replace + `DELETE .../images/:imageId` (max 5)
-- Collections: multipart `POST /stores/:storeId/collections` with `photos` (up to 50 / 500 MB)
-- Add photos: multipart `PATCH /stores/:storeId/collections/:listingId`
+- Collections (preferred): `POST .../uploads/presign` (staging keys + `sessionId`)
+  → client S3 PUT of compressed bytes → JSON
+  `POST /stores/:storeId/collections` with `photos: [{key, thumbhash, …}]`,
+  `clientRequestId`, and `Idempotency-Key` header
+- Append photos: JSON `POST .../collections/:listingId/photos`
 - Delete photos: `POST .../photos/delete` (preferred on mobile) or DELETE variants
-- No separate `/uploads` S3 ticket flow in this contract
+- Legacy multipart create/PATCH append remains available for compatibility

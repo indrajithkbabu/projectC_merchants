@@ -6,6 +6,7 @@ import 'package:project_c/helper/colors.dart';
 import 'package:project_c/helper/text_styles.dart';
 import 'package:project_c/helper/widgets/app_back_button.dart';
 import 'package:project_c/helper/widgets/screen_wrapper.dart';
+import 'package:project_c/presentation/store_import/store_import_widgets/import_requests_list_shimmer.dart';
 
 class StoreImportRequestsRoute extends StatefulWidget {
   const StoreImportRequestsRoute({super.key});
@@ -318,13 +319,7 @@ class _RequestsListPane extends StatelessWidget {
       onRefresh: onRefresh,
       child:
           isLoading && items.isEmpty
-              ? ListView(
-                physics: const AlwaysScrollableScrollPhysics(),
-                children: const [
-                  SizedBox(height: 120),
-                  Center(child: CircularProgressIndicator()),
-                ],
-              )
+              ? const ImportRequestsListShimmer()
               : items.isEmpty
               ? ListView(
                 physics: const AlwaysScrollableScrollPhysics(),

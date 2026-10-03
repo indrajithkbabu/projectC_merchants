@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:bloc/bloc.dart';
@@ -5,6 +6,7 @@ import 'package:equatable/equatable.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:project_c/di/service_locator.dart';
 import 'package:project_c/helper/app_log.dart';
+import 'package:project_c/helper/product_image.dart';
 import 'package:project_c/models/catalog/catalog_profile.dart';
 import 'package:project_c/session/catalog_session.dart';
 import 'package:project_c/webservice/catalog_error_mapper.dart';
@@ -14,6 +16,9 @@ part 'account_profile_event.dart';
 part 'account_profile_state.dart';
 
 /// Owns GET /me for the Profile + Settings tabs (no blocking loaders).
+///
+/// Cache-first: paint [CatalogSession] immediately; API writes session then
+/// UI re-reads session. Image upload/delete → POST/DELETE → GET /me → cache.
 class AccountProfileBloc
     extends Bloc<AccountProfileEvent, AccountProfileState> {
   AccountProfileBloc({
@@ -44,10 +49,8 @@ class AccountProfileBloc
     AccountProfileStarted event,
     Emitter<AccountProfileState> emit,
   ) async {
-    final cached = _session.profile;
-    if (cached != null) {
-      emit(state.copyWith(profile: cached));
-    }
+    // Show disk/memory session cache first (e.g. profile completed with no image).
+    _emitFromCache(emit);
     await _refreshQuietly(emit);
   }
 
@@ -61,23 +64,45 @@ class AccountProfileBloc
   Future<void> _refreshQuietly(Emitter<AccountProfileState> emit) async {
     emit(state.copyWith(isRefreshing: true, clearError: true));
     try {
-      final profile = await _profileRepository.fetchMe();
-      AppLog.d(_tag, 'GET /me → ${profile.displayName}');
-      emit(
-        state.copyWith(
-          isRefreshing: false,
-          profile: profile,
-        ),
-      );
+      await _profileRepository.fetchMe();
+      AppLog.d(_tag, 'GET /me → ${_session.profile?.displayName}');
+      _emitFromCache(emit, isRefreshing: false, clearError: true);
     } catch (e) {
       AppLog.e(_tag, 'GET /me failed', e);
-      emit(
-        state.copyWith(
-          isRefreshing: false,
-          errorMessage: CatalogErrorMapper.toUserMessage(e),
-        ),
+      // Keep showing last cached profile on refresh failure.
+      _emitFromCache(
+        emit,
+        isRefreshing: false,
+        errorMessage: CatalogErrorMapper.toUserMessage(e),
       );
     }
+  }
+
+  /// Emit only what [CatalogSession] holds (after API has written cache).
+  void _emitFromCache(
+    Emitter<AccountProfileState> emit, {
+    bool? isRefreshing,
+    bool? isUpdatingImage,
+    String? errorMessage,
+    bool clearError = false,
+  }) {
+    final cached = _session.profile;
+    if (cached != null) {
+      final url = cached.effectiveProfileImageUrl.trim();
+      if (url.isNotEmpty) {
+        unawaited(CatalogImageCache.precacheUrls([url]));
+      }
+    }
+    if (emit.isDone) return;
+    emit(
+      state.copyWith(
+        profile: cached ?? state.profile,
+        isRefreshing: isRefreshing,
+        isUpdatingImage: isUpdatingImage,
+        errorMessage: errorMessage,
+        clearError: clearError,
+      ),
+    );
   }
 
   Future<void> _onPickImageRequested(
@@ -95,11 +120,10 @@ class AccountProfileBloc
         emit(state.copyWith(isUpdatingImage: false));
         return;
       }
-      final profile = await _profileRepository.uploadProfileImage(
-        File(picked.path),
-      );
+      // POST → GET /me → session cache (repository), then paint from cache.
+      await _profileRepository.uploadProfileImage(File(picked.path));
       AppLog.d(_tag, 'Profile image uploaded');
-      emit(state.copyWith(isUpdatingImage: false, profile: profile));
+      _emitFromCache(emit, isUpdatingImage: false, clearError: true);
     } catch (e) {
       AppLog.e(_tag, 'Profile image upload failed', e);
       emit(
@@ -118,9 +142,9 @@ class AccountProfileBloc
     if (state.isUpdatingImage) return;
     emit(state.copyWith(isUpdatingImage: true, clearError: true));
     try {
-      final profile = await _profileRepository.deleteProfileImage();
+      await _profileRepository.deleteProfileImage();
       AppLog.d(_tag, 'Profile image deleted');
-      emit(state.copyWith(isUpdatingImage: false, profile: profile));
+      _emitFromCache(emit, isUpdatingImage: false, clearError: true);
     } catch (e) {
       AppLog.e(_tag, 'Profile image delete failed', e);
       emit(

@@ -14,8 +14,8 @@ class StoreLinkCard extends StatelessWidget {
       width: double.infinity,
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
-        color: AppColors.surfaceSecondary,
-        borderRadius: BorderRadius.circular(12),
+        color: AppColors.surface,
+        borderRadius: BorderRadius.circular(16),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -29,7 +29,10 @@ class StoreLinkCard extends StatelessWidget {
                   state.fullStoreLink.isEmpty
                       ? 'your-store.jewelflow.app'
                       : state.fullStoreLink,
-                  style: AppTextStyles.body(fontWeight: FontWeight.w600),
+                  style: AppTextStyles.body(
+                    fontSize: 15,
+                    fontWeight: FontWeight.w600,
+                  ),
                 ),
               ),
               const SizedBox(width: 8),

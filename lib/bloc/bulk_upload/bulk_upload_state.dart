@@ -6,11 +6,13 @@ class BulkUploadState extends Equatable {
     this.images = const [],
     this.items = const [],
     this.groupTitle = '',
+    this.description = '',
+    this.tags = const [],
+    this.tagDraft = '',
     this.groupSpec = const ProductSpec(),
     this.knownSubGroups = const [],
     this.isSelectMode = false,
     this.selectedItemIds = const [],
-    this.shouldOpenTitleOnlyForm = false,
     this.shouldOpenGroupDetails = false,
     this.shouldOpenPreview = false,
     this.isPublishing = false,
@@ -32,11 +34,15 @@ class BulkUploadState extends Equatable {
   final List<GalleryImageItem> images;
   final List<BulkUploadItem> items;
   final String groupTitle;
+  /// Optional collection description (API ≤1000).
+  final String description;
+  /// Optional UI tag chips; joined into a single API `tag` (≤40).
+  final List<String> tags;
+  final String tagDraft;
   final ProductSpec groupSpec;
   final List<BulkKnownSubGroup> knownSubGroups;
   final bool isSelectMode;
   final List<String> selectedItemIds;
-  final bool shouldOpenTitleOnlyForm;
   final bool shouldOpenGroupDetails;
   final bool shouldOpenPreview;
   final bool isPublishing;
@@ -148,12 +154,13 @@ class BulkUploadState extends Equatable {
     List<GalleryImageItem>? images,
     List<BulkUploadItem>? items,
     String? groupTitle,
+    String? description,
+    List<String>? tags,
+    String? tagDraft,
     ProductSpec? groupSpec,
     List<BulkKnownSubGroup>? knownSubGroups,
     bool? isSelectMode,
     List<String>? selectedItemIds,
-    bool? shouldOpenTitleOnlyForm,
-    bool clearShouldOpenTitleOnlyForm = false,
     bool? shouldOpenGroupDetails,
     bool clearShouldOpenGroupDetails = false,
     bool? shouldOpenPreview,
@@ -182,14 +189,13 @@ class BulkUploadState extends Equatable {
       images: images ?? this.images,
       items: items ?? this.items,
       groupTitle: groupTitle ?? this.groupTitle,
+      description: description ?? this.description,
+      tags: tags ?? this.tags,
+      tagDraft: tagDraft ?? this.tagDraft,
       groupSpec: groupSpec ?? this.groupSpec,
       knownSubGroups: knownSubGroups ?? this.knownSubGroups,
       isSelectMode: isSelectMode ?? this.isSelectMode,
       selectedItemIds: selectedItemIds ?? this.selectedItemIds,
-      shouldOpenTitleOnlyForm:
-          clearShouldOpenTitleOnlyForm
-              ? false
-              : (shouldOpenTitleOnlyForm ?? this.shouldOpenTitleOnlyForm),
       shouldOpenGroupDetails:
           clearShouldOpenGroupDetails
               ? false
@@ -236,11 +242,13 @@ class BulkUploadState extends Equatable {
     images,
     items,
     groupTitle,
+    description,
+    tags,
+    tagDraft,
     groupSpec,
     knownSubGroups,
     isSelectMode,
     selectedItemIds,
-    shouldOpenTitleOnlyForm,
     shouldOpenGroupDetails,
     shouldOpenPreview,
     isPublishing,

@@ -45,6 +45,17 @@ class AuthOtpContinuePressed extends AuthEvent {
   const AuthOtpContinuePressed();
 }
 
+/// Fills OTP digits from SMS auto-read / iOS autofill and optionally verifies.
+class AuthOtpAutoFilled extends AuthEvent {
+  const AuthOtpAutoFilled(this.code, {this.autoSubmit = true});
+
+  final String code;
+  final bool autoSubmit;
+
+  @override
+  List<Object?> get props => [code, autoSubmit];
+}
+
 class AuthResendPressed extends AuthEvent {
   const AuthResendPressed();
 }

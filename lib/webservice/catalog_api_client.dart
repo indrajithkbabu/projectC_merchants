@@ -71,6 +71,7 @@ class CatalogApiClient {
     required String path,
     Map<String, dynamic>? body,
     Map<String, String>? query,
+    Map<String, String>? extraHeaders,
     bool requiresAuth = true,
     bool allowAnonymousBearer = false,
     bool skipAuthRetry = false,
@@ -81,6 +82,7 @@ class CatalogApiClient {
       path: path,
       body: body,
       query: query,
+      extraHeaders: extraHeaders,
       requiresAuth: requiresAuth,
       allowAnonymousBearer: allowAnonymousBearer,
       timeout: timeout,
@@ -94,6 +96,7 @@ class CatalogApiClient {
         path: path,
         body: body,
         query: query,
+        extraHeaders: extraHeaders,
         requiresAuth: true,
         allowAnonymousBearer: false,
         timeout: timeout,
@@ -203,6 +206,7 @@ class CatalogApiClient {
     required String path,
     Map<String, dynamic>? body,
     Map<String, String>? query,
+    Map<String, String>? extraHeaders,
     required bool requiresAuth,
     required bool allowAnonymousBearer,
     Duration? timeout,
@@ -227,6 +231,7 @@ class CatalogApiClient {
       path: path,
       body: body,
       query: query,
+      extraHeaders: extraHeaders,
       accessToken: access,
       timeout: timeout,
     );
@@ -308,6 +313,7 @@ class CatalogApiClient {
     required String path,
     Map<String, dynamic>? body,
     Map<String, String>? query,
+    Map<String, String>? extraHeaders,
     String? accessToken,
     Duration? timeout,
   }) async {
@@ -322,6 +328,9 @@ class CatalogApiClient {
     }
     if (accessToken != null && accessToken.isNotEmpty) {
       headers['Authorization'] = 'Bearer $accessToken';
+    }
+    if (extraHeaders != null && extraHeaders.isNotEmpty) {
+      headers.addAll(extraHeaders);
     }
 
     final methodLabel = method.name.toUpperCase();

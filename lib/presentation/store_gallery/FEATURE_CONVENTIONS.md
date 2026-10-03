@@ -12,6 +12,8 @@ This file defines what to follow for UI and logic inside `lib/presentation/store
 - Keep gallery-specific components in `store_gallery_widgets/`.
 - Day headers use a plain date stamp (`Sep 17`) — no `(Today)` / `(Yesterday)`
   brackets. Product titles under a multi-product day stay unchanged.
+- Product order in the gallery matches the store profile list order (no sort by
+  `createdAt`, which was defaulting to `DateTime.now()` and reshuffling tiles).
 
 ## Logic Ownership
 - Gallery presentation should only handle image display and user interaction mapping.

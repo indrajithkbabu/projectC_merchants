@@ -10,29 +10,52 @@ This file defines what to follow for UI and logic inside `lib/presentation/produ
 - Use `AppPadding` for layout spacing.
 - Use `AppTextStyles` and `AppColors`.
 - Keep product-detail-specific visual pieces in `product_details_widgets/`.
-- On land, show the photo only. Tap the image to toggle the top chrome (back,
-  share / edit / delete) and the bottom panel (specs, description, thumbnails).
-- Product title appears under the icon row when chrome is visible, with the store
-  name as a subtitle under the title (store link is not shown). System /
-  `PopScope` back still works when chrome is hidden.
-- Title is **photo-aware**: main photos use `{collectionName} {n}`; Precise/Standalone
-  photos use `{subGroupName} {n}` (same numbering as collection browse). Swiping
-  updates the title.
-- Bottom panel (when chrome is visible): **Fine weight** line (when computable)
-  above the weight/purity/size line from `precisionTag` / specs for the current
-  photo (no “Precise” / “Group” label above the line). Title-only collections
-  omit that line. Fine weight = net × (purity% + wastage%) / 100; when there is
-  no other deduction, net equals gross. Example: purity 92, wastage 2%, net 25g
-  → `Fine weight : 23.5g`. Display mapping for `precisionTag`:
-  - `22K (92%) | 55g | 2% W | Free Size` → `92 | Gross 55g | 2% | Free Size`
-  - `22K (92%) | 25g (Net: 20g) | 1% W | Free Size` → `92 | Net 25g | 1% | Free Size`
-  - `22K (92%) | 10-20g | 1% W | Free Size` → `92 | Gross 10-20g | 1% | Free Size`
-  (karat dropped; purity without `%`; plain/range weight → Gross; weight with Net →
-  Net + gross grams; wastage drops the `W`). Specs fallback uses the same shape.
-  Collection tags are hidden here (still editable via Edit). Description still
-  shows when present.
+- On land, show the photo only. Tap the image to toggle the top chrome (**back +
+  product title (16 / w600) + overflow `⋮`**, store name, category) and the
+  bottom weight panel. Multi-photo browsing is via horizontal PageView swipe;
+  optional **Preview all** thumbnail strip (see overflow menu). Pinch to zoom
+  (1×–4×) and pan while zoomed; at 1× horizontal swipes change photos.
+  Double-tap toggles ~2.2× zoom. Page swipe is disabled while zoomed so pan
+  stays smooth.
+- Product **title** sits to the right of the back button when chrome is shown.
+  **Store name** sits under that toolbar row. From **search**, a `>` chevron
+  appears beside the store name — tap opens `store_profile_route` for that
+  store with this listing’s group card highlighted (primary border) and scrolled
+  into view. Tapping the group opens `collection_browse_route` (all items in
+  the group) as usual. System / `PopScope` back still works when chrome is
+  hidden.
+- **Category** shows as a search-style pill under the store name **only when
+  Preview details is on** (same gate as weight). Source is collection
+  `specifications.category` (sub-group overrides when the photo belongs to one);
+  search may seed `category` until detail loads. Display is title-cased
+  (`ring` → `Ring`). Hidden when category is empty or Preview details is off.
+- Title is **photo-aware**: main photos use the collection name; Precise /
+  Standalone photos use the sub-group name **only when it is custom** (not the
+  auto publish pattern `{title} precise|standalone {n}` — those fall back to the
+  collection name; Precise is still marked by the browse blue dot). No photo
+  counter next to the title. Swiping updates the title.
+- Top actions (Edit / Share / Delete / Preview all / Preview details) open from
+  a **popup dropdown** on the three-dot button (not a bottom sheet). Edit and
+  Delete only when `canEdit`. **Preview all** (multi-photo only) is a checkbox:
+  when checked, a horizontal thumbnail strip appears under the bottom weight
+  panel; unchecked hides it. **Preview details** is a checkbox (**on by
+  default**): when checked, category pill + weight chrome show; unchecked hides
+  category, weight line, arrow, and all weight details. Description still shows
+  when present. Choices are persisted in `ProductDetailsPreferences` /
+  `AppSettingsStorage` (survives logout and every re-entry to product details
+  until the user changes them). Available from search and browse entry.
+- Share shares the **current photo file** (not a link) via the system share
+  sheet so WhatsApp can send the image. Network photos are resolved through
+  `CatalogImageCache` first.
+- Bottom panel (when chrome is visible and **Preview details** is on): one
+  **primary weight** line — `Fine` / `Net` / `Gross` title (white) + value in
+  muted grey (e.g. `Net 78.35g`). Fine = net × (purity% + wastage%) / 100
+  **only when purity, wastage, and net are all > 0**; otherwise fall back to
+  Net (when stone deduction makes net ≠ gross) or Gross. A down-arrow expands
+  purity / wastage / size details in muted grey. Description still shows when
+  present. Collection tags stay hidden here (still editable via Edit).
 - Edit title/tags/description remain collection-level (API has no per-photo captions).
-- Show **edit** and **remove photo** when `permissions.edit` is true, or on your own store for originals (`kind != imported`). Other stores stay read-only.
+- Show **edit** and **remove photo** when `permissions.edit` is true, or on your own store for originals (`kind != imported`). Other stores stay read-only (Share still available).
 
 ## Logic Ownership
 - Product details presentation should render product state and dispatch user actions only.
@@ -51,10 +74,13 @@ This file defines what to follow for UI and logic inside `lib/presentation/produ
 - Entry is often via `collection_browse_route` with an `imageIndex` into the full photos list.
 - From `store_gallery_route` / `collection_browse_route`, pass a flat
   `galleryFeed` of all photos so details can swipe across every image (all
-  dates/groups/sections), not only one cluster. The bottom thumbnail strip
-  uses the same feed order as the browse/gallery grid (not API `photos`
-  order). Activating another product (gallery) loads its detail quietly.
-  PageView uses iOS-style bouncing physics.
+  dates/groups/sections), not only one cluster. Activating another product
+  (gallery) loads its detail quietly. PageView uses iOS-style bouncing physics.
+- From **search** (global / in-store), open with a `galleryFeed` of the **filtered
+  result hits** (one slot per hit, seated on the tapped index). Swipe activates
+  the next/previous hit and loads that listing’s detail (store meta updates when
+  the hit’s store differs). Does not expand into other photos of the same
+  collection. Browse / gallery feeds are unchanged.
 - From other entries without a feed, swipe stays within that product’s photos.
 
 ## Route and Navigation Notes

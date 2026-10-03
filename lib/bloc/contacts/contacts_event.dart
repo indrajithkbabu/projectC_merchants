@@ -15,6 +15,15 @@ class ContactsRefreshed extends ContactsEvent {
   const ContactsRefreshed();
 }
 
+class ContactsInvitePressed extends ContactsEvent {
+  const ContactsInvitePressed(this.phone);
+
+  final String phone;
+
+  @override
+  List<Object?> get props => [phone];
+}
+
 class ContactsClearMessage extends ContactsEvent {
   const ContactsClearMessage();
 }

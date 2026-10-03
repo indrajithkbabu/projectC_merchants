@@ -8,6 +8,7 @@ class StoreMember extends Equatable {
     this.firstName,
     this.lastName,
     this.localName,
+    this.hasStore,
   });
 
   final String userId;
@@ -18,6 +19,14 @@ class StoreMember extends Equatable {
 
   /// Device contact display name when catalog first/last are empty.
   final String? localName;
+
+  /// Explicit “owns a store” from API when present (`hasStore` / `ownStoreId`).
+  /// Null means the server did not send it — client may fall back to [signedUp].
+  final bool? hasStore;
+
+  /// Best available “created a store / on platform with store” signal without
+  /// an extra API: prefer [hasStore], else [signedUp].
+  bool get isStoreCreator => hasStore ?? signedUp;
 
   String get displayName {
     final first = firstName?.trim() ?? '';
@@ -39,6 +48,8 @@ class StoreMember extends Equatable {
     String? lastName,
     bool? signedUp,
     String? localName,
+    bool? hasStore,
+    bool clearHasStore = false,
   }) {
     return StoreMember(
       userId: userId ?? this.userId,
@@ -47,16 +58,27 @@ class StoreMember extends Equatable {
       lastName: lastName ?? this.lastName,
       signedUp: signedUp ?? this.signedUp,
       localName: localName ?? this.localName,
+      hasStore: clearHasStore ? null : (hasStore ?? this.hasStore),
     );
   }
 
   factory StoreMember.fromJson(Map<String, dynamic> json) {
+    bool? hasStore;
+    if (json.containsKey('hasStore')) {
+      hasStore = json['hasStore'] as bool?;
+    } else {
+      final ownStoreId = json['ownStoreId'] ?? json['storeId'];
+      if (ownStoreId is String && ownStoreId.trim().isNotEmpty) {
+        hasStore = true;
+      }
+    }
     return StoreMember(
       userId: json['userId'] as String? ?? '',
       phone: json['phone'] as String? ?? '',
       firstName: json['firstName'] as String?,
       lastName: json['lastName'] as String?,
       signedUp: json['signedUp'] as bool? ?? false,
+      hasStore: hasStore,
     );
   }
 
@@ -68,6 +90,7 @@ class StoreMember extends Equatable {
     lastName,
     signedUp,
     localName,
+    hasStore,
   ];
 }
 

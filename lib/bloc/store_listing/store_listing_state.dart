@@ -27,7 +27,9 @@ class StoreListingState extends Equatable {
     return allStores.where((store) {
       return store.name.toLowerCase().contains(q) ||
           store.handle.toLowerCase().contains(q) ||
-          store.storeLink.toLowerCase().contains(q);
+          store.phone.toLowerCase().contains(q) ||
+          store.contactName.toLowerCase().contains(q) ||
+          store.listingSubtitle.toLowerCase().contains(q);
     }).toList();
   }
 

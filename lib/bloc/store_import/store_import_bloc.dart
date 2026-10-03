@@ -216,6 +216,19 @@ class StoreImportBloc extends Bloc<StoreImportEvent, StoreImportState> {
   }
 
   Future<void> _probeListings(Emitter<StoreImportState> emit) async {
+    final ownId = _session.ownStoreId;
+    if (ownId == null || ownId.isEmpty) {
+      emit(
+        state.copyWith(
+          isLoadingTargets: false,
+          selectedIds: const {},
+          clearDestination: true,
+          errorMessage: 'Join or create a store before importing catalogues.',
+        ),
+      );
+      return;
+    }
+
     final products = state.sourceStore.products;
     if (products.isEmpty) {
       emit(
@@ -241,7 +254,7 @@ class StoreImportBloc extends Bloc<StoreImportEvent, StoreImportState> {
 
       for (final (listingId, targets) in results) {
         listingTargets[listingId] = targets;
-        availability[listingId] = _availabilityFor(targets);
+        availability[listingId] = listingAvailabilityFor(targets);
       }
 
       final importable =
@@ -298,20 +311,6 @@ class StoreImportBloc extends Bloc<StoreImportEvent, StoreImportState> {
         ),
       );
     }
-  }
-
-  ListingImportAvailability _availabilityFor(List<ImportTarget> targets) {
-    if (targets.isEmpty) return ListingImportAvailability.unavailable;
-    if (targets.any((t) => t.canRequest)) {
-      return ListingImportAvailability.available;
-    }
-    if (targets.any((t) => t.pending)) {
-      return ListingImportAvailability.pending;
-    }
-    if (targets.any((t) => t.alreadyAdded)) {
-      return ListingImportAvailability.alreadyAdded;
-    }
-    return ListingImportAvailability.unavailable;
   }
 
   _DestinationResolution _resolveDestination({

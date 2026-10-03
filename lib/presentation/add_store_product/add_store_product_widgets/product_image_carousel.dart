@@ -10,6 +10,7 @@ class ProductImageCarousel extends StatefulWidget {
     required this.images,
     required this.isPicking,
     this.onDelete,
+    this.onCrop,
     this.onAddPressed,
     this.readOnly = false,
     this.initialIndex = 0,
@@ -19,6 +20,8 @@ class ProductImageCarousel extends StatefulWidget {
   final List<GalleryImageItem> images;
   final bool isPicking;
   final ValueChanged<String>? onDelete;
+  /// Crop the photo currently shown (id of [images][_currentPage]).
+  final ValueChanged<String>? onCrop;
   final VoidCallback? onAddPressed;
   final bool readOnly;
   final int initialIndex;
@@ -74,7 +77,9 @@ class _ProductImageCarouselState extends State<ProductImageCarousel> {
 
     final showActions =
         !widget.readOnly &&
-        (widget.onDelete != null || widget.onAddPressed != null);
+        (widget.onDelete != null ||
+            widget.onCrop != null ||
+            widget.onAddPressed != null);
 
     return Column(
       children: [
@@ -101,6 +106,22 @@ class _ProductImageCarouselState extends State<ProductImageCarousel> {
                     right: 10,
                     child: Row(
                       children: [
+                        if (widget.onCrop != null) ...[
+                          _CircleActionButton(
+                            icon: Icons.edit_outlined,
+                            onTap:
+                                widget.isPicking
+                                    ? null
+                                    : () {
+                                      final id =
+                                          widget.images[_currentPage].id;
+                                      widget.onCrop!(id);
+                                    },
+                          ),
+                          if (widget.onDelete != null ||
+                              widget.onAddPressed != null)
+                            const SizedBox(width: 8),
+                        ],
                         if (widget.onDelete != null)
                           _CircleActionButton(
                             icon: Icons.delete_outline_rounded,

@@ -15,7 +15,9 @@ This file defines what to follow for UI and logic inside `lib/presentation/team/
 - Team screens should handle only team-related presentation and user actions.
 - Keep side effects in listeners and not in widget build methods (including API error snackbars).
 - Avoid coupling team presentation files with unrelated feature logic.
-- Contact list comes from the **device** (`flutter_contacts`), not demo data.
+- Contact list comes from the **device** via shared `DeviceContactNames`
+  (do not call `FlutterContacts.requestPermission` here — races with listing /
+  Contacts). Matching uses the same E.164 + last-10 index as store subtitles.
 - Selected phones are submitted with `POST /stores/:storeId/contacts` in batches of ≤30 (Catalog API). Empty selection / Skip does not call the API.
 - Contact API failure must not block navigation to store listing (store already created).
 

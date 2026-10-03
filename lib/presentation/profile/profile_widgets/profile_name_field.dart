@@ -10,6 +10,9 @@ class ProfileNameField extends StatelessWidget {
     required this.controller,
     required this.onChanged,
     this.textInputAction = TextInputAction.next,
+    this.autofocus = false,
+    this.focusNode,
+    this.fontSize = 22,
   });
 
   final String label;
@@ -17,6 +20,9 @@ class ProfileNameField extends StatelessWidget {
   final TextEditingController controller;
   final ValueChanged<String> onChanged;
   final TextInputAction textInputAction;
+  final bool autofocus;
+  final FocusNode? focusNode;
+  final double fontSize;
 
   @override
   Widget build(BuildContext context) {
@@ -33,13 +39,19 @@ class ProfileNameField extends StatelessWidget {
         const SizedBox(height: 6),
         TextField(
           controller: controller,
+          focusNode: focusNode,
+          autofocus: autofocus,
           onChanged: onChanged,
           textInputAction: textInputAction,
-          style: AppTextStyles.body(fontSize: 28, fontWeight: FontWeight.w400),
+          textCapitalization: TextCapitalization.words,
+          style: AppTextStyles.body(
+            fontSize: fontSize,
+            fontWeight: FontWeight.w400,
+          ),
           decoration: InputDecoration(
             hintText: hintText,
             hintStyle: AppTextStyles.hint(
-              fontSize: 28,
+              fontSize: fontSize,
               fontWeight: FontWeight.w400,
             ),
             enabledBorder: const UnderlineInputBorder(

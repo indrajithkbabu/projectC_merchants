@@ -10,9 +10,10 @@
 1. Phone screen requests OTP; `AuthBloc` stores `challengeId`.
 2. Production OTP: Indian mobile only (`+91`, 10 digits, first digit 6–9). Non-India country changes are rejected; map `UNSUPPORTED_PHONE_COUNTRY`.
 3. OTP verify persists tokens via `CatalogSession` / `SessionStorage`.
+   - Android OTP screen auto-reads SMS via User Consent (`OtpSmsAutofill` / `otp_autofill`) → `AuthOtpAutoFilled` → same verify path as Continue.
 4. Navigation uses `profile.onboarding`:
    - `name_required` → profile setup
-   - `store_optional` → store setup
+   - `store_optional` → store listing (main shell; store create deferred to Profile)
    - `complete` → store listing
 5. Cold start: `AuthSessionRestoreRequested` → restore tokens → `GET /me`.
 6. Account delete (`DELETE /me` from store listing): clear session → `AuthLoggedOut` → `auth_phone_route`.

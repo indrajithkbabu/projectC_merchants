@@ -114,9 +114,30 @@ class ProductSpec extends Equatable {
     return '${_fmt(min)} g';
   }
 
-  /// Fine weight = net × (purity% + wastage%) / 100.
-  /// With no other deduction, net equals gross.
-  String? get fineWeightDisplay {
+  /// Gross weight label, e.g. `55 g` / `10–20 g`.
+  String get grossLabel {
+    final min = grossMin;
+    if (min == null) return '—';
+    if (weightMode == WeightMode.range &&
+        grossMax != null &&
+        grossMax != min) {
+      return '${_fmt(min)}–${_fmt(grossMax!)} g';
+    }
+    return '${_fmt(min)} g';
+  }
+
+  /// True when stone deduction makes net differ from gross.
+  bool get hasDistinctNet {
+    if (grossMin == null || netMin == null) return false;
+    final deduction =
+        deductStone && reduction != null && reduction! > 0 ? reduction! : 0.0;
+    return deduction > 0;
+  }
+
+  /// Fine weight value only (`23.5g`), or null when formula inputs are invalid/zero.
+  ///
+  /// Fine = net × (purity% + wastage%) / 100. Any zero/missing input → no Fine.
+  String? get fineWeightValue {
     if (purityMode != FieldMode.fixed || wastageMode != FieldMode.fixed) {
       return null;
     }
@@ -125,7 +146,12 @@ class ProductSpec extends Equatable {
     );
     final wastage = wastagePercent;
     final minNet = netMin;
-    if (purityValue == null || wastage == null || minNet == null || minNet <= 0) {
+    if (purityValue == null ||
+        purityValue <= 0 ||
+        wastage == null ||
+        wastage <= 0 ||
+        minNet == null ||
+        minNet <= 0) {
       return null;
     }
     final factor = (purityValue + wastage) / 100.0;
@@ -135,9 +161,67 @@ class ProductSpec extends Equatable {
         netMax != null &&
         netMax != minNet) {
       final fineMax = _roundWeight(netMax! * factor);
-      return 'Fine weight : ${_fmt(fineMin)}–${_fmt(fineMax)}g';
+      return '${_fmt(fineMin)}–${_fmt(fineMax)}g';
     }
-    return 'Fine weight : ${_fmt(fineMin)}g';
+    return '${_fmt(fineMin)}g';
+  }
+
+  /// Fine weight = net × (purity% + wastage%) / 100.
+  /// Returns null when purity, wastage, or net is missing/zero (use Net/Gross).
+  String? get fineWeightDisplay {
+    final value = fineWeightValue;
+    if (value == null) return null;
+    return 'Fine weight : $value';
+  }
+
+  /// Compact primary weight for details chrome: Fine → Net → Gross.
+  ({String label, String value})? get primaryWeightDisplay {
+    final fine = fineWeightValue;
+    if (fine != null) {
+      return (label: 'Fine', value: fine);
+    }
+    if (hasDistinctNet) {
+      final net = netLabel.trim();
+      if (net.isNotEmpty && net != '—') {
+        return (label: 'Net', value: net.replaceAll(' ', ''));
+      }
+    }
+    final gross = grossLabel.trim();
+    if (gross.isNotEmpty && gross != '—') {
+      return (label: 'Gross', value: gross.replaceAll(' ', ''));
+    }
+    final net = netLabel.trim();
+    if (net.isNotEmpty && net != '—') {
+      return (label: 'Net', value: net.replaceAll(' ', ''));
+    }
+    return null;
+  }
+
+  /// Expandable details under the primary weight (purity / wastage / size).
+  List<String> get weightDetailLines {
+    final lines = <String>[];
+    if (purityMode == FieldMode.varied) {
+      lines.add('Purity Varied');
+    } else if (purity != null && purity!.trim().isNotEmpty) {
+      var p = purity!.trim();
+      if (p.endsWith('%')) p = p.substring(0, p.length - 1).trim();
+      lines.add('Purity $p');
+    }
+    if (wastageMode == FieldMode.fixed && wastagePercent != null) {
+      lines.add('Wastage $wastagePercent%');
+    } else if (wastageMode == FieldMode.varied) {
+      lines.add('Wastage Varied');
+    }
+    if (sizeMode == SizeMode.free) {
+      lines.add('Free Size');
+    } else if (sizeMode == SizeMode.varied) {
+      lines.add('Size Varied');
+    } else if (sizeMode == SizeMode.fixed && sizeValue != null) {
+      final unit =
+          sizeUnit == SizeUnit.custom ? customUnit.trim() : sizeUnit.name;
+      lines.add('Size $sizeValue $unit'.trim());
+    }
+    return lines;
   }
 
   bool get isValid {

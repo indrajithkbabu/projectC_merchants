@@ -8,6 +8,7 @@ class StoreProduct extends Equatable {
     required this.tags,
     required this.imagePaths,
     this.photoAssetIds = const [],
+    this.imageThumbhashes = const [],
     this.canEdit = false,
     this.canDelete = false,
     this.toneIndex = 0,
@@ -22,6 +23,9 @@ class StoreProduct extends Equatable {
 
   /// Parallel to [imagePaths] when the API returns member photo ids.
   final List<String> photoAssetIds;
+
+  /// Parallel to [imagePaths] — base64 ThumbHash placeholders when present.
+  final List<String> imageThumbhashes;
   final bool canEdit;
   final bool canDelete;
   final int toneIndex;
@@ -36,6 +40,12 @@ class StoreProduct extends Equatable {
 
   String? get primaryImagePath => imagePaths.isEmpty ? null : imagePaths.first;
 
+  String? thumbhashAt(int index) {
+    if (index < 0 || index >= imageThumbhashes.length) return null;
+    final value = imageThumbhashes[index].trim();
+    return value.isEmpty ? null : value;
+  }
+
   DateTime get addedDate =>
       DateTime(createdAt.year, createdAt.month, createdAt.day);
 
@@ -46,6 +56,7 @@ class StoreProduct extends Equatable {
     List<String>? tags,
     List<String>? imagePaths,
     List<String>? photoAssetIds,
+    List<String>? imageThumbhashes,
     bool? canEdit,
     bool? canDelete,
     int? toneIndex,
@@ -58,6 +69,7 @@ class StoreProduct extends Equatable {
       tags: tags ?? this.tags,
       imagePaths: imagePaths ?? this.imagePaths,
       photoAssetIds: photoAssetIds ?? this.photoAssetIds,
+      imageThumbhashes: imageThumbhashes ?? this.imageThumbhashes,
       canEdit: canEdit ?? this.canEdit,
       canDelete: canDelete ?? this.canDelete,
       toneIndex: toneIndex ?? this.toneIndex,
@@ -73,6 +85,7 @@ class StoreProduct extends Equatable {
       'tags': tags,
       'imagePaths': imagePaths,
       'photoAssetIds': photoAssetIds,
+      'imageThumbhashes': imageThumbhashes,
       'canEdit': canEdit,
       'canDelete': canDelete,
       'toneIndex': toneIndex,
@@ -84,6 +97,7 @@ class StoreProduct extends Equatable {
     final rawTags = map['tags'];
     final rawPaths = map['imagePaths'];
     final rawAssetIds = map['photoAssetIds'];
+    final rawThumbhashes = map['imageThumbhashes'];
     final rawCreatedAt = map['createdAt'];
     return StoreProduct(
       id:
@@ -102,6 +116,10 @@ class StoreProduct extends Equatable {
       photoAssetIds:
           rawAssetIds is List
               ? rawAssetIds.map((e) => e.toString().trim()).toList()
+              : const [],
+      imageThumbhashes:
+          rawThumbhashes is List
+              ? rawThumbhashes.map((e) => e.toString()).toList()
               : const [],
       canEdit: map['canEdit'] == true,
       canDelete: map['canDelete'] == true,
@@ -165,6 +183,7 @@ class StoreProduct extends Equatable {
     tags,
     imagePaths,
     photoAssetIds,
+    imageThumbhashes,
     canEdit,
     canDelete,
     toneIndex,

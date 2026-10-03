@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:project_c/bloc/add_store_product/add_store_product_bloc.dart';
 import 'package:project_c/helper/app_padding.dart';
 import 'package:project_c/helper/colors.dart';
@@ -12,6 +13,31 @@ import 'package:project_c/presentation/add_store_product/add_store_product_widge
 
 class AddProductGalleryRoute extends StatelessWidget {
   const AddProductGalleryRoute({super.key});
+
+  Future<void> _importFromDevice(BuildContext context) async {
+    final bloc = context.read<AddStoreProductBloc>();
+    if (bloc.state.isPickingImages) return;
+
+    final picker = ImagePicker();
+    List<String> rawPaths = [];
+    try {
+      final photos = await picker.pickMultiImage(
+        imageQuality: 85,
+        maxWidth: 1920,
+        maxHeight: 1920,
+      );
+      rawPaths = [for (final photo in photos) photo.path];
+    } catch (_) {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Unable to open gallery right now.')),
+      );
+      return;
+    }
+    if (!context.mounted || rawPaths.isEmpty) return;
+    // Land on gallery selection; crop/edit is optional later on the title form.
+    bloc.add(AddStoreProductImagesAppended(rawPaths));
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -108,9 +134,7 @@ class AddProductGalleryRoute extends StatelessWidget {
                         onTap:
                             state.isPickingImages
                                 ? null
-                                : () => context.read<AddStoreProductBloc>().add(
-                                  const AddStoreProductPickFromDevicePressed(),
-                                ),
+                                : () => _importFromDevice(context),
                         child: Text(
                           'Import',
                           style: AppTextStyles.body(

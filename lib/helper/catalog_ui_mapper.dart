@@ -12,6 +12,7 @@ class CatalogUiMapper {
     List<StoreProduct> products = const [],
     int avatarColor = 0xFF2AABEE,
   }) {
+    final urls = store.showcaseImageUrls;
     return StoreChannel(
       id: store.id,
       name: store.name,
@@ -19,11 +20,15 @@ class CatalogUiMapper {
       avatarColor: avatarColor,
       products: products,
       isOwn: store.isOwn,
+      coverImageUrl: store.coverImageUrl,
+      imageUrls: urls,
+      phone: store.phone,
     );
   }
 
   static StoreProduct summaryToProduct(CollectionSummary summary) {
     final coverId = summary.cover.id?.trim() ?? '';
+    final coverHash = summary.cover.thumbhash?.trim() ?? '';
     return StoreProduct(
       id: summary.id,
       title: summary.name,
@@ -36,6 +41,7 @@ class CatalogUiMapper {
       imagePaths:
           summary.cover.url.isEmpty ? const [] : [summary.cover.url],
       photoAssetIds: coverId.isEmpty ? const [] : [coverId],
+      imageThumbhashes: coverHash.isEmpty ? const [] : [coverHash],
       canEdit: summary.permissions?.edit ?? false,
       canDelete: summary.permissions?.delete ?? false,
       toneIndex: summary.id.hashCode.abs() % 4,
@@ -56,6 +62,7 @@ class CatalogUiMapper {
       ],
       imagePaths: photos.map((p) => p.url).toList(),
       photoAssetIds: photos.map((p) => p.id?.trim() ?? '').toList(),
+      imageThumbhashes: photos.map((p) => p.thumbhash?.trim() ?? '').toList(),
       canEdit: detail.permissions?.edit ?? false,
       canDelete: detail.permissions?.delete ?? false,
       toneIndex: detail.id.hashCode.abs() % 4,

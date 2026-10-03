@@ -15,13 +15,18 @@ This file defines what to follow for UI and logic inside `lib/presentation/store
 - Keep side effects in listeners (navigation + error snackbars).
 - Keep external domain logic outside these presentation files.
 - `StoreImportBloc` probes `GET /import-targets` **per listing** on start. Already-added / pending products are disabled; only importable ones are pre-selected. Destination is the intersection of requestable targets across the current selection. `POST /import-requests` runs only for selected importable listings.
-- Own-store inbox: `ImportRequestsBloc` lists `incoming` + `outgoing` via `GET /stores/:id/import-requests`. UI tabs: **Incoming** / **Sent**. Incoming pending → Accept (`approved`) / Reject (`rejected`) only (API `decision` allowlist). Sent pending is wait-only.
+- Own-store inbox: Profile tab → `store_import_requests_route` (not store
+  profile app bar). `ImportRequestsBloc` lists `incoming` + `outgoing` via
+  `GET /stores/:id/import-requests`. UI tabs: **Incoming** / **Sent**. Incoming
+  pending → Accept (`approved`) / Reject (`rejected`) only (API `decision`
+  allowlist). Sent pending is wait-only. Cold load uses
+  `ImportRequestsListShimmer` (tile-shaped skeleton) instead of a spinner.
 
 ## Route and Navigation Notes
 - Maintain route mappings via centralized navigation route files.
 - Use shared Cupertino-style transitions across this flow.
 - Select → pending → approved; errors surface via snackbar listeners on select/pending.
-- Own store profile inbox → `store_import_requests_route`.
+- Own store profile inbox → Profile tab → `store_import_requests_route`.
 - Pending/approved “Back to my store” / “View my store” use `CatalogSession.profile.ownStore` (real store id), not `MerchantStoreSession.asChannel`.
 
 ## Folder Scope

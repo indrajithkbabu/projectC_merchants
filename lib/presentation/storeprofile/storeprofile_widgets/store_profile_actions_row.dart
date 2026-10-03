@@ -8,15 +8,18 @@ class StoreProfileActionsRow extends StatelessWidget {
     required this.onAddProducts,
     required this.onImport,
     this.isOwnStore = true,
+    this.canImport = true,
   });
 
   final VoidCallback onAddProducts;
   final VoidCallback onImport;
   final bool isOwnStore;
+  final bool canImport;
 
   @override
   Widget build(BuildContext context) {
     if (!isOwnStore) {
+      if (!canImport) return const SizedBox.shrink();
       return SizedBox(
         width: double.infinity,
         child: _ActionButton(
@@ -38,15 +41,17 @@ class StoreProfileActionsRow extends StatelessWidget {
             onTap: onAddProducts,
           ),
         ),
-        const SizedBox(width: 10),
-        Expanded(
-          child: _ActionButton(
-            label: 'Import',
-            icon: Icons.file_download_outlined,
-            isPrimary: false,
-            onTap: onImport,
+        if (canImport) ...[
+          const SizedBox(width: 10),
+          Expanded(
+            child: _ActionButton(
+              label: 'Import',
+              icon: Icons.file_download_outlined,
+              isPrimary: false,
+              onTap: onImport,
+            ),
           ),
-        ),
+        ],
       ],
     );
   }

@@ -56,7 +56,10 @@ class _ProductDetailsImageCarouselState
                     if (!ProductImagePaths.isDisplayable(path)) {
                       return _Placeholder(tone: widget.product.toneIndex);
                     }
-                    return ProductMediaImage(path: path);
+                    return ProductMediaImage(
+                      path: path,
+                      thumbhash: widget.product.thumbhashAt(index),
+                    );
                   },
                 ),
                 if (paths.length > 1)
@@ -154,6 +157,33 @@ class _Placeholder extends StatelessWidget {
   }
 }
 
+class ProductDetailsCategoryPill extends StatelessWidget {
+  const ProductDetailsCategoryPill({super.key, required this.label});
+
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    final text = label.trim();
+    if (text.isEmpty) return const SizedBox.shrink();
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      decoration: BoxDecoration(
+        color: Colors.black.withValues(alpha: 0.35),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Text(
+        text,
+        style: AppTextStyles.caption(
+          fontSize: 11,
+          fontWeight: FontWeight.w600,
+          color: AppColors.textOnPrimary,
+        ),
+      ),
+    );
+  }
+}
+
 class ProductDetailsTagChip extends StatelessWidget {
   const ProductDetailsTagChip({super.key, required this.label});
 
@@ -239,6 +269,211 @@ class ProductDetailsStoreTile extends StatelessWidget {
               color: AppColors.textSecondary,
             ),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Horizontal thumbnail strip for product details ("Preview all").
+class ProductDetailsThumbStrip extends StatelessWidget {
+  const ProductDetailsThumbStrip({
+    super.key,
+    required this.paths,
+    required this.activeIndex,
+    required this.controller,
+    required this.onTapIndex,
+  });
+
+  final List<String?> paths;
+  final int activeIndex;
+  final ScrollController controller;
+  final ValueChanged<int> onTapIndex;
+
+  @override
+  Widget build(BuildContext context) {
+    if (paths.length <= 1) return const SizedBox.shrink();
+    return SizedBox(
+      height: 72,
+      child: Center(
+        child: ListView.separated(
+          controller: controller,
+          shrinkWrap: true,
+          scrollDirection: Axis.horizontal,
+          itemCount: paths.length,
+          separatorBuilder: (_, __) => const SizedBox(width: 8),
+          itemBuilder: (context, index) {
+            final isActive = index == activeIndex;
+            final path = paths[index];
+            return GestureDetector(
+              onTap: () => onTapIndex(index),
+              child: Container(
+                width: 64,
+                clipBehavior: Clip.antiAlias,
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(
+                    color:
+                        isActive
+                            ? AppColors.primary
+                            : Colors.white.withValues(alpha: 0.28),
+                    width: isActive ? 2 : 1,
+                  ),
+                ),
+                child:
+                    path == null ||
+                            path.isEmpty ||
+                            !ProductImagePaths.isDisplayable(path)
+                        ? ColoredBox(
+                          color: AppColors.primary.withValues(alpha: 0.35),
+                          child: const Center(
+                            child: Icon(
+                              Icons.diamond_outlined,
+                              size: 22,
+                              color: AppColors.textOnPrimary,
+                            ),
+                          ),
+                        )
+                        : ProductMediaImage(path: path, fit: BoxFit.cover),
+              ),
+            );
+          },
+        ),
+      ),
+    );
+  }
+}
+
+/// Full-bleed photo with pinch-zoom / pan that cooperates with a parent
+/// [PageView]: page swipe when at 1×, pan only while zoomed.
+class ProductDetailsZoomablePhoto extends StatefulWidget {
+  const ProductDetailsZoomablePhoto({
+    super.key,
+    required this.path,
+    required this.onTap,
+    required this.onZoomChanged,
+    this.isActive = true,
+  });
+
+  final String path;
+  final VoidCallback onTap;
+  final ValueChanged<bool> onZoomChanged;
+
+  /// When this page is no longer the active [PageView] page, zoom resets.
+  final bool isActive;
+
+  @override
+  State<ProductDetailsZoomablePhoto> createState() =>
+      _ProductDetailsZoomablePhotoState();
+}
+
+class _ProductDetailsZoomablePhotoState
+    extends State<ProductDetailsZoomablePhoto>
+    with SingleTickerProviderStateMixin {
+  static const _zoomEpsilon = 1.05;
+
+  late final TransformationController _transform;
+  late final AnimationController _resetController;
+  Animation<Matrix4>? _resetAnimation;
+  bool _zoomed = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _transform = TransformationController();
+    _transform.addListener(_onTransformChanged);
+    _resetController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 180),
+    )..addListener(() {
+      final animation = _resetAnimation;
+      if (animation == null) return;
+      _transform.value = animation.value;
+    });
+  }
+
+  @override
+  void dispose() {
+    if (_zoomed) widget.onZoomChanged(false);
+    _resetController.dispose();
+    _transform.removeListener(_onTransformChanged);
+    _transform.dispose();
+    super.dispose();
+  }
+
+  @override
+  void didUpdateWidget(covariant ProductDetailsZoomablePhoto oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.isActive && !widget.isActive && _zoomed) {
+      _transform.value = Matrix4.identity();
+    }
+  }
+
+  void _onTransformChanged() {
+    final zoomed = _transform.value.getMaxScaleOnAxis() > _zoomEpsilon;
+    if (zoomed == _zoomed) return;
+    _zoomed = zoomed;
+    widget.onZoomChanged(zoomed);
+    if (mounted) setState(() {});
+  }
+
+  void _animateToIdentity() {
+    _resetAnimation = Matrix4Tween(
+      begin: _transform.value,
+      end: Matrix4.identity(),
+    ).animate(
+      CurvedAnimation(parent: _resetController, curve: Curves.easeOut),
+    );
+    _resetController.forward(from: 0);
+  }
+
+  void _onDoubleTap() {
+    if (_zoomed) {
+      _animateToIdentity();
+      return;
+    }
+    // Zoom toward center (~2.2×) for a quick inspect gesture.
+    final size = MediaQuery.sizeOf(context);
+    const scale = 2.2;
+    final dx = size.width * (1 - scale) / 2;
+    final dy = size.height * (1 - scale) / 2;
+    final next = Matrix4.identity()
+      ..translate(dx, dy)
+      ..scale(scale);
+    _resetAnimation = Matrix4Tween(
+      begin: _transform.value,
+      end: next,
+    ).animate(
+      CurvedAnimation(parent: _resetController, curve: Curves.easeOut),
+    );
+    _resetController.forward(from: 0);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final size = MediaQuery.sizeOf(context);
+    return InteractiveViewer(
+      transformationController: _transform,
+      minScale: 1,
+      maxScale: 4,
+      // Let PageView own horizontal swipes at 1×; pan only while zoomed.
+      panEnabled: _zoomed,
+      scaleEnabled: true,
+      clipBehavior: Clip.hardEdge,
+      boundaryMargin: _zoomed ? const EdgeInsets.all(64) : EdgeInsets.zero,
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: widget.onTap,
+        onDoubleTap: _onDoubleTap,
+        child: SizedBox(
+          width: size.width,
+          height: size.height,
+          child: Center(
+            child: ProductMediaImage(
+              path: widget.path,
+              fit: BoxFit.contain,
+            ),
+          ),
         ),
       ),
     );

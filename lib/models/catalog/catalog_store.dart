@@ -23,6 +23,7 @@ class CatalogStore extends Equatable {
     required this.slug,
     this.relationship,
     this.legalName,
+    this.phone = '',
     this.images = const [],
     this.imageUrls = const [],
     this.coverImage,
@@ -33,6 +34,10 @@ class CatalogStore extends Equatable {
   final String slug;
   final StoreRelationship? relationship;
   final String? legalName;
+
+  /// Owner / store contact phone from `/home` (E.164 when provided).
+  final String phone;
+
   final List<CatalogPhoto> images;
   final List<String> imageUrls;
   final CatalogPhoto? coverImage;
@@ -55,6 +60,26 @@ class CatalogStore extends Equatable {
     return '';
   }
 
+  /// Deduped showcase URLs for listing avatar + preview.
+  List<String> get showcaseImageUrls {
+    final seen = <String>{};
+    final out = <String>[];
+    void add(String raw) {
+      final url = raw.trim();
+      if (url.isEmpty || !seen.add(url)) return;
+      out.add(url);
+    }
+
+    add(coverImage?.url ?? '');
+    for (final url in imageUrls) {
+      add(url);
+    }
+    for (final photo in images) {
+      add(photo.url);
+    }
+    return out;
+  }
+
   factory CatalogStore.fromJson(Map<String, dynamic> json) {
     final root =
         json['store'] is Map<String, dynamic>
@@ -69,8 +94,10 @@ class CatalogStore extends Equatable {
     final images =
         rawImages is List
             ? rawImages
-                .whereType<Map<String, dynamic>>()
-                .map(CatalogPhoto.fromJson)
+                .whereType<Map>()
+                .map(
+                  (e) => CatalogPhoto.fromJson(Map<String, dynamic>.from(e)),
+                )
                 .toList()
             : const <CatalogPhoto>[];
 
@@ -83,13 +110,7 @@ class CatalogStore extends Equatable {
                 .where((e) => e.isNotEmpty)
                 .toList();
 
-    final rawCover = root['coverImage'];
-    CatalogPhoto? coverImage;
-    if (rawCover is Map<String, dynamic>) {
-      coverImage = CatalogPhoto.fromJson(rawCover);
-    } else if (images.isNotEmpty) {
-      coverImage = images.first;
-    }
+    final coverImage = _parseCoverPhoto(root, images);
 
     return CatalogStore(
       id: root['id'] as String? ?? '',
@@ -97,10 +118,50 @@ class CatalogStore extends Equatable {
       slug: root['slug'] as String? ?? '',
       relationship: relationship,
       legalName: root['legalName'] as String?,
+      phone: _firstString(root, const [
+        'phone',
+        'phoneNumber',
+        'phonenumber',
+      ]),
       images: images,
       imageUrls: imageUrls,
       coverImage: coverImage,
     );
+  }
+
+  static String _firstString(Map<String, dynamic> root, List<String> keys) {
+    for (final key in keys) {
+      final value = root[key];
+      if (value is String && value.trim().isNotEmpty) return value.trim();
+    }
+    return '';
+  }
+
+  static CatalogPhoto? _parseCoverPhoto(
+    Map<String, dynamic> root,
+    List<CatalogPhoto> images,
+  ) {
+    CatalogPhoto? fromValue(Object? raw) {
+      if (raw is Map) {
+        return CatalogPhoto.fromJson(Map<String, dynamic>.from(raw));
+      }
+      if (raw is String && raw.trim().isNotEmpty) {
+        return CatalogPhoto(url: raw.trim(), width: 0, height: 0);
+      }
+      return null;
+    }
+
+    final fromCover = fromValue(root['coverImage']);
+    if (fromCover != null && fromCover.url.trim().isNotEmpty) return fromCover;
+
+    final fromStoreImage =
+        fromValue(root['storeImage']) ?? fromValue(root['storeimage']);
+    if (fromStoreImage != null && fromStoreImage.url.trim().isNotEmpty) {
+      return fromStoreImage;
+    }
+
+    if (images.isNotEmpty) return images.first;
+    return null;
   }
 
   Map<String, dynamic> toJson() => {
@@ -109,6 +170,7 @@ class CatalogStore extends Equatable {
     'slug': slug,
     if (relationship != null) 'relationship': relationship!.name,
     if (legalName != null) 'legalName': legalName,
+    if (phone.isNotEmpty) 'phone': phone,
     'images':
         images
             .map(
@@ -142,9 +204,12 @@ class CatalogStore extends Equatable {
       'slug': slug,
       if (relationship != null) 'relationship': relationship!.name,
       if (legalName != null) 'legalName': legalName,
+      if (phone.isNotEmpty) 'phone': phone,
       'images': root['images'],
       'imageUrls': root['imageUrls'],
       'coverImage': root['coverImage'],
+      'storeImage': root['storeImage'],
+      'storeimage': root['storeimage'],
     });
     return copyWith(
       images: merged.images,
@@ -160,6 +225,7 @@ class CatalogStore extends Equatable {
     String? slug,
     StoreRelationship? relationship,
     String? legalName,
+    String? phone,
     List<CatalogPhoto>? images,
     List<String>? imageUrls,
     CatalogPhoto? coverImage,
@@ -171,6 +237,7 @@ class CatalogStore extends Equatable {
       slug: slug ?? this.slug,
       relationship: relationship ?? this.relationship,
       legalName: legalName ?? this.legalName,
+      phone: phone ?? this.phone,
       images: images ?? this.images,
       imageUrls: imageUrls ?? this.imageUrls,
       coverImage: clearCoverImage ? null : (coverImage ?? this.coverImage),
@@ -184,6 +251,7 @@ class CatalogStore extends Equatable {
     slug,
     relationship,
     legalName,
+    phone,
     images,
     imageUrls,
     coverImage,

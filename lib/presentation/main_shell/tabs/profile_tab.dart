@@ -2,17 +2,32 @@ import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:project_c/bloc/account_profile/account_profile_bloc.dart';
+import 'package:project_c/di/service_locator.dart';
+import 'package:project_c/helper/app_log.dart';
 import 'package:project_c/helper/app_padding.dart';
 import 'package:project_c/helper/colors.dart';
 import 'package:project_c/helper/text_styles.dart';
 import 'package:project_c/helper/widgets/floating_bottom_nav_bar.dart';
+import 'package:project_c/helper/widgets/primary_button.dart';
 import 'package:project_c/helper/widgets/screen_wrapper.dart';
 import 'package:project_c/models/catalog/catalog_profile.dart';
 import 'package:project_c/navigation/routes.dart';
 import 'package:project_c/presentation/profile/profile_widgets/profile_photo_picker.dart';
+import 'package:project_c/services/store_products_prefetcher.dart';
+import 'package:project_c/webservice/import/import_repository.dart';
 
-class ProfileTab extends StatelessWidget {
+class ProfileTab extends StatefulWidget {
   const ProfileTab({super.key});
+
+  @override
+  State<ProfileTab> createState() => _ProfileTabState();
+}
+
+class _ProfileTabState extends State<ProfileTab> {
+  static const _tag = 'ProfileTab';
+
+  int _pendingImportCount = 0;
+  String? _countStoreId;
 
   String _initials(CatalogProfile? profile) {
     final first = profile?.firstName?.trim() ?? '';
@@ -32,6 +47,52 @@ class ProfileTab extends StatelessWidget {
     final bloc = context.read<AccountProfileBloc>();
     bloc.add(const AccountProfileRefreshed());
     await bloc.stream.firstWhere((s) => !s.isRefreshing);
+    final storeId = bloc.state.profile?.ownStore?.id.trim() ?? '';
+    if (storeId.isNotEmpty) {
+      await _loadImportRequestCount(storeId);
+    }
+  }
+
+  Future<void> _loadImportRequestCount(String storeId) async {
+    final id = storeId.trim();
+    if (id.isEmpty) return;
+    try {
+      final repo = ServiceLocator.get<ImportRepository>();
+      var pending = 0;
+      String? cursor;
+      do {
+        final page = await repo.listStoreRequests(
+          storeId: id,
+          direction: 'incoming',
+          limit: 50,
+          cursor: cursor,
+        );
+        pending += page.items.where((r) => r.isPending).length;
+        cursor = page.nextCursor;
+      } while (cursor != null && cursor.isNotEmpty);
+      if (!mounted) return;
+      setState(() {
+        _pendingImportCount = pending;
+        _countStoreId = id;
+      });
+    } catch (e) {
+      AppLog.e(_tag, 'Import request count failed', e);
+    }
+  }
+
+  Future<void> _openImportRequests({
+    required String storeId,
+    required String storeName,
+  }) async {
+    await Navigator.of(context).pushNamed(
+      Routes.storeImportRequestsRoute,
+      arguments: <String, Object?>{
+        'storeId': storeId,
+        'storeName': storeName,
+      },
+    );
+    if (!mounted) return;
+    await _loadImportRequestCount(storeId);
   }
 
   Future<void> _showImageOptions(
@@ -130,12 +191,38 @@ class ProfileTab extends StatelessWidget {
             );
           },
         ),
+        BlocListener<AccountProfileBloc, AccountProfileState>(
+          listenWhen:
+              (prev, curr) =>
+                  prev.profile?.ownStore?.id != curr.profile?.ownStore?.id,
+          listener: (context, state) {
+            final storeId = state.profile?.ownStore?.id.trim() ?? '';
+            if (storeId.isEmpty) {
+              setState(() {
+                _pendingImportCount = 0;
+                _countStoreId = null;
+              });
+              return;
+            }
+            _loadImportRequestCount(storeId);
+          },
+        ),
       ],
       child: BlocBuilder<AccountProfileBloc, AccountProfileState>(
         builder: (context, state) {
           final profile = state.profile;
           final ownStore = profile?.ownStore;
           final imageUrl = profile?.effectiveProfileImageUrl ?? '';
+          final storeId = ownStore?.id.trim() ?? '';
+          if (storeId.isNotEmpty &&
+              storeId != _countStoreId &&
+              _countStoreId == null) {
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              if (!mounted) return;
+              _loadImportRequestCount(storeId);
+            });
+          }
+
           return RefreshIndicator(
             color: AppColors.primary,
             onRefresh: () => _pullToRefresh(context),
@@ -201,11 +288,21 @@ class ProfileTab extends StatelessWidget {
                   ),
                 ),
                 if (ownStore != null) ...[
-                  const SizedBox(height: 24),
+                  const SizedBox(height: 16),
+                  _ImportRequestsTile(
+                    pendingCount: _pendingImportCount,
+                    onTap:
+                        () => _openImportRequests(
+                          storeId: ownStore.id,
+                          storeName: ownStore.name,
+                        ),
+                  ),
+                  const SizedBox(height: 16),
                   SizedBox(
                     width: double.infinity,
                     child: FilledButton(
                       onPressed: () {
+                        StoreProductsPrefetcher.instance.prefetch(ownStore.id);
                         Navigator.of(context).pushNamed(
                           Routes.storeProfileRoute,
                           arguments: <String, Object?>{
@@ -230,6 +327,21 @@ class ProfileTab extends StatelessWidget {
                       ),
                     ),
                   ),
+                ] else ...[
+                  const SizedBox(height: 24),
+                  Text(
+                    'Create a store to add products and import catalogues from other stores.',
+                    textAlign: TextAlign.center,
+                    style: AppTextStyles.bodySecondary(height: 1.45),
+                  ),
+                  const SizedBox(height: 16),
+                  PrimaryButton(
+                    label: 'Create store',
+                    onPressed:
+                        () => Navigator.of(
+                          context,
+                        ).pushNamed(Routes.storeSetupRoute),
+                  ),
                 ],
               ],
             ),
@@ -241,6 +353,93 @@ class ProfileTab extends StatelessWidget {
 }
 
 enum _ProfileTabPhotoAction { camera, gallery, delete }
+
+class _ImportRequestsTile extends StatelessWidget {
+  const _ImportRequestsTile({
+    required this.pendingCount,
+    required this.onTap,
+  });
+
+  final int pendingCount;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final badge = pendingCount > 99 ? '99+' : '$pendingCount';
+    return Material(
+      color: AppColors.surfaceSecondary,
+      borderRadius: BorderRadius.circular(14),
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(14),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+          child: Row(
+            children: [
+              Container(
+                width: 36,
+                height: 36,
+                decoration: BoxDecoration(
+                  color: AppColors.primary.withValues(alpha: 0.12),
+                  shape: BoxShape.circle,
+                ),
+                child: const Icon(
+                  Icons.inbox_outlined,
+                  size: 20,
+                  color: AppColors.primary,
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Import requests',
+                      style: AppTextStyles.body(fontWeight: FontWeight.w600),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      pendingCount > 0
+                          ? '$pendingCount pending'
+                          : 'Incoming and sent requests',
+                      style: AppTextStyles.caption(),
+                    ),
+                  ],
+                ),
+              ),
+              if (pendingCount > 0)
+                Container(
+                  constraints: const BoxConstraints(minWidth: 22),
+                  height: 22,
+                  padding: const EdgeInsets.symmetric(horizontal: 6),
+                  decoration: BoxDecoration(
+                    color: AppColors.error,
+                    borderRadius: BorderRadius.circular(11),
+                  ),
+                  alignment: Alignment.center,
+                  child: Text(
+                    badge,
+                    style: AppTextStyles.caption(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w700,
+                      color: AppColors.textOnPrimary,
+                      height: 1,
+                    ),
+                  ),
+                )
+              else
+                const Icon(
+                  Icons.chevron_right_rounded,
+                  color: AppColors.textSecondary,
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
 
 class _InfoLine extends StatelessWidget {
   const _InfoLine({required this.value, required this.label});

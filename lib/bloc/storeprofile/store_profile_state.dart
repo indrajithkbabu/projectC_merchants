@@ -5,7 +5,9 @@ class StoreProfileState extends Equatable {
     required this.storeName,
     required this.members,
     this.products = const [],
+    this.productsDetailed = const [],
     this.isOwnStore = true,
+    this.viewerHasOwnStore = true,
     this.storeId = 'my_store',
     this.avatarColor = 0xFF2AABEE,
     this.overrideStoreLink,
@@ -20,12 +22,24 @@ class StoreProfileState extends Equatable {
     this.coverImageUrl = '',
     this.pendingImportRequestCount = 0,
     this.deletingProductId,
+    this.pendingUploads = const [],
+    this.listingAvailability = const {},
   });
 
   final String storeName;
   final List<TeamMember> members;
+
+  /// Cover-only list for the profile grid (stable; no collage morph).
   final List<StoreProduct> products;
+
+  /// Full photo lists after background enrich (gallery / browse). Empty until
+  /// enrich finishes; UI falls back to [products] via [productsForMedia].
+  final List<StoreProduct> productsDetailed;
   final bool isOwnStore;
+
+  /// True when the signed-in user already has a destination store.
+  /// Import CTAs stay hidden until this is true.
+  final bool viewerHasOwnStore;
   final String storeId;
   final int avatarColor;
   final String? overrideStoreLink;
@@ -41,7 +55,17 @@ class StoreProfileState extends Equatable {
   final int pendingImportRequestCount;
   final String? deletingProductId;
 
-  int get productCount => products.length;
+  /// Background create uploads — shimmer placeholders until the API finishes.
+  final List<PendingProductUpload> pendingUploads;
+
+  /// Per-listing import status when viewing another store (Added / Pending).
+  final Map<String, ListingImportAvailability> listingAvailability;
+
+  int get productCount => products.length + pendingUploads.length;
+
+  /// Prefer enriched photo lists when available (gallery / collection browse).
+  List<StoreProduct> get productsForMedia =>
+      productsDetailed.isNotEmpty ? productsDetailed : products;
 
   /// Non-owner teammates (owner is always in GET /members).
   List<TeamMember> get teammates {
@@ -61,6 +85,13 @@ class StoreProfileState extends Equatable {
 
   bool get showImportRequestsBadge => isOwnStore;
 
+  /// Own store always shows Add/Import; other stores only show Import when
+  /// the viewer already has a store to import into.
+  bool get showActionsRow => isOwnStore || viewerHasOwnStore;
+
+  /// Import is allowed only once the viewer has their own store.
+  bool get canImport => viewerHasOwnStore;
+
   String get storeLink =>
       overrideStoreLink ??
       '${storeName.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]+'), '-')}.jewelflow.app';
@@ -69,7 +100,9 @@ class StoreProfileState extends Equatable {
     String? storeName,
     List<TeamMember>? members,
     List<StoreProduct>? products,
+    List<StoreProduct>? productsDetailed,
     bool? isOwnStore,
+    bool? viewerHasOwnStore,
     String? storeId,
     int? avatarColor,
     String? overrideStoreLink,
@@ -84,15 +117,23 @@ class StoreProfileState extends Equatable {
     String? coverImageUrl,
     int? pendingImportRequestCount,
     String? deletingProductId,
+    List<PendingProductUpload>? pendingUploads,
+    Map<String, ListingImportAvailability>? listingAvailability,
     bool clearDeletingProductId = false,
     bool clearInfoMessage = false,
     bool clearError = false,
+    bool clearProductsDetailed = false,
   }) {
     return StoreProfileState(
       storeName: storeName ?? this.storeName,
       members: members ?? this.members,
       products: products ?? this.products,
+      productsDetailed:
+          clearProductsDetailed
+              ? const []
+              : (productsDetailed ?? this.productsDetailed),
       isOwnStore: isOwnStore ?? this.isOwnStore,
+      viewerHasOwnStore: viewerHasOwnStore ?? this.viewerHasOwnStore,
       storeId: storeId ?? this.storeId,
       avatarColor: avatarColor ?? this.avatarColor,
       overrideStoreLink: overrideStoreLink ?? this.overrideStoreLink,
@@ -112,6 +153,8 @@ class StoreProfileState extends Equatable {
           clearDeletingProductId
               ? null
               : (deletingProductId ?? this.deletingProductId),
+      pendingUploads: pendingUploads ?? this.pendingUploads,
+      listingAvailability: listingAvailability ?? this.listingAvailability,
     );
   }
 
@@ -120,7 +163,9 @@ class StoreProfileState extends Equatable {
     storeName,
     members,
     products,
+    productsDetailed,
     isOwnStore,
+    viewerHasOwnStore,
     storeId,
     avatarColor,
     overrideStoreLink,
@@ -135,5 +180,7 @@ class StoreProfileState extends Equatable {
     coverImageUrl,
     pendingImportRequestCount,
     deletingProductId,
+    pendingUploads,
+    listingAvailability,
   ];
 }

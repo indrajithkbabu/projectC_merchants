@@ -9,6 +9,7 @@ import 'package:project_c/helper/catalog_ui_mapper.dart';
 import 'package:project_c/helper/product_image.dart';
 import 'package:project_c/models/catalog/collection_models.dart';
 import 'package:project_c/models/store_product.dart';
+import 'package:project_c/services/catalog_direct_upload_service.dart';
 import 'package:project_c/session/catalog_session.dart';
 import 'package:project_c/webservice/catalog_api_exception.dart';
 import 'package:project_c/webservice/catalog_error_mapper.dart';
@@ -24,12 +25,16 @@ class AddStoreProductBloc
     AddStoreProductState? initialState,
     String? storeId,
     CollectionRepository? collectionRepository,
+    CatalogDirectUploadService? directUploadService,
     CatalogSession? session,
   }) : _imagePicker = imagePicker ?? ImagePicker(),
        _storeId = storeId,
        _collectionRepository =
            collectionRepository ??
            ServiceLocator.get<CollectionRepository>(),
+       _directUpload =
+           directUploadService ??
+           ServiceLocator.get<CatalogDirectUploadService>(),
        _session = session ?? ServiceLocator.get<CatalogSession>(),
        super(
          initialState ??
@@ -52,6 +57,8 @@ class AddStoreProductBloc
     on<AddStoreProductTagRemoved>(_onTagRemoved);
     on<AddStoreProductSuggestedTagTapped>(_onSuggestedTagTapped);
     on<AddStoreProductImageRemoved>(_onImageRemoved);
+    on<AddStoreProductImageReplaced>(_onImageReplaced);
+    on<AddStoreProductImagesAppended>(_onImagesAppended);
     on<AddStoreProductAddMoreImagesPressed>(_onAddMoreImages);
     on<AddStoreProductPublishPressed>(_onPublishPressed);
     on<AddStoreProductClearPublished>(_onClearPublished);
@@ -61,6 +68,7 @@ class AddStoreProductBloc
   final ImagePicker _imagePicker;
   final String? _storeId;
   final CollectionRepository _collectionRepository;
+  final CatalogDirectUploadService _directUpload;
   final CatalogSession _session;
   static const _tag = 'AddStoreProductBloc';
 
@@ -247,6 +255,68 @@ class AddStoreProductBloc
     );
   }
 
+  void _onImageReplaced(
+    AddStoreProductImageReplaced event,
+    Emitter<AddStoreProductState> emit,
+  ) {
+    final path = event.filePath.trim();
+    if (path.isEmpty) return;
+    emit(
+      state.copyWith(
+        galleryItems: [
+          for (final item in state.galleryItems)
+            item.id == event.imageId
+                ? GalleryImageItem(
+                  id: item.id,
+                  filePath: path,
+                  // Clear asset id so edit treats this as a new local upload.
+                  assetId: null,
+                  isPlaceholder: false,
+                )
+                : item,
+        ],
+        clearError: true,
+      ),
+    );
+  }
+
+  void _onImagesAppended(
+    AddStoreProductImagesAppended event,
+    Emitter<AddStoreProductState> emit,
+  ) {
+    final remainingSlots =
+        maxPhotosPerCollection - state.selectedImageIds.length;
+    if (remainingSlots <= 0) {
+      emit(
+        state.copyWith(
+          errorMessage:
+              'You can upload at most $maxPhotosPerCollection photos.',
+        ),
+      );
+      return;
+    }
+
+    final nextItems = List<GalleryImageItem>.from(state.galleryItems);
+    final nextSelected = List<String>.from(state.selectedImageIds);
+    for (final path in event.filePaths.take(remainingSlots)) {
+      final trimmed = path.trim();
+      if (trimmed.isEmpty) continue;
+      final id = 'local_${trimmed.hashCode}_${nextItems.length}';
+      nextItems.add(
+        GalleryImageItem(id: id, filePath: trimmed, isPlaceholder: false),
+      );
+      nextSelected.add(id);
+    }
+    emit(
+      state.copyWith(
+        galleryItems: nextItems,
+        selectedImageIds: nextSelected,
+        isPickingImages: false,
+        clearError: true,
+      ),
+    );
+  }
+
   Future<void> _onAddMoreImages(
     AddStoreProductAddMoreImagesPressed event,
     Emitter<AddStoreProductState> emit,
@@ -367,32 +437,36 @@ class AddStoreProductBloc
       ];
       await _assertPhotoSizes(photoFiles);
 
-      final created = await _collectionRepository.createCollection(
+      final uploadBatch = await _directUpload.prepareAndUpload(
+        storeId: storeId,
+        localPaths: [for (final item in localFiles) item.filePath!],
+      );
+      if (uploadBatch.allFailed) {
+        throw CatalogApiException(
+          statusCode: 400,
+          code: 'NO_VALID_PHOTOS',
+          message: 'None of the photos could be uploaded.',
+        );
+      }
+
+      final created = await _collectionRepository.createCollectionFromUploads(
         storeId: storeId,
         name: state.title.trim(),
-        photoFiles: [photoFiles.first],
+        photos: uploadBatch.successful,
         tag: _apiTag(state.tags),
         description: state.description.trim(),
       );
 
-      var revision = created.revision;
-      final failedPhotos = List<FailedPhoto>.from(created.failedPhotos);
-      const appendBatchSize = 4;
-      for (var i = 1; i < photoFiles.length; i += appendBatchSize) {
-        final end =
-            (i + appendBatchSize < photoFiles.length)
-                ? i + appendBatchSize
-                : photoFiles.length;
-        final batch = photoFiles.sublist(i, end);
-        final appended = await _collectionRepository.updateCollectionWithPhotos(
-          storeId: storeId,
-          listingId: created.id,
-          revision: revision,
-          photoFiles: batch,
-        );
-        revision = appended.revision;
-        failedPhotos.addAll(appended.failedPhotos);
-      }
+      final revision = created.revision;
+      final failedPhotos = [
+        ...created.failedPhotos,
+        for (final name in uploadBatch.failedNames)
+          FailedPhoto(
+            fileName: name,
+            code: 'S3_UPLOAD_FAILED',
+            message: 'Upload failed',
+          ),
+      ];
 
       StoreProduct product;
       try {
@@ -575,17 +649,43 @@ class AddStoreProductBloc
       if (newLocals.isNotEmpty) {
         final photoFiles = [for (final item in newLocals) File(item.filePath!)];
         await _assertPhotoSizes(photoFiles);
-        final added = await _collectionRepository.updateCollectionWithPhotos(
+        final uploadBatch = await _directUpload.prepareAndUpload(
+          storeId: storeId,
+          localPaths: [for (final item in newLocals) item.filePath!],
+        );
+        if (uploadBatch.allFailed) {
+          throw CatalogApiException(
+            statusCode: 400,
+            code: 'NO_VALID_PHOTOS',
+            message: 'None of the new photos could be uploaded.',
+          );
+        }
+        final added = await _collectionRepository.appendUploadedPhotos(
+          storeId: storeId,
+          listingId: listingId,
+          photos: uploadBatch.successful,
+          revision: revision,
+        );
+        revision = added.revision;
+        failedPhotos.addAll(added.failedPhotos);
+        failedPhotos.addAll([
+          for (final name in uploadBatch.failedNames)
+            FailedPhoto(
+              fileName: name,
+              code: 'S3_UPLOAD_FAILED',
+              message: 'Upload failed',
+            ),
+        ]);
+        // Metadata lives on JSON PATCH when photos were only appended.
+        final meta = await _collectionRepository.updateCollection(
           storeId: storeId,
           listingId: listingId,
           revision: revision,
-          photoFiles: photoFiles,
           name: name,
           tag: tag,
           description: description,
         );
-        revision = added.revision;
-        failedPhotos.addAll(added.failedPhotos);
+        revision = meta.revision;
       }
 
       if (removedIds.isNotEmpty) {
