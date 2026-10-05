@@ -12,8 +12,7 @@ import 'package:project_c/helper/widgets/screen_wrapper.dart';
 import 'package:project_c/models/bulk_upload.dart';
 import 'package:project_c/models/pending_product_upload.dart';
 import 'package:project_c/navigation/routes.dart';
-import 'package:project_c/presentation/add_store_product/add_store_product_widgets/bulk_photo_strip.dart';
-import 'package:project_c/presentation/add_store_product/add_store_product_widgets/bulk_photos_preview_sheet.dart';
+import 'package:project_c/presentation/add_store_product/add_store_product_widgets/bulk_photos_ios_preview.dart';
 import 'package:project_c/presentation/add_store_product/add_store_product_widgets/product_form_widgets.dart';
 import 'package:project_c/presentation/add_store_product/add_store_product_widgets/product_spec_form.dart';
 import 'package:project_c/services/product_upload_coordinator.dart';
@@ -31,8 +30,7 @@ class _AddProductGroupRouteState extends State<AddProductGroupRoute> {
   late final TextEditingController _descriptionController;
   late final TextEditingController _tagController;
 
-  /// When true, weight/purity/size form is visible (group-details logic inline).
-  bool _showMoreDetails = false;
+  /// Latest draft from [ProductSpecForm]; drives Continue vs title-only publish.
   ProductSpec? _detailsDraft;
 
   /// Optional description field — collapsed behind a + until expanded.
@@ -46,6 +44,7 @@ class _AddProductGroupRouteState extends State<AddProductGroupRoute> {
     _descriptionController = TextEditingController(text: state.description);
     _tagController = TextEditingController(text: state.tagDraft);
     _showDescription = state.description.trim().isNotEmpty;
+    _detailsDraft = state.groupSpec.isValid ? state.groupSpec : null;
   }
 
   @override
@@ -121,17 +120,11 @@ class _AddProductGroupRouteState extends State<AddProductGroupRoute> {
     return ServiceLocator.get<CatalogSession>().ownStoreId?.trim();
   }
 
-  void _toggleMoreDetails() {
-    setState(() {
-      _showMoreDetails = !_showMoreDetails;
-      if (!_showMoreDetails) {
-        _detailsDraft = null;
-      }
-    });
-  }
+  bool get _detailsValid =>
+      _detailsDraft != null && _detailsDraft!.isValid;
 
   void _onPrimaryPressed(BulkUploadState state) {
-    if (_showMoreDetails) {
+    if (_detailsValid) {
       final spec = _detailsDraft;
       if (spec == null || !spec.isValid) return;
       // Same as former group-details Apply → opens preview for precise/edit/delete.
@@ -213,10 +206,7 @@ class _AddProductGroupRouteState extends State<AddProductGroupRoute> {
         statusBarIconBrightness: Brightness.dark,
         child: BlocBuilder<BulkUploadBloc, BulkUploadState>(
           builder: (context, state) {
-            final detailsValid =
-                _detailsDraft != null && _detailsDraft!.isValid;
-            final canSubmit =
-                state.canContinue && (!_showMoreDetails || detailsValid);
+            final canSubmit = state.canContinue;
 
             return Column(
               children: [
@@ -230,52 +220,81 @@ class _AddProductGroupRouteState extends State<AddProductGroupRoute> {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         const AppBackButton(),
-                        const SizedBox(height: 12),
-                        // Text(
-                        //   'New product · ${state.items.length} photos',
-                        //   style: AppTextStyles.headline(
-                        //     fontSize: 22,
-                        //     fontWeight: FontWeight.w700,
-                        //   ),
-                        // ),
-                        // const SizedBox(height: 16),
-                        BulkPhotoStrip(
-                          paths: [
-                            for (final item in state.items) item.imagePath,
-                          ],
-                          onTap:
-                              (index) => showBulkPhotosPreviewSheet(
-                                context: context,
-                                initialIndex: index,
-                                readOnly: state.isEditMode,
-                              ),
-                        ),
-                        const SizedBox(height: 22),
-                        Text(
-                          'Title',
-                          style: AppTextStyles.label(
-                            fontWeight: FontWeight.w600,
-                            color: AppColors.accent,
-                          ),
-                        ),
-                        TextField(
-                          controller: _titleController,
-                          onChanged:
-                              (value) => context.read<BulkUploadBloc>().add(
-                                BulkUploadTitleChanged(value),
-                              ),
-                          style: AppTextStyles.body(
-                            fontSize: 18,
-                            fontWeight: FontWeight.w500,
-                          ),
-                          decoration: _underlineDecoration(
-                            hint: 'e.g. Bridal ring collection',
-                          ),
-                        ),
-                        const SizedBox(height: 6),
-                        Text(
-                          'Required. Shows under photos in your store.',
-                          style: AppTextStyles.caption(),
+                        const SizedBox(height: 14),
+                        Builder(
+                          builder: (context) {
+                            final previewImages = [
+                              for (final image in state.images)
+                                if (!image.isPlaceholder &&
+                                    (image.filePath?.trim().isNotEmpty ??
+                                        false))
+                                  image,
+                            ];
+                            final primary =
+                                previewImages.isEmpty
+                                    ? null
+                                    : previewImages.first;
+                            return Row(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                ProductPreviewImage(
+                                  item: primary,
+                                  imageCount: previewImages.length,
+                                  onTap:
+                                      primary == null
+                                          ? null
+                                          : () => showBulkPhotosIosPreview(
+                                            context: context,
+                                            initialIndex: 0,
+                                            readOnly: state.isEditMode,
+                                          ),
+                                ),
+                                const SizedBox(width: 14),
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      Text.rich(
+                                        TextSpan(
+                                          text: 'Title',
+                                          style: AppTextStyles.label(
+                                            fontWeight: FontWeight.w600,
+                                            color: AppColors.accent,
+                                          ),
+                                          children: [
+                                            TextSpan(
+                                              text: ' *',
+                                              style: AppTextStyles.label(
+                                                fontWeight: FontWeight.w700,
+                                                color: AppColors.error,
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                      TextField(
+                                        controller: _titleController,
+                                        onChanged:
+                                            (value) => context
+                                                .read<BulkUploadBloc>()
+                                                .add(
+                                                  BulkUploadTitleChanged(value),
+                                                ),
+                                        style: AppTextStyles.body(
+                                          fontSize: 18,
+                                          fontWeight: FontWeight.w500,
+                                        ),
+                                        decoration: _underlineDecoration(
+                                          hint: 'e.g. Bridal ring collection',
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ],
+                            );
+                          },
                         ),
                         const SizedBox(height: 22),
                         Text(
@@ -394,97 +413,65 @@ class _AddProductGroupRouteState extends State<AddProductGroupRoute> {
                           },
                         ),
                         const SizedBox(height: 18),
+                        ProductSpecForm(
+                          initial: state.groupSpec,
+                          subtitle: '',
+                          onChanged: (spec) {
+                            setState(() => _detailsDraft = spec);
+                          },
+                        ),
+                        const SizedBox(height: 14),
                         GestureDetector(
-                          onTap: state.canContinue ? _toggleMoreDetails : null,
-                          child: AnimatedOpacity(
-                            duration: const Duration(milliseconds: 180),
-                            opacity: state.canContinue ? 1 : 0.45,
-                            child: Row(
-                              children: [
-                                Icon(
-                                  _showMoreDetails
-                                      ? Icons.expand_less_rounded
-                                      : Icons.expand_more_rounded,
+                          onTap: _toggleDescription,
+                          child: Row(
+                            children: [
+                              Icon(
+                                _showDescription
+                                    ? Icons.remove_circle_outline_rounded
+                                    : Icons.add_circle_rounded,
+                                color: AppColors.accent,
+                                size: 22,
+                              ),
+                              const SizedBox(width: 6),
+                              Text(
+                                _showDescription
+                                    ? 'Hide description'
+                                    : 'Add description',
+                                style: AppTextStyles.label(
+                                  fontSize: 15,
+                                  fontWeight: FontWeight.w600,
                                   color: AppColors.accent,
-                                  size: 22,
                                 ),
-                                const SizedBox(width: 4),
-                                Text(
-                                  _showMoreDetails
-                                      ? 'Hide more details'
-                                      : 'Add more details',
-                                  style: AppTextStyles.label(
-                                    fontSize: 15,
-                                    fontWeight: FontWeight.w600,
-                                    color: AppColors.accent,
-                                  ),
-                                ),
-                              ],
-                            ),
+                              ),
+                            ],
                           ),
                         ),
-                        if (_showMoreDetails) ...[
-                          ProductSpecForm(
-                            initial: state.groupSpec,
-                            subtitle: '',
-                            onChanged: (spec) {
-                              setState(() => _detailsDraft = spec);
-                            },
-                          ),
-                          const SizedBox(height: 14),
-                          GestureDetector(
-                            onTap: _toggleDescription,
-                            child: Row(
-                              children: [
-                                Icon(
-                                  _showDescription
-                                      ? Icons.remove_circle_outline_rounded
-                                      : Icons.add_circle_rounded,
-                                  color: AppColors.accent,
-                                  size: 22,
+                        if (_showDescription) ...[
+                          const SizedBox(height: 10),
+                          TextField(
+                            controller: _descriptionController,
+                            onChanged:
+                                (value) => context.read<BulkUploadBloc>().add(
+                                  BulkUploadDescriptionChanged(value),
                                 ),
-                                const SizedBox(width: 6),
-                                Text(
-                                  _showDescription
-                                      ? 'Hide description'
-                                      : 'Add description',
-                                  style: AppTextStyles.label(
-                                    fontSize: 15,
-                                    fontWeight: FontWeight.w600,
-                                    color: AppColors.accent,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                          if (_showDescription) ...[
-                            const SizedBox(height: 10),
-                            TextField(
-                              controller: _descriptionController,
-                              onChanged:
-                                  (value) =>
-                                      context.read<BulkUploadBloc>().add(
-                                        BulkUploadDescriptionChanged(value),
-                                      ),
-                              minLines: 3,
-                              maxLines: 5,
-                              style: AppTextStyles.body(fontSize: 15),
-                              decoration: InputDecoration(
-                                hintText: 'Enter product description',
-                                hintStyle: AppTextStyles.hint(
-                                  fontSize: 15,
-                                  fontWeight: FontWeight.w400,
-                                ),
-                                filled: true,
-                                fillColor: AppColors.surfaceSecondary,
-                                border: OutlineInputBorder(
-                                  borderRadius: BorderRadius.circular(12),
-                                  borderSide: BorderSide.none,
-                                ),
-                                contentPadding: const EdgeInsets.all(12),
+                            minLines: 3,
+                            maxLines: 5,
+                            style: AppTextStyles.body(fontSize: 15),
+                            decoration: InputDecoration(
+                              hintText: 'Enter product description',
+                              hintStyle: AppTextStyles.hint(
+                                fontSize: 15,
+                                fontWeight: FontWeight.w400,
                               ),
+                              filled: true,
+                              fillColor: AppColors.surfaceSecondary,
+                              border: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(12),
+                                borderSide: BorderSide.none,
+                              ),
+                              contentPadding: const EdgeInsets.all(12),
                             ),
-                          ],
+                          ),
                         ],
                       ],
                     ),
@@ -494,16 +481,11 @@ class _AddProductGroupRouteState extends State<AddProductGroupRoute> {
                   top: false,
                   child: Container(
                     width: double.infinity,
-                    decoration: const BoxDecoration(
-                      color: AppColors.background,
-                      border: Border(
-                        top: BorderSide(color: AppColors.border, width: 0.7),
-                      ),
-                    ),
+                    color: AppColors.background,
                     padding: AppPadding.screen(top: 10, bottom: 12),
                     child: PrimaryButton(
                       label:
-                          _showMoreDetails
+                          _detailsValid
                               ? 'Continue · ${state.items.length} items'
                               : 'Publish to store',
                       enabled: canSubmit,

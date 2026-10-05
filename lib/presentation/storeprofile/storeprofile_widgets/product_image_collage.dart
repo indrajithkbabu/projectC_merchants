@@ -1,5 +1,3 @@
-import 'dart:math' as math;
-
 import 'package:flutter/material.dart';
 import 'package:project_c/helper/colors.dart';
 import 'package:project_c/helper/product_image.dart';
@@ -15,7 +13,7 @@ import 'package:project_c/helper/product_image.dart';
 /// - 7: 2 / 2 / 3
 /// - 8: 2 / 3 / 3
 /// - 9: 3 / 3 / 3
-/// - 10: 3 / 4 / 3
+/// - 10+: horizontal pages of 3×3 (9 per page) so vertical profile scroll stays free
 ///
 /// When [onImageTap] is set, each cell reports its absolute index in
 /// [imagePaths] (0-based, matching product-details / gallery feed).
@@ -120,6 +118,11 @@ class _CollageBody extends StatelessWidget {
           gap: gap,
           onImageTap: onImageTap,
         ),
+        _ when paths.length > 9 => _ScrollableAlbum(
+          paths: paths,
+          gap: gap,
+          onImageTap: onImageTap,
+        ),
         _ => _RowAlbum(
           paths: paths,
           gap: gap,
@@ -153,33 +156,8 @@ List<int> _rowPlan(int count) {
     7 => const [2, 2, 3],
     8 => const [2, 3, 3],
     9 => const [3, 3, 3],
-    10 => const [3, 4, 3],
-    _ => _distributeRows(count),
+    _ => const [3, 3, 3],
   };
-}
-
-List<int> _distributeRows(int count) {
-  final rows = <int>[];
-  var remaining = count;
-  while (remaining > 0) {
-    if (remaining == 5) {
-      rows.addAll([2, 3]);
-      break;
-    }
-    if (remaining == 7) {
-      rows.addAll([3, 4]);
-      break;
-    }
-    final take = math.min(4, remaining);
-    if (remaining - take == 1) {
-      rows.add(take - 1);
-      remaining -= take - 1;
-    } else {
-      rows.add(take);
-      remaining -= take;
-    }
-  }
-  return rows;
 }
 
 class _LargeLeftStack extends StatelessWidget {
@@ -268,6 +246,93 @@ class _RowAlbum extends StatelessWidget {
       offset += count;
     }
     return Column(children: children);
+  }
+}
+
+/// 10+ photos: swipe horizontally through 3×3 pages (vertical scroll stays on
+/// the outer product list — nested vertical grids steal that gesture).
+class _ScrollableAlbum extends StatelessWidget {
+  const _ScrollableAlbum({
+    required this.paths,
+    required this.gap,
+    this.onImageTap,
+  });
+
+  static const int _pageSize = 9;
+
+  final List<String> paths;
+  final double gap;
+  final ValueChanged<int>? onImageTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final pageCount = (paths.length + _pageSize - 1) ~/ _pageSize;
+    return PageView.builder(
+      physics: const BouncingScrollPhysics(),
+      itemCount: pageCount,
+      itemBuilder: (context, pageIndex) {
+        final start = pageIndex * _pageSize;
+        final end = (start + _pageSize).clamp(0, paths.length);
+        final pagePaths = paths.sublist(start, end);
+        return _PageGrid(
+          paths: pagePaths,
+          startIndex: start,
+          gap: gap,
+          onImageTap: onImageTap,
+        );
+      },
+    );
+  }
+}
+
+class _PageGrid extends StatelessWidget {
+  const _PageGrid({
+    required this.paths,
+    required this.startIndex,
+    required this.gap,
+    this.onImageTap,
+  });
+
+  final List<String> paths;
+  final int startIndex;
+  final double gap;
+  final ValueChanged<int>? onImageTap;
+
+  @override
+  Widget build(BuildContext context) {
+    // Always lay out a full 3×3 slot grid so page height matches the card;
+    // unused trailing cells stay empty.
+    return Column(
+      children: [
+        for (var row = 0; row < 3; row++) ...[
+          if (row > 0) SizedBox(height: gap),
+          Expanded(
+            child: Row(
+              children: [
+                for (var col = 0; col < 3; col++) ...[
+                  if (col > 0) SizedBox(width: gap),
+                  Expanded(
+                    child: Builder(
+                      builder: (context) {
+                        final i = row * 3 + col;
+                        if (i >= paths.length) {
+                          return const SizedBox.expand();
+                        }
+                        return _ImageCell(
+                          path: paths[i],
+                          index: startIndex + i,
+                          onImageTap: onImageTap,
+                        );
+                      },
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ],
+      ],
+    );
   }
 }
 

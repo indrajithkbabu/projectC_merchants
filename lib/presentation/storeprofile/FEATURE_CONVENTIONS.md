@@ -82,6 +82,9 @@ This file defines what to follow for UI and logic inside `lib/presentation/store
   carousel bottomsheet pattern as group photo preview (`ProductImageCarousel` +
   Camera/Gallery picker). Append via `POST .../images`, delete via
   `DELETE .../images/:imageId` (max 5).
+- Group collage (`ProductImageCollage`): 1–9 keep Telegram layouts; **10+** uses
+  horizontal pages of 3×3 (9 per page) so the outer product list keeps vertical
+  scroll. Cell taps still report absolute `imagePaths` indexes.
 - Product grid tap depends on product view mode:
   - **Group**: opens `collection_browse_route` (gallery-style selection), passing
     product + store meta. Collage cell taps use the same destination (any tile
@@ -104,8 +107,11 @@ This file defines what to follow for UI and logic inside `lib/presentation/store
 - Opening the gallery also passes `isOwnStore` so details opened from a photo keep the same edit gate.
 - **Add products** / app-bar **+** opens shared `showMediaSourceSheet` (handle,
   title, Camera / Gallery rows with chevrons; no Cancel — dismiss via tap
-  outside or drag). Then `image_picker`, then `add_product_group_route` (title
-  page). Crop/draw/text is optional from the photo strip there
+  outside or drag). Camera uses `image_picker`. Gallery opens
+  `ProductGalleryPicker` bottomsheet (album dropdown with covers — not a nested
+  sheet; multi-select via `drag_select_grid_view`: tap toggle + hold/slide
+  range select; numbered badges; max 50), then `add_product_group_route`
+  (title page). Crop/draw/text is optional from the photo strip there
   (`ProductImageCropper`), not forced after pick.
 
 ## Collection browse
@@ -142,10 +148,11 @@ This file defines what to follow for UI and logic inside `lib/presentation/store
 - Use shared Cupertino-style page transitions.
 - Add members from profile uses `pushNamed(add_team_route, returnToProfile: true)` and returns to the profile (does not clear to listing).
 - Own-store **Add products** / blue app-bar **+** opens `showMediaSourceSheet`
-  then `image_picker` then `add_product_group_route` (title / tags / description →
-  publish title-only **or** expand more details for weight/purity/size → preview).
-  Edit metadata still goes through product details → edit sheet →
-  `add_product_form_route` with `mode: edit`.
+  then camera (`image_picker`) or gallery (`ProductGalleryPicker`) then
+  `add_product_group_route` (title / tags / description → publish title-only
+  **or** expand more details for weight/purity/size → preview). Edit metadata
+  still goes through product details → edit sheet → `add_product_form_route`
+  with `mode: edit`.
 - Refine items opens preview in `isEditMode` (no Published screen).
 - App-bar **search** icon → `store_search_route` with `storeId`, `storeName`,
   `productCount`.

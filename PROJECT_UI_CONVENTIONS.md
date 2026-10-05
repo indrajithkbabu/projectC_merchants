@@ -97,6 +97,9 @@ Common picks:
   - `FloatingBottomNavBar`
   - `NetworkStatusGate` (app-wide; do not re-wrap per screen)
   - `showMediaSourceSheet` / `MediaPickSource` (camera vs gallery chooser; no Cancel)
+- Add-product gallery multi-select: `ProductGalleryPicker` in
+  `lib/helper/product_gallery_picker.dart` (`drag_select_grid_view` for tap +
+  hold/slide; albums dropdown; keep post-pick navigation unchanged).
 
 Do not duplicate these widgets inside feature folders.
 
