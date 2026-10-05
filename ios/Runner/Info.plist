@@ -47,6 +47,12 @@
 	<true/>
 	<key>NSContactsUsageDescription</key>
 	<string>Jewel Flow needs access to your contacts so you can add teammates to your store.</string>
+	<key>NSCameraUsageDescription</key>
+	<string>Jewel Flow needs camera access so you can photograph products for your store.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Jewel Flow needs photo library access so you can choose product images for your store.</string>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>Jewel Flow may save edited product photos to your library when you choose to.</string>
 	<key>LSApplicationQueriesSchemes</key>
 	<array>
 		<string>whatsapp</string>

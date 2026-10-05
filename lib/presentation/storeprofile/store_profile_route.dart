@@ -8,6 +8,7 @@ import 'package:project_c/bloc/storeprofile/store_profile_bloc.dart';
 import 'package:project_c/di/service_locator.dart';
 import 'package:project_c/helper/app_padding.dart';
 import 'package:project_c/helper/colors.dart';
+import 'package:project_c/helper/product_gallery_picker.dart';
 import 'package:project_c/helper/text_styles.dart';
 import 'package:project_c/helper/widgets/media_source_sheet.dart';
 import 'package:project_c/helper/widgets/screen_wrapper.dart';
@@ -139,14 +140,8 @@ class _StoreProfileRouteState extends State<StoreProfileRoute>
         );
         if (photo != null) rawPaths.add(photo.path);
       } else {
-        final photos = await picker.pickMultiImage(
-          imageQuality: 85,
-          maxWidth: 1920,
-          maxHeight: 1920,
-        );
-        for (final photo in photos.take(50)) {
-          rawPaths.add(photo.path);
-        }
+        // In-app gallery bottomsheet: multi-select + Telegram-style swipe range.
+        rawPaths.addAll(await ProductGalleryPicker.pickImagePaths(context));
       }
 
       if (rawPaths.isEmpty) return;

@@ -5,8 +5,10 @@ import 'package:project_c/bloc/add_store_product/add_store_product_bloc.dart';
 import 'package:project_c/bloc/bulk_upload/bulk_upload_bloc.dart';
 import 'package:project_c/helper/app_padding.dart';
 import 'package:project_c/helper/colors.dart';
+import 'package:project_c/helper/product_gallery_picker.dart';
 import 'package:project_c/helper/product_image_cropper.dart';
 import 'package:project_c/helper/text_styles.dart';
+import 'package:project_c/helper/widgets/media_source_sheet.dart';
 import 'package:project_c/presentation/add_store_product/add_store_product_widgets/product_image_carousel.dart';
 
 /// Photo preview sheet (same pattern as [add_product_form_route]): carousel with
@@ -34,35 +36,6 @@ Future<void> showBulkPhotosPreviewSheet({
           readOnly: readOnly,
           allowImageEdit: allowImageEdit,
           onlyItemIds: onlyItemIds,
-        ),
-      );
-    },
-  );
-}
-
-Future<ImageSource?> _pickImageSource(BuildContext context) {
-  return showModalBottomSheet<ImageSource>(
-    context: context,
-    backgroundColor: AppColors.surface,
-    builder: (context) {
-      return SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.symmetric(vertical: 8),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              ListTile(
-                leading: const Icon(Icons.photo_camera_rounded),
-                title: Text('Camera', style: AppTextStyles.body()),
-                onTap: () => Navigator.of(context).pop(ImageSource.camera),
-              ),
-              ListTile(
-                leading: const Icon(Icons.photo_library_rounded),
-                title: Text('Gallery', style: AppTextStyles.body()),
-                onTap: () => Navigator.of(context).pop(ImageSource.gallery),
-              ),
-            ],
-          ),
         ),
       );
     },
@@ -164,13 +137,17 @@ class _BulkPhotosPreviewSheetBodyState
   Future<void> _addMore(BuildContext sheetContext) async {
     if (_picking || widget.readOnly) return;
     final bloc = context.read<BulkUploadBloc>();
-    final source = await _pickImageSource(sheetContext);
-    if (!mounted || source == null) return;
+    final source = await showMediaSourceSheet(
+      sheetContext,
+      title: 'Add photos',
+      subtitle: 'Capture new photos or pick from your gallery',
+    );
+    if (!mounted || !sheetContext.mounted || source == null) return;
 
     setState(() => _picking = true);
     try {
       final paths = <String>[];
-      if (source == ImageSource.camera) {
+      if (source == MediaPickSource.camera) {
         final photo = await _imagePicker.pickImage(
           source: ImageSource.camera,
           imageQuality: 85,
@@ -179,14 +156,9 @@ class _BulkPhotosPreviewSheetBodyState
         );
         if (photo != null) paths.add(photo.path);
       } else {
-        final photos = await _imagePicker.pickMultiImage(
-          imageQuality: 85,
-          maxWidth: 1920,
-          maxHeight: 1920,
-        );
-        for (final photo in photos) {
-          paths.add(photo.path);
-        }
+        if (!sheetContext.mounted) return;
+        // Same drag_select gallery used from store profile Add products.
+        paths.addAll(await ProductGalleryPicker.pickImagePaths(sheetContext));
       }
       if (!mounted || paths.isEmpty) return;
 

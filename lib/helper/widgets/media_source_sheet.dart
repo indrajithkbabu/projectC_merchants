@@ -106,7 +106,7 @@ class _MediaSourceSheetBody extends StatelessWidget {
                   _SourceOption(
                     icon: Icons.photo_library_rounded,
                     label: 'Gallery',
-                    hint: 'Choose photos',
+                    hint: 'Tap or hold & slide to select',
                     onTap: () => _select(context, MediaPickSource.gallery),
                   ),
                 ],

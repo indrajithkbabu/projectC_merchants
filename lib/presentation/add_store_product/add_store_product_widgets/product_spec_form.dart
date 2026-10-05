@@ -114,15 +114,21 @@ class _ProductSpecFormState extends State<ProductSpecForm> {
     _notify();
   }
 
+  /// Gap from a section title to its content.
+  static const double _titleContentGap = 10;
+
+  /// Gap between major sections (after content → next title).
+  static const double _sectionGap = 18;
+
   @override
   Widget build(BuildContext context) {
     final spec = _spec;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        if (widget.subtitle != null) ...[
+        if (widget.subtitle != null && widget.subtitle!.trim().isNotEmpty) ...[
           Text(widget.subtitle!, style: AppTextStyles.bodySecondary()),
-          const SizedBox(height: 18),
+          const SizedBox(height: _sectionGap),
         ],
         _sectionHeader(
           label: 'Weight',
@@ -138,7 +144,7 @@ class _ProductSpecFormState extends State<ProductSpecForm> {
             },
           ),
         ),
-        const SizedBox(height: 12),
+        const SizedBox(height: _titleContentGap),
         if (_weightMode == WeightMode.range)
           Row(
             children: [
@@ -165,7 +171,7 @@ class _ProductSpecFormState extends State<ProductSpecForm> {
             label: 'Gross',
             suffix: 'g',
           ),
-        const SizedBox(height: 8),
+        const SizedBox(height: 6),
         CheckboxListTile(
           value: _deductStone,
           onChanged: (value) {
@@ -175,6 +181,7 @@ class _ProductSpecFormState extends State<ProductSpecForm> {
           contentPadding: EdgeInsets.zero,
           controlAffinity: ListTileControlAffinity.leading,
           visualDensity: VisualDensity.compact,
+          dense: true,
           activeColor: AppColors.primary,
           title: Text(
             'Deduct stone / other weight to get net',
@@ -182,16 +189,15 @@ class _ProductSpecFormState extends State<ProductSpecForm> {
           ),
         ),
         if (_deductStone) ...[
-          const SizedBox(height: 4),
           _numberField(
             controller: _reductionController,
             label: 'Reduction',
             suffix: 'g',
           ),
+          const SizedBox(height: _titleContentGap),
         ],
-        const SizedBox(height: 10),
         _netRow(spec.netLabel),
-        const SizedBox(height: 22),
+        const SizedBox(height: _sectionGap),
         _sectionHeader(
           label: 'Purity',
           trailing: SpecModeToggle<FieldMode>(
@@ -206,17 +212,15 @@ class _ProductSpecFormState extends State<ProductSpecForm> {
             },
           ),
         ),
-        if (_purityMode == FieldMode.fixed) ...[
-          const SizedBox(height: 12),
-          _purityDropdown(),
-        ] else ...[
-          const SizedBox(height: 8),
+        const SizedBox(height: _titleContentGap),
+        if (_purityMode == FieldMode.fixed)
+          _purityDropdown()
+        else
           Text(
             'Left open so each item can be set later.',
             style: AppTextStyles.caption(),
           ),
-        ],
-        const SizedBox(height: 22),
+        const SizedBox(height: _sectionGap),
         _sectionHeader(
           label: 'Wastage (making margin)',
           trailing: SpecModeToggle<FieldMode>(
@@ -231,21 +235,19 @@ class _ProductSpecFormState extends State<ProductSpecForm> {
             },
           ),
         ),
-        if (_wastageMode == FieldMode.fixed) ...[
-          const SizedBox(height: 12),
+        const SizedBox(height: _titleContentGap),
+        if (_wastageMode == FieldMode.fixed)
           _numberField(
             controller: _wastageController,
             label: 'Wastage',
             suffix: '%',
-          ),
-        ] else ...[
-          const SizedBox(height: 8),
+          )
+        else
           Text(
             'Left open so each item can be set later.',
             style: AppTextStyles.caption(),
           ),
-        ],
-        const SizedBox(height: 22),
+        const SizedBox(height: _sectionGap),
         _sectionHeader(
           label: 'Size',
           trailing: SpecModeToggle<SizeMode>(
@@ -261,8 +263,8 @@ class _ProductSpecFormState extends State<ProductSpecForm> {
             },
           ),
         ),
+        const SizedBox(height: _titleContentGap),
         if (_sizeMode == SizeMode.fixed) ...[
-          const SizedBox(height: 12),
           Row(
             crossAxisAlignment: CrossAxisAlignment.end,
             children: [
@@ -277,7 +279,7 @@ class _ProductSpecFormState extends State<ProductSpecForm> {
             ],
           ),
           if (_sizeUnit == SizeUnit.custom) ...[
-            const SizedBox(height: 10),
+            const SizedBox(height: _titleContentGap),
             TextField(
               controller: _customUnitController,
               onChanged: (_) => _rebuild(),
@@ -285,16 +287,14 @@ class _ProductSpecFormState extends State<ProductSpecForm> {
               decoration: _underlineDecoration(hint: 'Custom unit'),
             ),
           ],
-        ] else ...[
-          const SizedBox(height: 8),
+        ] else
           Text(
             _sizeMode == SizeMode.free
                 ? 'Free size for made-to-fit pieces.'
                 : 'Left open so each item can be set later.',
             style: AppTextStyles.caption(),
           ),
-        ],
-        const SizedBox(height: 22),
+        const SizedBox(height: _sectionGap),
         Text(
           'Metal / gemstone',
           style: AppTextStyles.label(
@@ -302,18 +302,23 @@ class _ProductSpecFormState extends State<ProductSpecForm> {
             color: AppColors.accent,
           ),
         ),
-        const SizedBox(height: 10),
-        Wrap(
-          spacing: 8,
-          runSpacing: 8,
-          children: [
-            for (final metal in ProductSpec.metalOptions)
-              FilterChip(
-                label: Text(metal, style: AppTextStyles.caption(fontSize: 13)),
-                selected: _metalType.contains(metal),
-                onSelected: (selected) {
+        const SizedBox(height: _titleContentGap),
+        SizedBox(
+          height: _optionPillHeight,
+          child: ListView.separated(
+            scrollDirection: Axis.horizontal,
+            primary: false,
+            itemCount: ProductSpec.metalOptions.length,
+            separatorBuilder: (_, __) => const SizedBox(width: 8),
+            itemBuilder: (context, index) {
+              final metal = ProductSpec.metalOptions[index];
+              final isSelected = _metalType.contains(metal);
+              return _optionPill(
+                label: metal,
+                selected: isSelected,
+                onTap: () {
                   setState(() {
-                    if (selected) {
+                    if (!isSelected) {
                       if (!_metalType.contains(metal)) {
                         _metalType = [..._metalType, metal];
                       }
@@ -324,19 +329,11 @@ class _ProductSpecFormState extends State<ProductSpecForm> {
                   });
                   _notify();
                 },
-                selectedColor: AppColors.primary.withValues(alpha: 0.16),
-                checkmarkColor: AppColors.primary,
-                side: BorderSide(
-                  color:
-                      _metalType.contains(metal)
-                          ? AppColors.primary
-                          : AppColors.border,
-                ),
-                backgroundColor: AppColors.surface,
-              ),
-          ],
+              );
+            },
+          ),
         ),
-        const SizedBox(height: 22),
+        const SizedBox(height: _sectionGap),
         Text(
           'Category',
           style: AppTextStyles.label(
@@ -344,8 +341,8 @@ class _ProductSpecFormState extends State<ProductSpecForm> {
             color: AppColors.accent,
           ),
         ),
-        const SizedBox(height: 10),
-        _categoryDropdown(),
+        const SizedBox(height: _titleContentGap),
+        _categoryScroll(),
       ],
     );
   }
@@ -427,29 +424,68 @@ class _ProductSpecFormState extends State<ProductSpecForm> {
     );
   }
 
-  Widget _categoryDropdown() {
-    final value =
+  static const double _optionPillHeight = 36;
+
+  Widget _categoryScroll() {
+    final selected =
         ProductSpec.categoryOptions.contains(_category)
             ? _category
             : ProductSpec.categoryOptions.first;
-    return DropdownButtonFormField<String>(
-      value: value,
-      decoration: _underlineDecoration(hint: 'Category'),
-      items: [
-        for (final option in ProductSpec.categoryOptions)
-          DropdownMenuItem(
-            value: option,
-            child: Text(
-              option.replaceAll('_', ' '),
-              style: AppTextStyles.body(),
-            ),
+    return SizedBox(
+      height: _optionPillHeight,
+      child: ListView.separated(
+        scrollDirection: Axis.horizontal,
+        primary: false,
+        itemCount: ProductSpec.categoryOptions.length,
+        separatorBuilder: (_, __) => const SizedBox(width: 8),
+        itemBuilder: (context, index) {
+          final option = ProductSpec.categoryOptions[index];
+          final isSelected = option == selected;
+          return _optionPill(
+            label: option.replaceAll('_', ' '),
+            selected: isSelected,
+            onTap: () {
+              // Single-select like the former dropdown — always keep one value.
+              if (option == _category) return;
+              setState(() => _category = option);
+              _notify();
+            },
+          );
+        },
+      ),
+    );
+  }
+
+  /// Tag-style pill (matches [ProductTagChip] look); fixed height for both rows.
+  Widget _optionPill({
+    required String label,
+    required bool selected,
+    required VoidCallback onTap,
+  }) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        height: _optionPillHeight,
+        padding: const EdgeInsets.symmetric(horizontal: 12),
+        decoration: BoxDecoration(
+          color:
+              selected
+                  ? AppColors.primary.withValues(alpha: 0.12)
+                  : AppColors.surfaceSecondary,
+          borderRadius: BorderRadius.circular(_optionPillHeight / 2),
+        ),
+        alignment: Alignment.center,
+        child: Text(
+          label,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: AppTextStyles.caption(
+            fontSize: 13,
+            fontWeight: FontWeight.w600,
+            color: selected ? AppColors.primary : AppColors.textSecondary,
           ),
-      ],
-      onChanged: (next) {
-        if (next == null) return;
-        setState(() => _category = next);
-        _notify();
-      },
+        ),
+      ),
     );
   }
 

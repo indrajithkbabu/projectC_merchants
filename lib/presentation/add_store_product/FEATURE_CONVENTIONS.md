@@ -54,18 +54,22 @@ This file defines what to follow for UI and logic inside `lib/presentation/add_s
 - After photos are picked (store profile picker **or** gallery continue), create always opens
   `add_product_group_route` first. Do not send **edit** (`mode: edit`) through this screen.
 - Gallery continue → `add_product_group_route` (not directly to the form).
-- Screen 01 (`add_product_group_route`): horizontal photo strip, **title** (required),
-  **tags** (optional — fixed type field + **plus** to commit; added chips render
-  **below** the field; suggested tags in a single-row horizontal scroll), then
-  **Add more details** (inline specs + optional **Add description** + expand).
-  Tap a strip photo → bottomsheet carousel (add / delete / optional edit; keep ≥1 photo).
-  Multi-photo pick goes straight to this screen (no forced crop).
-- **Without more details:** CTA **Publish to store** enqueues title-only create on
+- Screen 01 (`add_product_group_route`): first photo thumbnail (+ count badge)
+  beside **title** (required), then **tags** (optional — type field + **plus**;
+  chips below; suggested tags horizontal scroll), always-visible
+  `ProductSpecForm`, then **Add description** at the bottom (tap to expand;
+  same clear-on-hide logic). Tap the photo → iOS-style centered preview
+  (`showBulkPhotosIosPreview`: blur backdrop, no top chrome; same add /
+  delete / edit icons on the image, bottom thumbnail scroller; keep ≥1
+  photo). Tap outside to dismiss. Add from that preview uses shared `showMediaSourceSheet` (Camera /
+  Gallery); Gallery opens `ProductGalleryPicker` (`drag_select_grid_view`),
+  same as store-profile Add products. Multi-photo pick goes straight to this
+  screen (no forced crop).
+- **Specs incomplete / blank:** CTA **Publish to store** enqueues title-only create on
   `ProductUploadCoordinator` and **immediately** pops to store profile (no button
   loader). Store shows a pending shimmer slot; snackbar on success.
-- **With more details:** expand inline `ProductSpecForm` (same as
-  `add_product_group_details_route` group scope). CTA **Continue** →
-  `BulkUploadApplyGroupSpec` → preview. Hide collapses and reverts to title-only.
+- **Specs valid:** CTA **Continue · N items** → `BulkUploadApplyGroupSpec` →
+  preview (same as former expanded more-details path).
 - Preview (after more details): photo grid (pinch columns, Precise blue dot). Select →
   **Edit** / **Delete** only. Tap item → precise form (`add_product_group_details_route`
   single). Multi Edit → shared specs batch. Group apply marks **Group**; single/multi
@@ -112,8 +116,9 @@ This file defines what to follow for UI and logic inside `lib/presentation/add_s
 ## Folder Scope
 - `add_product_form_route.dart`, `add_product_gallery_route.dart`: add-product routes
   (form is **edit** metadata/photos; create uses group route).
-- `add_product_group_route.dart`: create — title / tags / description + optional
-  more details (weight/purity/size), then title-only publish **or** preview.
+- `add_product_group_route.dart`: create — title / tags / always-visible details
+  (weight/purity/size) / expandable description at bottom. Title-only publish
+  when specs incomplete; **Continue** → preview when specs valid.
 - `add_product_group_details_route.dart`: single / multi precise refine from preview
   (group-scope form also still works if navigated).
 - `add_product_group_preview_route.dart`: item grid, select actions, publish / edit save.
