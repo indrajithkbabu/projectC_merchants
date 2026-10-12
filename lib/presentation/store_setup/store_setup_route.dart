@@ -90,7 +90,6 @@ class _StoreSetupRouteState extends State<StoreSetupRoute> {
       ],
       child: ScreenWrapper(
         backgroundColor: AppColors.scaffold,
-        statusBarIconBrightness: Brightness.dark,
         child: BlocBuilder<StoreSetupBloc, StoreSetupState>(
           builder: (context, state) {
             return Column(

@@ -1,4 +1,3 @@
-import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:project_c/bloc/account_profile/account_profile_bloc.dart';
@@ -45,44 +44,42 @@ class StoreListingProfileAvatar extends StatelessWidget {
         final profile = state.profile;
         final imageUrl = profile?.effectiveProfileImageUrl.trim() ?? '';
         final hasImage = imageUrl.isNotEmpty;
+        final initials = Text(
+          _initials(profile),
+          style: AppTextStyles.caption(
+            fontSize: size * 0.32,
+            fontWeight: FontWeight.w700,
+            color: AppColors.textSecondary,
+          ),
+        );
+
+        final avatar =
+            hasImage
+                ? CatalogNetworkAvatar(
+                  url: imageUrl,
+                  size: size,
+                  backgroundColor: AppColors.surfaceSecondary,
+                  border: Border.all(color: AppColors.border, width: 1),
+                  fallback: initials,
+                )
+                : Container(
+                  width: size,
+                  height: size,
+                  alignment: Alignment.center,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: AppColors.surfaceSecondary,
+                    border: Border.all(color: AppColors.border, width: 1),
+                  ),
+                  child: initials,
+                );
 
         return Material(
           color: Colors.transparent,
           child: InkWell(
             onTap: onTap,
             customBorder: const CircleBorder(),
-            child: Ink(
-              width: size,
-              height: size,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                color: AppColors.surfaceSecondary,
-                border: Border.all(color: AppColors.border, width: 1),
-                image:
-                    hasImage
-                        ? DecorationImage(
-                          image: CachedNetworkImageProvider(
-                            imageUrl,
-                            cacheManager: CatalogImageCache.instance,
-                          ),
-                          fit: BoxFit.cover,
-                        )
-                        : null,
-              ),
-              child:
-                  hasImage
-                      ? null
-                      : Center(
-                        child: Text(
-                          _initials(profile),
-                          style: AppTextStyles.caption(
-                            fontSize: size * 0.32,
-                            fontWeight: FontWeight.w700,
-                            color: AppColors.textSecondary,
-                          ),
-                        ),
-                      ),
-            ),
+            child: avatar,
           ),
         );
       },

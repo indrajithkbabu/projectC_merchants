@@ -64,7 +64,6 @@ class _CountryPickerRouteState extends State<CountryPickerRoute> {
 
     return ScreenWrapper(
       backgroundColor: AppColors.background,
-      statusBarIconBrightness: Brightness.dark,
       child: Column(
         children: [
           Padding(
@@ -109,7 +108,7 @@ class _CountryPickerRouteState extends State<CountryPickerRoute> {
                 ),
                 focusedBorder: OutlineInputBorder(
                   borderRadius: BorderRadius.circular(12),
-                  borderSide: const BorderSide(color: AppColors.primary),
+                  borderSide: BorderSide(color: AppColors.primary),
                 ),
                 contentPadding: const EdgeInsets.symmetric(
                   horizontal: 12,
@@ -131,7 +130,7 @@ class _CountryPickerRouteState extends State<CountryPickerRoute> {
                       padding: AppPadding.screenHorizontal,
                       itemCount: _filtered.length,
                       separatorBuilder:
-                          (_, __) => const Divider(
+                          (_, __) => Divider(
                             height: 1,
                             indent: 56,
                             color: AppColors.border,
@@ -158,7 +157,7 @@ class _CountryPickerRouteState extends State<CountryPickerRoute> {
                           ),
                           trailing:
                               isSelected
-                                  ? const Icon(
+                                  ? Icon(
                                     Icons.check_rounded,
                                     color: AppColors.primary,
                                   )

@@ -9,12 +9,17 @@ import 'package:project_c/di/service_locator.dart';
 import 'package:project_c/helper/app_log.dart';
 import 'package:project_c/helper/app_theme.dart';
 import 'package:project_c/helper/colors.dart';
+import 'package:project_c/helper/widgets/appearance_scope.dart';
 import 'package:project_c/helper/widgets/network_status_gate.dart';
 import 'package:project_c/navigation/route_initializer.dart';
 import 'package:project_c/navigation/routes.dart';
 import 'package:project_c/services/product_details_preferences.dart';
 import 'package:project_c/services/product_view_preferences.dart';
+import 'package:project_c/services/push_notification_service.dart';
 import 'package:project_c/services/screenshot_protection_service.dart';
+import 'package:project_c/services/store_privacy_preferences.dart';
+import 'package:project_c/services/theme_preferences.dart';
+import 'package:project_c/services/view_beacon.dart';
 
 class App extends StatefulWidget {
   const App({super.key});
@@ -24,14 +29,22 @@ class App extends StatefulWidget {
 }
 
 class _AppState extends State<App> with WidgetsBindingObserver {
+  late final ThemePreferences _themePrefs;
+
   @override
   void initState() {
     super.initState();
+    _themePrefs = ServiceLocator.get<ThemePreferences>();
     WidgetsBinding.instance.addObserver(this);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _startScreenshotProtection();
+      // Activity is attached now — Android 13+ can show the system
+      // notification permission dialog (must not run from main() before runApp).
+      // ignore: unawaited_futures
+      ServiceLocator.get<PushNotificationService>().requestRuntimePermissions();
       ServiceLocator.get<ProductViewPreferences>().load();
       ServiceLocator.get<ProductDetailsPreferences>().load();
+      ServiceLocator.get<StorePrivacyPreferences>().load();
     });
   }
 
@@ -45,6 +58,15 @@ class _AppState extends State<App> with WidgetsBindingObserver {
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
       ServiceLocator.get<ScreenshotProtectionService>().reapply();
+      // Recover FCM after transient GMS SERVICE_NOT_AVAILABLE (OEM/network).
+      // ignore: unawaited_futures
+      ServiceLocator.get<PushNotificationService>().onAppResumed();
+    }
+    if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.inactive ||
+        state == AppLifecycleState.detached) {
+      // ignore: unawaited_futures
+      ViewBeacon.instance.flush();
     }
   }
 
@@ -87,6 +109,12 @@ class _AppState extends State<App> with WidgetsBindingObserver {
               route,
               (r) => false,
             );
+            // After shell/root is set, apply any deferred notification deep link.
+            if (state.isAuthenticated) {
+              WidgetsBinding.instance.addPostFrameCallback((_) {
+                ServiceLocator.get<PushNotificationService>().flushPendingOpen();
+              });
+            }
           }
 
           // Unsigned restore can finish before the navigator is attached.
@@ -96,26 +124,42 @@ class _AppState extends State<App> with WidgetsBindingObserver {
             WidgetsBinding.instance.addPostFrameCallback((_) => go());
           }
         },
-        child: MaterialApp(
-          navigatorKey: navigatorKey,
-          scaffoldMessengerKey: scaffoldMessengerKey,
-          title: 'Project C',
-          debugShowCheckedModeBanner: false,
-          theme: AppTheme.light,
-          initialRoute: Routes.bootstrapRoute,
-          onGenerateRoute: onGenerateRoutes,
-          builder: (context, child) {
-            return NetworkStatusGate(
-              child: child ?? const SizedBox.shrink(),
+        child: ListenableBuilder(
+          listenable: _themePrefs,
+          builder: (context, _) {
+            AppColors.bind(_themePrefs.appearance);
+            configureSystemUi();
+            return MaterialApp(
+              navigatorKey: navigatorKey,
+              scaffoldMessengerKey: scaffoldMessengerKey,
+              title: 'Project C',
+              debugShowCheckedModeBanner: false,
+              theme: AppTheme.light,
+              darkTheme: AppTheme.dark,
+              themeMode: _themePrefs.appearance.themeMode,
+              initialRoute: Routes.bootstrapRoute,
+              onGenerateRoute: onGenerateRoutes,
+              builder: (context, child) {
+                final appearance = _themePrefs.appearance;
+                return AppearanceScope(
+                  appearance: appearance,
+                  child: NetworkStatusGate(
+                    child: AppearanceRebuildGate(
+                      appearance: appearance,
+                      child: child ?? const SizedBox.shrink(),
+                    ),
+                  ),
+                );
+              },
+              supportedLocales: const [Locale('en')],
+              localizationsDelegates: const [
+                CountryLocalizations.delegate,
+                GlobalMaterialLocalizations.delegate,
+                GlobalWidgetsLocalizations.delegate,
+                GlobalCupertinoLocalizations.delegate,
+              ],
             );
           },
-          supportedLocales: const [Locale('en')],
-          localizationsDelegates: const [
-            CountryLocalizations.delegate,
-            GlobalMaterialLocalizations.delegate,
-            GlobalWidgetsLocalizations.delegate,
-            GlobalCupertinoLocalizations.delegate,
-          ],
         ),
       ),
     );
@@ -127,13 +171,5 @@ final GlobalKey<ScaffoldMessengerState> scaffoldMessengerKey =
     GlobalKey<ScaffoldMessengerState>();
 
 void configureSystemUi() {
-  SystemChrome.setSystemUIOverlayStyle(
-    const SystemUiOverlayStyle(
-      statusBarColor: Colors.transparent,
-      statusBarIconBrightness: Brightness.dark,
-      statusBarBrightness: Brightness.light,
-      systemNavigationBarColor: AppColors.scaffold,
-      systemNavigationBarIconBrightness: Brightness.dark,
-    ),
-  );
+  SystemChrome.setSystemUIOverlayStyle(AppColors.systemOverlayStyle);
 }

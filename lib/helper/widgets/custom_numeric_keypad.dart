@@ -18,7 +18,7 @@ class CustomNumericKeypad extends StatelessWidget {
 
     return Container(
       width: double.infinity,
-      color: const Color(0xFFF7F7F8),
+      color: AppColors.surfaceSecondary,
       padding: EdgeInsets.fromLTRB(12, 10, 12, 10 + bottomInset * 0.35),
       child: Column(
         mainAxisSize: MainAxisSize.min,
@@ -87,10 +87,10 @@ class _DigitKey extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Material(
-      color: Colors.white,
+      color: AppColors.surface,
       borderRadius: BorderRadius.circular(12),
-      elevation: 0.5,
-      shadowColor: Colors.black26,
+      elevation: AppColors.isNight ? 0 : 0.5,
+      shadowColor: AppColors.navBarShadow,
       child: InkWell(
         onTap: onTap,
         borderRadius: BorderRadius.circular(12),

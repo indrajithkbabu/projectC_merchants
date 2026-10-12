@@ -12,14 +12,18 @@ import 'package:project_c/navigation/routes.dart';
 import 'package:project_c/navigation/smooth_fade_page_route.dart';
 import 'package:project_c/presentation/search/search_models.dart';
 import 'package:project_c/presentation/search/search_widgets/search_app_bar_field.dart';
+import 'package:project_c/presentation/search/search_widgets/search_chips.dart';
 import 'package:project_c/presentation/search/search_widgets/search_discover_panel.dart';
 import 'package:project_c/presentation/search/search_widgets/search_filter_bar.dart';
 import 'package:project_c/presentation/search/search_widgets/search_result_card.dart';
 import 'package:project_c/presentation/search/search_widgets/search_shimmers.dart';
 import 'package:project_c/presentation/search/search_widgets/search_suggestion_list.dart';
+import 'package:project_c/presentation/search/search_widgets/search_store_privacy_row.dart';
 import 'package:project_c/services/search_recent_preferences.dart';
 import 'package:project_c/webservice/catalog_error_mapper.dart';
 import 'package:project_c/webservice/search/search_repository.dart';
+import 'package:project_c/webservice/store/store_repository.dart';
+import 'package:project_c/models/store_privacy_mode.dart';
 
 enum _GlobalSearchPhase { discover, suggestions, results }
 
@@ -43,6 +47,7 @@ class _GlobalSearchRouteState extends State<GlobalSearchRoute> {
   late final FocusNode _focusNode;
   late final SearchRepository _repo;
   late final SearchRecentPreferences _recents;
+  late final StoreRepository _stores;
 
   SearchFilterSelection _filters = const SearchFilterSelection();
   SearchFilterCatalog _catalog = const SearchFilterCatalog();
@@ -50,12 +55,14 @@ class _GlobalSearchRouteState extends State<GlobalSearchRoute> {
   String _committedQuery = '';
 
   api.SearchMeta _meta = const api.SearchMeta();
-  List<api.SearchRecentEntry> _recent = const [];
+  List<api.SearchRecentEntry> _recent = [];
   List<api.SearchSuggestMatch> _suggestions = const [];
+  List<api.SearchSuggestMatch> _resultStores = const [];
   List<SearchProductResult> _results = const [];
   String _countLine = '';
   int _totalProducts = 0;
   String? _nextCursor;
+  String? _followBusyStoreId;
 
   bool _keepKeyboard = true;
   bool _focusArmed = false;
@@ -83,6 +90,7 @@ class _GlobalSearchRouteState extends State<GlobalSearchRoute> {
     super.initState();
     _repo = ServiceLocator.get<SearchRepository>();
     _recents = ServiceLocator.get<SearchRecentPreferences>();
+    _stores = ServiceLocator.get<StoreRepository>();
     _controller = TextEditingController()..addListener(_onControllerTick);
     _focusNode = FocusNode();
 
@@ -260,8 +268,14 @@ class _GlobalSearchRouteState extends State<GlobalSearchRoute> {
     try {
       final res = await _repo.suggest(q: q);
       if (!mounted || seq != _suggestSeq) return;
+      // Keep private stores (lock + Follow); drop private products for
+      // non-followers. SearchSuggestionList also filters as a safety net.
+      final matches =
+          res.matches
+              .where((m) => m.isStore || m.isContentVisible)
+              .toList(growable: false);
       setState(() {
-        _suggestions = res.matches;
+        _suggestions = matches;
         _suggestLoading = false;
         if (_phase != _GlobalSearchPhase.results) {
           _phase = _GlobalSearchPhase.suggestions;
@@ -287,6 +301,7 @@ class _GlobalSearchRouteState extends State<GlobalSearchRoute> {
         _phase = _GlobalSearchPhase.discover;
         _committedQuery = '';
         _results = const [];
+        _resultStores = const [];
       });
       return;
     }
@@ -300,12 +315,75 @@ class _GlobalSearchRouteState extends State<GlobalSearchRoute> {
     await _loadResults(reset: true);
   }
 
+  /// Facet strip over visible hits only when the page hid private products.
+  SearchFilterCatalog _catalogRespectingPrivacy({
+    required api.SearchFacets facets,
+    required List<api.SearchHit> all,
+    required List<api.SearchHit> visible,
+  }) {
+    if (visible.length == all.length) {
+      return SearchFilterCatalog.fromFacets(facets);
+    }
+    final visibleStoreIds =
+        visible
+            .map((h) => h.store?.id.trim() ?? '')
+            .where((id) => id.isNotEmpty)
+            .toSet();
+    final hiddenPrivateIds =
+        all
+            .where((h) => !h.isVisibleToViewer)
+            .map((h) => h.store)
+            .whereType<api.SearchHitStore>()
+            .where((s) => s.isPrivate && !s.isContentVisible)
+            .map((s) => s.id.trim())
+            .where((id) => id.isNotEmpty && !visibleStoreIds.contains(id))
+            .toSet();
+    if (hiddenPrivateIds.isEmpty) {
+      return SearchFilterCatalog.fromFacets(facets);
+    }
+    final storeFacets =
+        facets.store.where((f) {
+          final id = (f.id ?? f.value).trim();
+          return id.isEmpty || !hiddenPrivateIds.contains(id);
+        }).toList(growable: false);
+    return SearchFilterCatalog.fromFacets(
+      api.SearchFacets(
+        category: facets.category,
+        metal: facets.metal,
+        purity: facets.purity,
+        weight: facets.weight,
+        size: facets.size,
+        wastage: facets.wastage,
+        store: storeFacets,
+        location: facets.location,
+      ),
+    );
+  }
+
+  String _countLineFor({
+    required api.SearchResultSummary summary,
+    required int visibleCount,
+    required int hiddenOnPage,
+  }) {
+    if (hiddenOnPage <= 0) {
+      if (summary.countLine.isNotEmpty) return summary.countLine;
+      return '${summary.totalProducts} products';
+    }
+    // Prefer visible count so filter chrome does not advertise locked hits.
+    final total =
+        summary.totalProducts > 0
+            ? (summary.totalProducts - hiddenOnPage).clamp(0, summary.totalProducts)
+            : visibleCount;
+    return '$total products';
+  }
+
   Future<void> _loadResults({bool reset = true}) async {
     final seq = ++_searchSeq;
     if (reset) {
       setState(() {
         _resultsLoading = true;
         _nextCursor = null;
+        _resultStores = const [];
       });
     } else {
       if (_loadingMore || _nextCursor == null) return;
@@ -313,26 +391,67 @@ class _GlobalSearchRouteState extends State<GlobalSearchRoute> {
     }
 
     try {
+      final q = _committedQuery.trim();
+      final Future<api.SearchSuggestResponse>? storesFuture =
+          (reset && q.isNotEmpty) ? _repo.suggest(q: q) : null;
+
       final page = await _repo.search(
         _filters.toApiQuery(
-          q: _committedQuery.isEmpty ? null : _committedQuery,
+          q: q.isEmpty ? null : q,
           cursor: reset ? null : _nextCursor,
         ),
       );
       if (!mounted || seq != _searchSeq) return;
-      final countLine =
-          page.summary.countLine.isNotEmpty
-              ? page.summary.countLine
-              : '${page.summary.totalProducts} products';
+
+      final visibleHits =
+          page.items.where((h) => h.isVisibleToViewer).toList(growable: false);
+      final hiddenOnPage = page.items.length - visibleHits.length;
+      final mapped =
+          visibleHits.map(SearchProductResult.fromHit).toList(growable: false);
+      final countLine = _countLineFor(
+        summary: page.summary,
+        visibleCount: mapped.length,
+        hiddenOnPage: reset ? hiddenOnPage : 0,
+      );
+      final totalProducts =
+          hiddenOnPage > 0 && reset
+              ? (page.summary.totalProducts > 0
+                  ? (page.summary.totalProducts - hiddenOnPage).clamp(
+                    0,
+                    page.summary.totalProducts,
+                  )
+                  : mapped.length)
+              : page.summary.totalProducts;
+
+      List<api.SearchSuggestMatch> resultStores =
+          reset ? const [] : _resultStores;
+      if (storesFuture != null) {
+        try {
+          final suggest = await storesFuture;
+          if (!mounted || seq != _searchSeq) return;
+          resultStores =
+              suggest.matches
+                  .where((m) => m.isStore)
+                  .toList(growable: false);
+        } catch (_) {
+          // Store strip is best-effort; product results still show.
+          resultStores = const [];
+        }
+      }
+
       final shouldRecord =
           reset && _recordRecentOnNextResults && _committedQuery.isNotEmpty;
       _recordRecentOnNextResults = false;
       setState(() {
-        final mapped = page.items.map(SearchProductResult.fromHit).toList();
         _results = reset ? mapped : [..._results, ...mapped];
-        _catalog = SearchFilterCatalog.fromFacets(page.facets);
+        _resultStores = resultStores;
+        _catalog = _catalogRespectingPrivacy(
+          facets: page.facets,
+          all: page.items,
+          visible: visibleHits,
+        );
         _countLine = countLine;
-        _totalProducts = page.summary.totalProducts;
+        _totalProducts = totalProducts;
         _nextCursor = page.nextCursor;
         _resultsLoading = false;
         _loadingMore = false;
@@ -348,6 +467,60 @@ class _GlobalSearchRouteState extends State<GlobalSearchRoute> {
         _resultsLoading = false;
         _loadingMore = false;
       });
+      _snack(CatalogErrorMapper.toUserMessage(e));
+    }
+  }
+
+  Future<void> _followStoreFromSearch(api.SearchSuggestMatch match) async {
+    final id = match.id.trim();
+    if (id.isEmpty || _followBusyStoreId != null) return;
+
+    // Requested → cancel request (same as store-profile pending cancel).
+    final cancelPending = match.followStatus.isPending;
+    setState(() => _followBusyStoreId = id);
+    try {
+      final result =
+          cancelPending
+              ? await _stores.unfollowStore(id)
+              : await _stores.followStore(id);
+      if (!mounted) return;
+
+      final nextStatus =
+          cancelPending ? StoreFollowStatus.none : result.status;
+      final canView =
+          cancelPending ? false : result.canViewContentAfterAction;
+
+      api.SearchSuggestMatch patch(api.SearchSuggestMatch m) {
+        if (m.id != id) return m;
+        return m.copyWith(
+          followStatus: nextStatus,
+          canViewContent: canView,
+        );
+      }
+
+      setState(() {
+        _suggestions = _suggestions.map(patch).toList(growable: false);
+        _resultStores = _resultStores.map(patch).toList(growable: false);
+        _followBusyStoreId = null;
+      });
+
+      if (cancelPending) {
+        _snack('Request cancelled');
+      } else if (nextStatus.isPending) {
+        _snack('Request sent');
+      } else if (nextStatus.isFollowing) {
+        _snack('Following');
+        // Newly unlocked products should appear in results / suggestions.
+        if (_phase == _GlobalSearchPhase.results) {
+          await _loadResults(reset: true);
+        } else {
+          final q = _controller.text.trim();
+          if (q.isNotEmpty) await _loadSuggestions(q);
+        }
+      }
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _followBusyStoreId = null);
       _snack(CatalogErrorMapper.toUserMessage(e));
     }
   }
@@ -455,6 +628,22 @@ class _GlobalSearchRouteState extends State<GlobalSearchRoute> {
       );
       return;
     }
+    if (!suggestion.isContentVisible) {
+      // Private-store product leaked into the list — open the store instead.
+      final storeId = suggestion.storeId?.trim() ?? '';
+      if (storeId.isNotEmpty) {
+        _openStoreProfile(
+          storeId: storeId,
+          storeName:
+              suggestion.storeName.trim().isNotEmpty
+                  ? suggestion.storeName
+                  : suggestion.title,
+        );
+        return;
+      }
+      _snack('Follow this private store to see its products');
+      return;
+    }
     final product = SearchProductResult.fromSuggest(suggestion);
     if (product.storeId.isNotEmpty && product.listingId.isNotEmpty) {
       _openProductDetails(product, useResultsFeed: false);
@@ -480,7 +669,6 @@ class _GlobalSearchRouteState extends State<GlobalSearchRoute> {
       },
       child: ScreenWrapper(
         backgroundColor: AppColors.background,
-        statusBarIconBrightness: Brightness.dark,
         child: EdgeBackSwipe(
           onBack: _popRoute,
           child: Column(
@@ -524,7 +712,8 @@ class _GlobalSearchRouteState extends State<GlobalSearchRoute> {
                           _filters = _filters.clearedFilters(
                             keepSort: _filters.sort,
                           );
-                          _results = const [];
+                          _results = [];
+                          _resultStores = const [];
                           _suggestions = const [];
                         });
                         _keepKeyboard = true;
@@ -536,6 +725,7 @@ class _GlobalSearchRouteState extends State<GlobalSearchRoute> {
                           _phase = _GlobalSearchPhase.discover;
                           _committedQuery = '';
                           _suggestions = const [];
+                          _resultStores = const [];
                         });
                         _keepKeyboard = true;
                         _showKeyboard();
@@ -546,7 +736,7 @@ class _GlobalSearchRouteState extends State<GlobalSearchRoute> {
                   ],
                 ),
               ),
-              const Divider(height: 1, color: AppColors.border),
+              Divider(height: 1, color: AppColors.border),
               Expanded(
                 child: GestureDetector(
                   onTap: _hideKeyboard,
@@ -595,6 +785,8 @@ class _GlobalSearchRouteState extends State<GlobalSearchRoute> {
                         isLoading: _suggestLoading,
                         suggestions: _suggestions,
                         onTap: _onSuggestionTap,
+                        onFollowStore: _followStoreFromSearch,
+                        followBusyStoreId: _followBusyStoreId,
                       ),
                       _GlobalSearchPhase.results =>
                         _resultsLoading && _results.isEmpty
@@ -650,6 +842,16 @@ class _GlobalSearchRouteState extends State<GlobalSearchRoute> {
                                             ? null
                                             : () => _loadResults(reset: false),
                                     onProductTap: _openProductDetails,
+                                    header:
+                                        _resultStores.isEmpty
+                                            ? null
+                                            : _ResultsStoresHeader(
+                                              stores: _resultStores,
+                                              followBusyStoreId:
+                                                  _followBusyStoreId,
+                                              onTap: _onSuggestionTap,
+                                              onFollow: _followStoreFromSearch,
+                                            ),
                                   ),
                                 ),
                               ],
@@ -661,6 +863,45 @@ class _GlobalSearchRouteState extends State<GlobalSearchRoute> {
             ],
           ),
         ),
+      ),
+    );
+  }
+}
+
+/// Matching stores strip above the product grid (privacy lock + Follow).
+class _ResultsStoresHeader extends StatelessWidget {
+  const _ResultsStoresHeader({
+    required this.stores,
+    required this.onTap,
+    required this.onFollow,
+    this.followBusyStoreId,
+  });
+
+  final List<api.SearchSuggestMatch> stores;
+  final ValueChanged<api.SearchSuggestMatch> onTap;
+  final ValueChanged<api.SearchSuggestMatch> onFollow;
+  final String? followBusyStoreId;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const SearchSectionHeader(title: 'Stores'),
+          const SizedBox(height: 4),
+          for (final item in stores)
+            SearchStorePrivacyRow(
+              store: item,
+              onTap: () => onTap(item),
+              onFollow: () => onFollow(item),
+              isFollowBusy: followBusyStoreId == item.id,
+            ),
+          const SizedBox(height: 8),
+          const SearchSectionHeader(title: 'Products'),
+          const SizedBox(height: 4),
+        ],
       ),
     );
   }

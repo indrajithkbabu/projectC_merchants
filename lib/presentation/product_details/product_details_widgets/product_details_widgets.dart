@@ -146,7 +146,7 @@ class _Placeholder extends StatelessWidget {
           colors: colors,
         ),
       ),
-      child: const Center(
+      child: Center(
         child: Icon(
           Icons.diamond_outlined,
           size: 48,
@@ -229,7 +229,7 @@ class ProductDetailsStoreTile extends StatelessWidget {
       child: Container(
         width: double.infinity,
         padding: const EdgeInsets.symmetric(vertical: 14),
-        decoration: const BoxDecoration(
+        decoration: BoxDecoration(
           border: Border(
             top: BorderSide(color: AppColors.border),
             bottom: BorderSide(color: AppColors.border),
@@ -244,7 +244,7 @@ class ProductDetailsStoreTile extends StatelessWidget {
                 color: AppColors.primary,
                 borderRadius: BorderRadius.circular(10),
               ),
-              child: const Icon(
+              child: Icon(
                 Icons.folder_rounded,
                 color: AppColors.textOnPrimary,
                 size: 22,
@@ -264,7 +264,7 @@ class ProductDetailsStoreTile extends StatelessWidget {
                 ],
               ),
             ),
-            const Icon(
+            Icon(
               Icons.chevron_right_rounded,
               color: AppColors.textSecondary,
             ),
@@ -326,7 +326,7 @@ class ProductDetailsThumbStrip extends StatelessWidget {
                             !ProductImagePaths.isDisplayable(path)
                         ? ColoredBox(
                           color: AppColors.primary.withValues(alpha: 0.35),
-                          child: const Center(
+                          child: Center(
                             child: Icon(
                               Icons.diamond_outlined,
                               size: 22,

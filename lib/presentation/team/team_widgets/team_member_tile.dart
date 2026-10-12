@@ -65,7 +65,7 @@ class _AddedButton extends StatelessWidget {
           mainAxisSize: MainAxisSize.min,
           children: [
             if (isAdded) ...[
-              const Icon(
+              Icon(
                 Icons.check_rounded,
                 size: 13,
                 color: AppColors.primary,

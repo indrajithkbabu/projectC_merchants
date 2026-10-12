@@ -54,10 +54,10 @@ class ProfileNameField extends StatelessWidget {
               fontSize: fontSize,
               fontWeight: FontWeight.w400,
             ),
-            enabledBorder: const UnderlineInputBorder(
+            enabledBorder: UnderlineInputBorder(
               borderSide: BorderSide(color: AppColors.border),
             ),
-            focusedBorder: const UnderlineInputBorder(
+            focusedBorder: UnderlineInputBorder(
               borderSide: BorderSide(color: AppColors.primary, width: 1.8),
             ),
           ),

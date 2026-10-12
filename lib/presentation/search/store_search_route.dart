@@ -58,7 +58,7 @@ class _StoreSearchRouteState extends State<StoreSearchRoute>
   double _prevChromeAnimValue = 1;
 
   api.StoreFacetsResponse? _facets;
-  List<api.SearchSuggestMatch> _suggestions = const [];
+  List<api.SearchSuggestMatch> _suggestions = [];
   List<SearchProductResult> _results = const [];
   String _countLine = '';
   int _matchedTotal = 0;
@@ -424,7 +424,6 @@ class _StoreSearchRouteState extends State<StoreSearchRoute>
 
     return ScreenWrapper(
       backgroundColor: AppColors.background,
-      statusBarIconBrightness: Brightness.dark,
       child: Column(
         children: [
           Padding(

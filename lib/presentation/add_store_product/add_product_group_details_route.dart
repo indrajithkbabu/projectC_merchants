@@ -138,7 +138,6 @@ class _AddProductGroupDetailsRouteState
       ],
       child: ScreenWrapper(
         backgroundColor: AppColors.background,
-        statusBarIconBrightness: Brightness.dark,
         child: BlocBuilder<BulkUploadBloc, BulkUploadState>(
           builder: (context, state) {
             final focusItems = _focusItems(state);
@@ -208,7 +207,7 @@ class _AddProductGroupDetailsRouteState
                   top: false,
                   child: Container(
                     width: double.infinity,
-                    decoration: const BoxDecoration(
+                    decoration: BoxDecoration(
                       color: AppColors.background,
                       border: Border(
                         top: BorderSide(color: AppColors.border, width: 0.7),
@@ -467,10 +466,10 @@ class _AddProductGroupDetailsRouteState
     return InputDecoration(
       hintText: hint,
       hintStyle: AppTextStyles.hint(fontSize: 16, fontWeight: FontWeight.w400),
-      enabledBorder: const UnderlineInputBorder(
+      enabledBorder: UnderlineInputBorder(
         borderSide: BorderSide(color: AppColors.border),
       ),
-      focusedBorder: const UnderlineInputBorder(
+      focusedBorder: UnderlineInputBorder(
         borderSide: BorderSide(color: AppColors.primary, width: 1.6),
       ),
     );
@@ -559,10 +558,10 @@ class _EditableItemCard extends StatelessWidget {
                     isDense: true,
                     hintText: 'Item name',
                     hintStyle: AppTextStyles.hint(fontSize: 15),
-                    enabledBorder: const UnderlineInputBorder(
+                    enabledBorder: UnderlineInputBorder(
                       borderSide: BorderSide(color: AppColors.border),
                     ),
-                    focusedBorder: const UnderlineInputBorder(
+                    focusedBorder: UnderlineInputBorder(
                       borderSide: BorderSide(
                         color: AppColors.primary,
                         width: 1.6,

@@ -35,3 +35,13 @@ class StoreListingClearMessage extends StoreListingEvent {
 class StoreListingClearAccountDeleted extends StoreListingEvent {
   const StoreListingClearAccountDeleted();
 }
+
+/// Internal: apply contact names resolved after a disk-first paint.
+class StoreListingCachedNamesReady extends StoreListingEvent {
+  const StoreListingCachedNamesReady(this.stores);
+
+  final List<StoreChannel> stores;
+
+  @override
+  List<Object?> get props => [stores];
+}

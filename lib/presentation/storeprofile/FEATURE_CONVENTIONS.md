@@ -10,31 +10,60 @@ This file defines what to follow for UI and logic inside `lib/presentation/store
 - Use `AppPadding` for consistent spacing.
 - Use `AppTextStyles` and `AppColors` for all display text and palette.
 - Keep reusable controls shared; keep store-profile-only visuals inside local widget folder.
-- Product grid shares one `CustomScrollView` with the profile header. The header
-  **starts collapsed** (compact bar + `PRODUCTS · N`) so landing is listing-first.
-  Compact identity shows **logo + store name only** (no link subtitle). Tap it to
-  expand store details (logo, name, copy link, members, Add products / Import).
-  While expanded, the compact identity is hidden; tap the header again or
-  **actively drag** the product list upward to collapse. Bounce-back / fling
-  after finger lift does not collapse. Expand/collapse uses a curved animation
-  (~380ms).
+- Product grid shares one `CustomScrollView` with a **listing-first** compact
+  header (logo + store name only; no `PRODUCTS · N` / View all). Tap the compact
+  identity to push `store_channel_route` (Telegram-style store info) — do **not**
+  expand the header in place. Store logos are always circular; missing images
+  use name initials (no diamond/icon default). Product tiles show
+  **collection-level `viewCount`** (eye badge) when the list/detail API
+  provides a positive count; photo-level views live on product details.
+- `store_channel_route`: collapsing hero (scroll up → compact title+logo stays
+  visible; scroll down → full-width swipeable **store** logos only — never
+  product photos; missing logo → name initials). Actions: **Followers** (count)
+  / **Following** (count) / **Share** / **Mute** / **Report** (Mute/Report
+  stubbed). Owner: followers lists open on tap. Visitor: Follow chrome under
+  actions (not on Discover listing). Tabs: **Media** (pinch zoom 2–9 columns,
+  smooth continuous resize + snap) / **Group** / **Gallery**.
 - Toolbar: **search** icon always on the right (opens `store_search_route`).
-  While collapsed, a **blue** circular action also shows when applicable: own
-  store → **+** (add products); other store (when `canImport`) → **download**
-  import icon. When expanded, that blue icon fades away because the actions row
-  already has Add products / Import. No gallery or import-requests icons in the
-  app bar.
-- Other-store **Import products** still appears on the expanded actions row
-  **only when the viewer already has their own store** (`viewerHasOwnStore` /
-  `canImport`); otherwise expand is view-only. The products row is
-  `PRODUCTS · N` then **View all** when products exist → `store_gallery_route`.
+  A **blue** circular action shows when applicable: own store → **+** (add
+  products); other store (when `canImport`) → **download** import icon. No
+  gallery or import-requests icons in the app bar.
+- Other-store **Import** uses the blue toolbar download when `canImport`.
 
 ## Logic Ownership
 - Store profile screens manage store profile presentation and interaction events.
 - Use listeners for side effects and navigation (info + error snackbars).
 - Keep import/listing/team/auth business logic out of widget build code.
 - Own store: load members via `GET /stores/:storeId/members`. Expanded header always shows `N members · M products` (including `0 members`). Below that row, **Add member** → `add_team_route` with `returnToProfile: true`; on Done/Skip/back, pop to store profile and refresh members. Missing catalog names are filled from device contacts by phone via shared `DeviceContactNames` (E.164 / normalizedNumber / last-10; quiet, no loader).
-- Other stores: do not call members API (owner-only); show products count only.
+- Other stores: do not call members API (owner-only). Compact listing header
+  only (no Follow bar on Discover — Follow lives on `store_channel_route`).
+  When `canViewContent` is false (private + not approved), replace the product
+  grid with the locked gate (“This store is private”); hide search / import.
+  Compact title shows a lock icon for private stores. Visitor follower lists
+  on the channel screen are **not** tappable into list routes.
+- **Upload notify bell** (while Following): toggles `notifyUploads` via
+  `PATCH /stores/:id/follow` (`StoreProfileToggleNotifyUploads`). Optimistic
+  UI; reverts on API failure. Muted followers skip upload push + in-app upload
+  feed entries (backend). On new active follow (or pending→following), client
+  also `PATCH notifyUploads: true` so the ON bell matches the server — otherwise
+  `new_upload` never fires.
+- **Own store:** expanded header also shows Products / Followers / Following
+  counts + privacy pill. Followers / Following taps open
+  `followers_following_route` (owner-only lists). After pop, refresh store meta.
+- Follow POST/DELETE returns a slim `{status}` payload — never parse it as
+  `CatalogStore` (that incorrectly unlocked private grids). Map
+  `active→following`, `pending→Requested` and keep the gate closed until
+  `canViewContent` is true.
+- Store profile shows **Discover** listing for both owner and visitor (no
+  owner floating bottom nav on this route). Wishlist / My store live on the
+  main shell; Activity opens from Stores home notification → `activity_route`.
+  - Listing-first compact header + products; tap header → `store_channel_route`
+    (not global search).
+  - Own store may show `FollowRequestsBanner` when private + pending > 0;
+    tap opens `follow_requests_route` (Confirm / Delete).
+  - Shell My store reuses `StoreMyStoreTab` (hamburger → Settings, no back /
+    no day-night toggle; **Import requests** + Share CTAs) with
+    `AppPadding.screen` chrome.
 - Products + collage images are **cache-first**:
   API responses are written to `StoreProductsCache`, then the UI paints
   only from that cache. Soft-prefetch warms the first listing stores and
@@ -63,8 +92,9 @@ This file defines what to follow for UI and logic inside `lib/presentation/store
   **Pending** chip (same as import-select). Product cards show **title only**
   (tags / meta under the title are hidden). Refresh probe after returning from
   import flow.
-- Own store: import-requests inbox lives on the **Profile tab** (not store
-  profile app bar). Store profile no longer shows the inbox badge icon.
+- Own store: import-requests inbox lives under **Settings** from shell My store
+  (`settings_route`; also still on no-store Profile when applicable). Store
+  profile no longer shows the inbox badge icon.
 - Store header meta is **cache-first** via `StoreMetaCache` (name, link,
   cover, showcase images). Listing seeds cover URLs into that cache so the
   logo does not flash-load; `GET /stores/:id` and image append/delete write
@@ -105,13 +135,16 @@ This file defines what to follow for UI and logic inside `lib/presentation/store
 - Do not show add-product / team CTAs on other stores. Product details receive `isOwnStore` so own-store originals can edit even when list permissions omit `edit`. Selection delete is gated by `isOwnStore`.
 - Import is gated by `viewerHasOwnStore` (session `ownStoreId`): hide Import CTAs and refuse `_openImport` / import probe until the user has created a store (Profile tab **Create store** → `store_setup_route` → team → store listing).
 - Opening the gallery also passes `isOwnStore` so details opened from a photo keep the same edit gate.
-- **Add products** / app-bar **+** opens shared `showMediaSourceSheet` (handle,
-  title, Camera / Gallery rows with chevrons; no Cancel — dismiss via tap
-  outside or drag). Camera uses `image_picker`. Gallery opens
-  `ProductGalleryPicker` bottomsheet (album dropdown with covers — not a nested
-  sheet; multi-select via `drag_select_grid_view`: tap toggle + hold/slide
-  range select; numbered badges; max 50), then `add_product_group_route`
-  (title page). Crop/draw/text is optional from the photo strip there
+- **Add products** / app-bar **+** opens one Telegram-style
+  `ProductGalleryPicker` sheet (`includeCamera: true`) — no Camera/Gallery
+  chooser. Photo permission is requested **before** the sheet; deny → snackbar
+  + Settings, no sheet. Live **Camera** preview (2 cols × 3 rows, `camera`
+  package) on the left with a 2×3 photo block beside it, then the rest of the
+  library below (album dropdown; multi-select via `drag_select_grid_view`:
+  tap + hold/slide; numbered badges; max 50).   Camera cell shows a live preview; tap closes the sheet (preview released),
+  then an in-app full-screen camera (`camera` package — not `image_picker`,
+  which races CameraX on MIUI) → photo → `add_product_group_route`.
+  Crop/draw/text is optional from the photo strip there
   (`ProductImageCropper`), not forced after pick.
 
 ## Collection browse
@@ -147,12 +180,11 @@ This file defines what to follow for UI and logic inside `lib/presentation/store
 - Keep route registration in centralized navigation files.
 - Use shared Cupertino-style page transitions.
 - Add members from profile uses `pushNamed(add_team_route, returnToProfile: true)` and returns to the profile (does not clear to listing).
-- Own-store **Add products** / blue app-bar **+** opens `showMediaSourceSheet`
-  then camera (`image_picker`) or gallery (`ProductGalleryPicker`) then
-  `add_product_group_route` (title / tags / description → publish title-only
-  **or** expand more details for weight/purity/size → preview). Edit metadata
-  still goes through product details → edit sheet → `add_product_form_route`
-  with `mode: edit`.
+- Own-store **Add products** / blue app-bar **+** opens
+  `ProductGalleryPicker(includeCamera: true)` then `add_product_group_route`
+  (title / tags / description → publish title-only **or** expand more details
+  for weight/purity/size → preview). Edit metadata still goes through product
+  details → edit sheet → `add_product_form_route` with `mode: edit`.
 - Refine items opens preview in `isEditMode` (no Published screen).
 - App-bar **search** icon → `store_search_route` with `storeId`, `storeName`,
   `productCount`.

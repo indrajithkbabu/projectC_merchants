@@ -1,4 +1,5 @@
 import 'package:flutter/cupertino.dart';
+import 'package:flutter/material.dart' show Colors, EdgeInsets, Padding, Theme;
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:project_c/bloc/account_profile/account_profile_bloc.dart';
 import 'package:project_c/bloc/add_store_product/add_store_product_bloc.dart';
@@ -34,7 +35,15 @@ import 'package:project_c/presentation/home/home_placeholder_route.dart';
 import 'package:project_c/presentation/bootstrap/bootstrap_route.dart';
 import 'package:project_c/presentation/main_shell/invite_friends_route.dart';
 import 'package:project_c/presentation/main_shell/main_shell_route.dart';
+import 'package:project_c/presentation/main_shell/tabs/settings_tab.dart';
 import 'package:project_c/presentation/onboarding/onboarding_route.dart';
+import 'package:project_c/presentation/privacy/account_privacy_route.dart';
+import 'package:project_c/presentation/privacy/activity_route.dart';
+import 'package:project_c/helper/widgets/screen_wrapper.dart';
+import 'package:project_c/helper/colors.dart';
+import 'package:project_c/presentation/privacy/follow_requester_profile_route.dart';
+import 'package:project_c/presentation/privacy/follow_requests_route.dart';
+import 'package:project_c/presentation/privacy/followers_following_route.dart';
 import 'package:project_c/presentation/product_details/product_details_route.dart';
 import 'package:project_c/presentation/profile/profile_route.dart';
 import 'package:project_c/presentation/search/global_search_route.dart';
@@ -48,6 +57,7 @@ import 'package:project_c/presentation/store_import/store_import_requests_route.
 import 'package:project_c/presentation/store_import/store_import_select_route.dart';
 import 'package:project_c/presentation/store_setup/store_setup_route.dart';
 import 'package:project_c/presentation/storeprofile/collection_browse_route.dart';
+import 'package:project_c/presentation/storeprofile/store_channel_route.dart';
 import 'package:project_c/presentation/storeprofile/store_profile_route.dart';
 import 'package:project_c/presentation/team/add_team_route.dart';
 
@@ -72,6 +82,8 @@ PageRoute? onGenerateRoutes(RouteSettings settings) {
       return _storeListingRoute(settings);
     case Routes.storeProfileRoute:
       return _storeProfileRoute(settings);
+    case Routes.storeChannelRoute:
+      return _storeChannelRoute(settings);
     case Routes.storeGalleryRoute:
       return _storeGalleryRoute(settings);
     case Routes.storeImportSelectRoute:
@@ -108,6 +120,18 @@ PageRoute? onGenerateRoutes(RouteSettings settings) {
       return _countryPickerRoute(settings);
     case Routes.inviteFriendsRoute:
       return _inviteFriendsRoute(settings);
+    case Routes.settingsRoute:
+      return _settingsRoute(settings);
+    case Routes.activityRoute:
+      return _activityRoute(settings);
+    case Routes.accountPrivacyRoute:
+      return _accountPrivacyRoute(settings);
+    case Routes.followRequestsRoute:
+      return _followRequestsRoute(settings);
+    case Routes.followRequesterProfileRoute:
+      return _followRequesterProfileRoute(settings);
+    case Routes.followersFollowingRoute:
+      return _followersFollowingRoute(settings);
     case Routes.homePlaceholderRoute:
       return _homePlaceholderRoute(settings);
 
@@ -228,6 +252,179 @@ PageRoute? _inviteFriendsRoute(RouteSettings settings) {
   );
 }
 
+PageRoute? _settingsRoute(RouteSettings settings) {
+  final args = settings.arguments;
+  final map = args is Map ? args : const <dynamic, dynamic>{};
+  final existingBloc =
+      map['accountProfileBloc'] is AccountProfileBloc
+          ? map['accountProfileBloc'] as AccountProfileBloc
+          : null;
+
+  return _buildAnimatedRoute(
+    settings: settings,
+    builder: (context) {
+      final child = ScreenWrapper(
+        backgroundColor: AppColors.background,
+        child: const SettingsTab(showBack: true),
+      );
+      if (existingBloc != null) {
+        return BlocProvider<AccountProfileBloc>.value(
+          value: existingBloc,
+          child: child,
+        );
+      }
+      return BlocProvider(
+        create: (_) => AccountProfileBloc(),
+        child: child,
+      );
+    },
+  );
+}
+
+PageRoute? _activityRoute(RouteSettings settings) {
+  final args = settings.arguments;
+  final map = args is Map ? args : const <dynamic, dynamic>{};
+  final storeId =
+      map['storeId'] is String ? (map['storeId'] as String).trim() : '';
+  final storeName =
+      map['storeName'] is String ? (map['storeName'] as String).trim() : '';
+  if (storeId.isEmpty) return null;
+  final pendingCount =
+      map['pendingCount'] is int ? map['pendingCount'] as int : 0;
+  final previewNames =
+      map['previewNames'] is List
+          ? (map['previewNames'] as List)
+              .whereType<String>()
+              .toList(growable: false)
+          : const <String>[];
+
+  return _buildAnimatedRoute(
+    settings: settings,
+    builder:
+        (context) => ScreenWrapper(
+          backgroundColor: AppColors.background,
+          child: Padding(
+            padding: EdgeInsets.only(
+              top: ScreenWrapper.statusBarTop(context),
+            ),
+            child: ActivityRoute(
+              storeId: storeId,
+              storeName: storeName.isEmpty ? 'My store' : storeName,
+              pendingCount: pendingCount,
+              previewNames: previewNames,
+              onBack: () => Navigator.of(context).maybePop(),
+              onOpenRequests: () {
+                Navigator.of(context).pushNamed(
+                  Routes.followRequestsRoute,
+                  arguments: {
+                    'storeId': storeId,
+                    'storeName':
+                        storeName.isEmpty ? 'My store' : storeName,
+                  },
+                );
+              },
+            ),
+          ),
+        ),
+  );
+}
+
+PageRoute? _accountPrivacyRoute(RouteSettings settings) {
+  return _buildAnimatedRoute(
+    settings: settings,
+    builder: (context) => const AccountPrivacyRoute(),
+  );
+}
+
+PageRoute? _followRequestsRoute(RouteSettings settings) {
+  final args = settings.arguments;
+  final map = args is Map ? args : const <dynamic, dynamic>{};
+  final storeId =
+      map['storeId'] is String ? (map['storeId'] as String).trim() : '';
+  final storeName =
+      map['storeName'] is String ? (map['storeName'] as String).trim() : '';
+  if (storeId.isEmpty) return null;
+
+  return _buildAnimatedRoute(
+    settings: settings,
+    builder:
+        (context) => FollowRequestsRoute(
+          storeId: storeId,
+          storeName: storeName,
+        ),
+  );
+}
+
+PageRoute? _followRequesterProfileRoute(RouteSettings settings) {
+  final args = settings.arguments;
+  if (args is! Map) return null;
+  final requestRaw = args['request'];
+  if (requestRaw is! Map) return null;
+  final ownerStoreId =
+      args['ownerStoreId'] is String
+          ? (args['ownerStoreId'] as String).trim()
+          : '';
+  final ownerStoreName =
+      args['ownerStoreName'] is String
+          ? (args['ownerStoreName'] as String).trim()
+          : '';
+  if (ownerStoreId.isEmpty) return null;
+  final readOnly = args['readOnly'] == true;
+
+  final request = followRequestItemFromMap(requestRaw);
+
+  return _buildAnimatedRoute(
+    settings: settings,
+    builder:
+        (context) => FollowRequesterProfileRoute(
+          request: request,
+          ownerStoreId: ownerStoreId,
+          ownerStoreName: ownerStoreName,
+          readOnly: readOnly,
+        ),
+  );
+}
+
+PageRoute? _followersFollowingRoute(RouteSettings settings) {
+  final args = settings.arguments;
+  if (args is! Map) return null;
+  final storeId =
+      args['storeId'] is String ? (args['storeId'] as String).trim() : '';
+  if (storeId.isEmpty) return null;
+  final storeName =
+      args['storeName'] is String
+          ? (args['storeName'] as String).trim()
+          : 'Store';
+  final initialTabRaw =
+      args['initialTab'] is String
+          ? (args['initialTab'] as String).trim().toLowerCase()
+          : 'followers';
+  final initialTab =
+      initialTabRaw == 'following'
+          ? FollowersFollowingTab.following
+          : FollowersFollowingTab.followers;
+  final followerCount =
+      args['followerCount'] is num
+          ? (args['followerCount'] as num).toInt()
+          : 0;
+  final followingCount =
+      args['followingCount'] is num
+          ? (args['followingCount'] as num).toInt()
+          : 0;
+
+  return _buildAnimatedRoute(
+    settings: settings,
+    builder:
+        (context) => FollowersFollowingRoute(
+          storeId: storeId,
+          storeName: storeName.isEmpty ? 'Store' : storeName,
+          initialTab: initialTab,
+          followerCount: followerCount,
+          followingCount: followingCount,
+        ),
+  );
+}
+
 PageRoute? _storeListingRoute(RouteSettings settings) {
   final args = settings.arguments;
   if (args is Map) {
@@ -326,6 +523,66 @@ PageRoute? _storeProfileRoute(RouteSettings settings) {
             focusProductId: focusProductId.isEmpty ? null : focusProductId,
           ),
         ),
+  );
+}
+
+PageRoute? _storeChannelRoute(RouteSettings settings) {
+  final args = settings.arguments;
+  if (args is! Map) return null;
+  final storeId = args['storeId'] is String ? args['storeId'] as String : '';
+  final storeName =
+      args['storeName'] is String ? args['storeName'] as String : 'Store';
+  final storeLink =
+      args['storeLink'] is String ? args['storeLink'] as String : '';
+  final imageUrls =
+      args['imageUrls'] is List
+          ? (args['imageUrls'] as List)
+              .whereType<String>()
+              .map((e) => e.trim())
+              .where((e) => e.isNotEmpty)
+              .toList(growable: false)
+          : const <String>[];
+  final products =
+      args['products'] != null
+          ? _asProducts(args['products'])
+          : const <StoreProduct>[];
+  final followerCount =
+      args['followerCount'] is int ? args['followerCount'] as int : 0;
+  final followingCount =
+      args['followingCount'] is int ? args['followingCount'] as int : 0;
+  final productCount =
+      args['productCount'] is int ? args['productCount'] as int : 0;
+  final isOwnStore =
+      args['isOwnStore'] is bool ? args['isOwnStore'] as bool : false;
+  final profileBloc =
+      args['profileBloc'] is StoreProfileBloc
+          ? args['profileBloc'] as StoreProfileBloc
+          : null;
+
+  final enableFollowChrome = !isOwnStore && profileBloc != null;
+  final page = StoreChannelRoute(
+    storeId: storeId,
+    storeName: storeName,
+    storeLink: storeLink,
+    imageUrls: imageUrls,
+    products: products,
+    followerCount: followerCount,
+    followingCount: followingCount,
+    productCount: productCount,
+    isOwnStore: isOwnStore,
+    enableFollowChrome: enableFollowChrome,
+  );
+
+  return _buildAnimatedRoute(
+    settings: settings,
+    builder:
+        (context) =>
+            profileBloc == null
+                ? page
+                : BlocProvider<StoreProfileBloc>.value(
+                  value: profileBloc,
+                  child: page,
+                ),
   );
 }
 
@@ -759,25 +1016,46 @@ PageRoute? _productDetailsRoute(RouteSettings settings) {
           : '';
   final showStoreGroupLink =
       args is Map && args['showStoreGroupLink'] == true;
+  final likedPhotoIds = <String>{
+    if (args is Map && args['likedPhotoIds'] is List)
+      for (final e in args['likedPhotoIds'] as List)
+        if (e is String && e.trim().isNotEmpty) e.trim(),
+    if (args is Map &&
+        args['likedPhotoId'] is String &&
+        (args['likedPhotoId'] as String).trim().isNotEmpty)
+      (args['likedPhotoId'] as String).trim(),
+  };
 
   return _buildAnimatedRoute(
     settings: settings,
     builder:
-        (context) => BlocProvider(
-          create:
-              (_) => ProductDetailsBloc(
-                product: product,
-                storeName: storeName,
-                storeLink: storeLink,
-                storeId: storeId,
-                isOwnStore: isOwnStore,
-                initialImageIndex: imageIndex,
-                galleryFeed: galleryFeed,
-                galleryFeedIndex: galleryFeedIndex,
-                seedCategory: seedCategory,
-                showStoreGroupLink: showStoreGroupLink,
-              ),
-          child: const ProductDetailsRoute(),
+        (context) => Theme(
+          // Opaque black under the route transition (avoids white→black flicker
+          // when opening immersive product details from a light screen).
+          data: Theme.of(context).copyWith(
+            scaffoldBackgroundColor: Colors.black,
+            canvasColor: Colors.black,
+          ),
+          child: ColoredBox(
+            color: Colors.black,
+            child: BlocProvider(
+              create:
+                  (_) => ProductDetailsBloc(
+                    product: product,
+                    storeName: storeName,
+                    storeLink: storeLink,
+                    storeId: storeId,
+                    isOwnStore: isOwnStore,
+                    initialImageIndex: imageIndex,
+                    galleryFeed: galleryFeed,
+                    galleryFeedIndex: galleryFeedIndex,
+                    seedCategory: seedCategory,
+                    showStoreGroupLink: showStoreGroupLink,
+                    initialLikedPhotoIds: likedPhotoIds,
+                  ),
+              child: const ProductDetailsRoute(),
+            ),
+          ),
         ),
   );
 }

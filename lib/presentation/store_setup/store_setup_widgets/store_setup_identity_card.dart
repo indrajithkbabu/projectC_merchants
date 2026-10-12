@@ -74,13 +74,13 @@ class StoreSetupIdentityCard extends StatelessWidget {
                   ),
                   isDense: true,
                   contentPadding: const EdgeInsets.only(bottom: 10, top: 8),
-                  enabledBorder: const UnderlineInputBorder(
+                  enabledBorder: UnderlineInputBorder(
                     borderSide: BorderSide(
                       color: AppColors.primary,
                       width: 1.5,
                     ),
                   ),
-                  focusedBorder: const UnderlineInputBorder(
+                  focusedBorder: UnderlineInputBorder(
                     borderSide: BorderSide(color: AppColors.primary, width: 2),
                   ),
                 ),
@@ -129,7 +129,7 @@ class _PhotoButton extends StatelessWidget {
                 height: _size,
                 child:
                     isLoading
-                        ? const Center(
+                        ? Center(
                           child: SizedBox(
                             width: 22,
                             height: 22,
@@ -146,7 +146,7 @@ class _PhotoButton extends StatelessWidget {
                           width: _size,
                           height: _size,
                         )
-                        : const Center(
+                        : Center(
                           child: Icon(
                             Icons.add_a_photo_rounded,
                             size: 28,

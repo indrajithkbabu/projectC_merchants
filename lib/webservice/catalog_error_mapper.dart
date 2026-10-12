@@ -161,6 +161,16 @@ class CatalogErrorMapper {
         return 'You already have a store.';
       case 'STORE_NOT_FOUND':
         return 'This store is no longer available.';
+      case 'STORE_PRIVATE':
+        return 'This store is private. Follow to see products.';
+      case 'CANNOT_FOLLOW_OWN_STORE':
+        return 'You cannot follow your own store.';
+      case 'ALREADY_FOLLOWING':
+        return 'You already follow this store.';
+      case 'FOLLOW_REQUEST_ALREADY_PENDING':
+        return 'Follow request is already pending.';
+      case 'FOLLOW_NOT_FOUND':
+        return 'You are not following this store.';
       case 'TOO_MANY_STORE_IMAGES':
         return 'A store can have at most 5 showcase images.';
       case 'AT_LEAST_ONE_IMAGE_REQUIRED':

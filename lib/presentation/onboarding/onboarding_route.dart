@@ -26,7 +26,6 @@ class OnboardingRoute extends StatelessWidget {
       ],
       child: ScreenWrapper(
         backgroundColor: AppColors.background,
-        statusBarIconBrightness: Brightness.dark,
         child: Padding(
           padding: EdgeInsets.only(top: ScreenWrapper.statusBarTop(context)),
           child: WelcomeStep(

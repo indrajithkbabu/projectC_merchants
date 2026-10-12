@@ -23,11 +23,28 @@ This file defines what to follow for UI and logic inside `lib/presentation/searc
   - `GET /search` — global results + facets
   - `GET /stores/:id/facets` — in-store “What this store has” chips
   - `GET /stores/:id/search` — in-store results + facets
+- **Search privacy (walkthrough page 14):**
+  - Parse optional `privacy` / `followStatus` / `canViewContent` on suggest
+    matches and result hit `store` objects (`search_models.dart`).
+  - **Stores** stay searchable when private: lock icon + “Private” subtitle +
+    **Follow** / **Requested** (`SearchStorePrivacyRow`). Follow uses
+    `StoreRepository.followStore`; Requested cancels via `unfollowStore`.
+  - **Products** from private stores the viewer cannot access are hidden in
+    suggestions and in the results grid (`isContentVisible` /
+    `isVisibleToViewer`). Tap on a leaked private product opens the store
+    instead of product details.
+  - Results may show a **Stores** strip (parallel suggest) above the product
+    grid with the same privacy chrome.
+  - Count line and store facet options prefer **visible** hits when the client
+    filtered private products off the page. Prefer server totals when nothing
+    was hidden. In-store search is unchanged (viewer already has access).
 - Recent searches are **device-local** via `SearchRecentPreferences` (secure storage). Cap is **3** latest items (storage + Discover UI). Clear persists across route re-entry. Query/store opens are recorded after successful use. In-store search has no Recent section.
 - Committing a **text** search (field submit, recent query, trending) resets facet filters (keeps sort) so leftover category/filters do not AND with the new `q`.
 - Category tiles set only that category filter (no `q`). Horizontal filter dropdowns / sort update selection and reload results.
 - Filter keys sent to API are facet `value`s (e.g. `necklace`, `under_10`), not display labels.
-- Sort maps: Newest → `newest`, Lightest → `weight_asc`, Heaviest → `weight_desc`.
+- Sort maps: Newest → `newest`, Most viewed → `most_viewed`, Lightest →
+  `weight_asc`, Heaviest → `weight_desc`. Result cards show product
+  `viewCount` when the API returns a positive count.
 - Side effects (snackbars, navigation) stay in route methods, not in `build`.
 - Errors use `CatalogErrorMapper.toUserMessage` (never raw API text).
 
@@ -51,9 +68,10 @@ This file defines what to follow for UI and logic inside `lib/presentation/searc
 - API contract: `lib/webservice/search/CATALOG_SEARCH_AND_FILTER.md`.
 
 ## Folder Scope
-- `global_search_route.dart`: platform-wide search UI.
+- `global_search_route.dart`: platform-wide search UI + search-privacy Follow.
 - `store_search_route.dart`: in-store search UI.
 - `search_models.dart`: UI filter selection + card mapping from API hits.
 - `search_filters_route.dart`: full-screen Sort & Filter (Apply pops selection).
-- `search_widgets/`: search-only visual components.
+- `search_widgets/`: search-only visual components (`search_store_privacy_row`,
+  suggestion list Stores/Products split, results grid optional Stores header).
 - API DTOs live in `lib/models/catalog/search_models.dart`.

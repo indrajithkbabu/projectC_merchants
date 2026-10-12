@@ -40,7 +40,7 @@ class PhoneCountryField extends StatelessWidget {
                 style: AppTextStyles.label(color: AppColors.textSecondary),
               ),
               const SizedBox(width: 4),
-              const Icon(
+              Icon(
                 Icons.chevron_right_rounded,
                 color: AppColors.textSecondary,
               ),

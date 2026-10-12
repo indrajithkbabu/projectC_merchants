@@ -2,7 +2,9 @@ import 'dart:io';
 
 import 'package:project_c/models/catalog/catalog_page.dart';
 import 'package:project_c/models/catalog/catalog_store.dart';
+import 'package:project_c/models/catalog/follow_api_models.dart';
 import 'package:project_c/models/catalog/store_member_models.dart';
+import 'package:project_c/models/store_privacy_mode.dart';
 import 'package:project_c/resources/endpoints.dart';
 import 'package:project_c/webservice/catalog_api_client.dart';
 
@@ -106,6 +108,138 @@ class StoreRequest {
       requiresAuth: true,
     );
     return CatalogStore.fromJson(json ?? const {});
+  }
+
+  /// PATCH `/stores/:storeId/privacy` — switches store-wide Public / Private.
+  Future<CatalogStore> patchStorePrivacy({
+    required String storeId,
+    required StorePrivacyMode privacy,
+  }) async {
+    final json = await _api.sendJson(
+      method: HttpMethod.patch,
+      path: Endpoints.storePrivacy(storeId),
+      body: {'privacy': privacy.apiValue},
+      requiresAuth: true,
+    );
+    return CatalogStore.fromJson(json ?? const {});
+  }
+
+  /// POST `/stores/:storeId/follow` — follow or request to follow.
+  Future<FollowActionResult> followStore(String storeId) async {
+    final json = await _api.sendJson(
+      method: HttpMethod.post,
+      path: Endpoints.storeFollow(storeId),
+      body: const <String, dynamic>{},
+      requiresAuth: true,
+    );
+    return FollowActionResult.fromJson(json ?? const {});
+  }
+
+  /// DELETE `/stores/:storeId/follow` — unfollow or cancel a pending request.
+  Future<FollowActionResult> unfollowStore(String storeId) async {
+    final json = await _api.sendJson(
+      method: HttpMethod.delete,
+      path: Endpoints.storeFollow(storeId),
+      requiresAuth: true,
+    );
+    return FollowActionResult.fromJson(json ?? const {});
+  }
+
+  /// PATCH `/stores/:storeId/follow` — mute/unmute upload push for a follow.
+  Future<bool> patchFollowNotifyUploads({
+    required String storeId,
+    required bool notifyUploads,
+  }) async {
+    final json = await _api.sendJson(
+      method: HttpMethod.patch,
+      path: Endpoints.storeFollow(storeId),
+      body: <String, dynamic>{'notifyUploads': notifyUploads},
+      requiresAuth: true,
+    );
+    return json?['notifyUploads'] as bool? ?? notifyUploads;
+  }
+
+  Future<FollowRequestPage> fetchFollowRequests({
+    required String storeId,
+    int limit = 20,
+    String? cursor,
+  }) async {
+    final query = <String, String>{'limit': '$limit'};
+    if (cursor != null && cursor.isNotEmpty) query['cursor'] = cursor;
+    final json = await _api.sendJson(
+      method: HttpMethod.get,
+      path: Endpoints.storeFollowRequests(storeId),
+      query: query,
+      requiresAuth: true,
+    );
+    return FollowRequestPage.fromJson(json ?? const {});
+  }
+
+  Future<void> acceptFollowRequest({
+    required String storeId,
+    required String followerUserId,
+  }) async {
+    await _api.sendJson(
+      method: HttpMethod.post,
+      path: Endpoints.storeFollowRequestAccept(storeId, followerUserId),
+      body: const <String, dynamic>{},
+      requiresAuth: true,
+    );
+  }
+
+  Future<void> rejectFollowRequest({
+    required String storeId,
+    required String followerUserId,
+  }) async {
+    await _api.sendJson(
+      method: HttpMethod.post,
+      path: Endpoints.storeFollowRequestReject(storeId, followerUserId),
+      body: const <String, dynamic>{},
+      requiresAuth: true,
+    );
+  }
+
+  Future<FollowerListPage> fetchFollowers({
+    required String storeId,
+    int limit = 20,
+    String? cursor,
+  }) async {
+    final query = <String, String>{'limit': '$limit'};
+    if (cursor != null && cursor.isNotEmpty) query['cursor'] = cursor;
+    final json = await _api.sendJson(
+      method: HttpMethod.get,
+      path: Endpoints.storeFollowers(storeId),
+      query: query,
+      requiresAuth: true,
+    );
+    return FollowerListPage.fromJson(json ?? const {});
+  }
+
+  Future<FollowingListPage> fetchFollowing({
+    required String storeId,
+    int limit = 20,
+    String? cursor,
+  }) async {
+    final query = <String, String>{'limit': '$limit'};
+    if (cursor != null && cursor.isNotEmpty) query['cursor'] = cursor;
+    final json = await _api.sendJson(
+      method: HttpMethod.get,
+      path: Endpoints.storeFollowing(storeId),
+      query: query,
+      requiresAuth: true,
+    );
+    return FollowingListPage.fromJson(json ?? const {});
+  }
+
+  Future<void> removeFollower({
+    required String storeId,
+    required String followerUserId,
+  }) async {
+    await _api.sendJson(
+      method: HttpMethod.delete,
+      path: Endpoints.storeFollower(storeId, followerUserId),
+      requiresAuth: true,
+    );
   }
 
   Future<CatalogStore> appendStoreImages({

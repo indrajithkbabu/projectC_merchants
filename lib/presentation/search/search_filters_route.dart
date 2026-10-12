@@ -167,7 +167,6 @@ class _SearchFiltersRouteState extends State<SearchFiltersRoute> {
 
     return ScreenWrapper(
       backgroundColor: AppColors.background,
-      statusBarIconBrightness: Brightness.dark,
       child: Column(
         children: [
           Padding(
@@ -208,7 +207,7 @@ class _SearchFiltersRouteState extends State<SearchFiltersRoute> {
               ],
             ),
           ),
-          const Divider(height: 1, color: AppColors.border),
+          Divider(height: 1, color: AppColors.border),
           Expanded(
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -231,7 +230,7 @@ class _SearchFiltersRouteState extends State<SearchFiltersRoute> {
                     ),
                   ),
                 ),
-                const VerticalDivider(width: 1, color: AppColors.border),
+                VerticalDivider(width: 1, color: AppColors.border),
                 Expanded(
                   child: ColoredBox(
                     color: AppColors.surface,
@@ -241,7 +240,7 @@ class _SearchFiltersRouteState extends State<SearchFiltersRoute> {
               ],
             ),
           ),
-          const Divider(height: 1, color: AppColors.border),
+          Divider(height: 1, color: AppColors.border),
           Padding(
             padding: AppPadding.screen(top: 10, bottom: bottomInset + 10),
             child: PrimaryButton(
@@ -441,7 +440,7 @@ class _NavTile extends StatelessWidget {
                   child: Container(
                     width: 8,
                     height: 8,
-                    decoration: const BoxDecoration(
+                    decoration: BoxDecoration(
                       color: AppColors.primary,
                       shape: BoxShape.circle,
                     ),
@@ -479,7 +478,7 @@ class _SortTile extends StatelessWidget {
       ),
       trailing:
           selected
-              ? const Icon(Icons.check_rounded, color: AppColors.primary)
+              ? Icon(Icons.check_rounded, color: AppColors.primary)
               : null,
       onTap: onTap,
     );

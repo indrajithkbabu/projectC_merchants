@@ -53,7 +53,6 @@ class PhoneRoute extends StatelessWidget {
       ],
       child: ScreenWrapper(
         backgroundColor: AppColors.background,
-        statusBarIconBrightness: Brightness.dark,
         resizeToAvoidBottomInset: false,
         child: BlocBuilder<AuthBloc, AuthState>(
           builder: (context, state) {

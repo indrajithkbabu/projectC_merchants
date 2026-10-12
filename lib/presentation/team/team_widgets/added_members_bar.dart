@@ -23,7 +23,7 @@ class AddedMembersBar extends StatelessWidget {
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.fromLTRB(15, 12, 15, 12),
-      decoration: const BoxDecoration(
+      decoration: BoxDecoration(
         color: AppColors.surface,
         border: Border(top: BorderSide(color: AppColors.border)),
       ),
@@ -101,7 +101,7 @@ class _MemberChip extends StatelessWidget {
                 child: Container(
                   width: 18,
                   height: 18,
-                  decoration: const BoxDecoration(
+                  decoration: BoxDecoration(
                     color: AppColors.textSecondary,
                     shape: BoxShape.circle,
                   ),

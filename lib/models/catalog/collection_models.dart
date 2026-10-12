@@ -9,6 +9,9 @@ class CatalogPhoto extends Equatable {
     this.id,
     this.quality,
     this.thumbhash,
+    this.liked,
+    this.likeCount,
+    this.viewCount,
   });
 
   final String? id;
@@ -18,6 +21,13 @@ class CatalogPhoto extends Equatable {
   final String? quality;
   final String? thumbhash;
 
+  /// Present when collection detail includes viewer like state.
+  final bool? liked;
+  final int? likeCount;
+
+  /// Denormalized photo view count from collection detail / analytics.
+  final int? viewCount;
+
   factory CatalogPhoto.fromJson(Map<String, dynamic> json) {
     return CatalogPhoto(
       id: json['id'] as String?,
@@ -26,6 +36,9 @@ class CatalogPhoto extends Equatable {
       url: json['url'] as String? ?? '',
       quality: json['quality'] as String?,
       thumbhash: json['thumbhash'] as String? ?? json['thumbHash'] as String?,
+      liked: json['liked'] as bool?,
+      likeCount: (json['likeCount'] as num?)?.toInt(),
+      viewCount: (json['viewCount'] as num?)?.toInt(),
     );
   }
 
@@ -36,10 +49,23 @@ class CatalogPhoto extends Equatable {
     'url': url,
     'quality': quality,
     'thumbhash': thumbhash,
+    if (liked != null) 'liked': liked,
+    if (likeCount != null) 'likeCount': likeCount,
+    if (viewCount != null) 'viewCount': viewCount,
   };
 
   @override
-  List<Object?> get props => [id, width, height, url, quality, thumbhash];
+  List<Object?> get props => [
+    id,
+    width,
+    height,
+    url,
+    quality,
+    thumbhash,
+    liked,
+    likeCount,
+    viewCount,
+  ];
 }
 
 class CollectionPermissions extends Equatable {
@@ -99,6 +125,7 @@ class CollectionSummary extends Equatable {
     this.usePrecisionTag = false,
     this.specifications,
     this.mainGroupCover,
+    this.viewCount,
   });
 
   final String id;
@@ -116,6 +143,9 @@ class CollectionSummary extends Equatable {
   final bool usePrecisionTag;
   final CollectionSpecifications? specifications;
   final CatalogPhoto? mainGroupCover;
+
+  /// Collection-level view count when the list/detail API includes it.
+  final int? viewCount;
 
   factory CollectionSummary.fromJson(Map<String, dynamic> json) {
     final perms = json['permissions'];
@@ -148,6 +178,7 @@ class CollectionSummary extends Equatable {
           rawMainCover is Map<String, dynamic>
               ? CatalogPhoto.fromJson(rawMainCover)
               : null,
+      viewCount: (json['viewCount'] as num?)?.toInt(),
     );
   }
 
@@ -168,6 +199,7 @@ class CollectionSummary extends Equatable {
     usePrecisionTag,
     specifications,
     mainGroupCover,
+    viewCount,
   ];
 }
 
@@ -189,6 +221,7 @@ class CollectionDetail extends Equatable {
     this.subGroupCount,
     this.mainGroupPhotos = const [],
     this.subGroups = const [],
+    this.viewCount,
   });
 
   final String id;
@@ -207,6 +240,9 @@ class CollectionDetail extends Equatable {
   final int? subGroupCount;
   final List<CatalogPhoto> mainGroupPhotos;
   final List<CollectionSubGroup> subGroups;
+
+  /// Whole-collection view count from detail API.
+  final int? viewCount;
 
   factory CollectionDetail.fromJson(Map<String, dynamic> json) {
     final rawPhotos = json['photos'];
@@ -255,6 +291,7 @@ class CollectionDetail extends Equatable {
                   .map(CollectionSubGroup.fromJson)
                   .toList()
               : const [],
+      viewCount: (json['viewCount'] as num?)?.toInt(),
     );
   }
 
@@ -276,6 +313,7 @@ class CollectionDetail extends Equatable {
     subGroupCount,
     mainGroupPhotos,
     subGroups,
+    viewCount,
   ];
 }
 

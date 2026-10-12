@@ -14,6 +14,7 @@ import 'package:project_c/models/store_product.dart';
 import 'package:project_c/webservice/catalog_api_exception.dart';
 import 'package:project_c/webservice/catalog_error_mapper.dart';
 import 'package:project_c/webservice/collection/collection_repository.dart';
+import 'package:project_c/webservice/wishlist/wishlist_repository.dart';
 
 part 'product_details_event.dart';
 part 'product_details_state.dart';
@@ -31,10 +32,14 @@ class ProductDetailsBloc
     int galleryFeedIndex = 0,
     String seedCategory = '',
     bool showStoreGroupLink = false,
+    Set<String> initialLikedPhotoIds = const {},
     CollectionRepository? collectionRepository,
+    WishlistRepository? wishlistRepository,
   }) : _collectionRepository =
            collectionRepository ??
            ServiceLocator.get<CollectionRepository>(),
+       _wishlistRepository =
+           wishlistRepository ?? ServiceLocator.get<WishlistRepository>(),
        super(
          ProductDetailsState(
            product: product,
@@ -57,6 +62,7 @@ class ProductDetailsBloc
              kind: _kindFromProduct(product),
            ),
            canDelete: product.canDelete || isOwnStore,
+           likedPhotoIds: initialLikedPhotoIds,
          ),
        ) {
     on<ProductDetailsLoadPhotos>(_onLoadPhotos);
@@ -69,12 +75,15 @@ class ProductDetailsBloc
     on<ProductDetailsClearDeleted>(_onClearDeleted);
     on<ProductDetailsMorePressed>(_onMorePressed);
     on<ProductDetailsClearMessage>(_onClearMessage);
+    on<ProductDetailsLikePressed>(_onLikePressed);
+    on<ProductDetailsClearWishlistSnack>(_onClearWishlistSnack);
     if (_canFetchPhotos(storeId, product)) {
       add(const ProductDetailsLoadPhotos());
     }
   }
 
   final CollectionRepository _collectionRepository;
+  final WishlistRepository _wishlistRepository;
   static const _tag = 'ProductDetailsBloc';
 
   static bool _canFetchPhotos(String? storeId, StoreProduct product) {
@@ -105,6 +114,43 @@ class ProductDetailsBloc
     if (index < 0) return 0;
     if (index > last) return last;
     return index;
+  }
+
+  /// Map a seeded / previous photo onto [updated] after collection detail load.
+  static int _resolvePreferredImageIndex({
+    required StoreProduct previous,
+    required StoreProduct updated,
+    required int previousIndex,
+    Set<String> preferredPhotoIds = const {},
+  }) {
+    String seedId = '';
+    if (previousIndex >= 0 && previousIndex < previous.photoAssetIds.length) {
+      seedId = previous.photoAssetIds[previousIndex].trim();
+    }
+    if (seedId.isEmpty && preferredPhotoIds.length == 1) {
+      seedId = preferredPhotoIds.first;
+    }
+    if (seedId.isNotEmpty) {
+      final byId = updated.photoAssetIds.indexWhere((e) => e.trim() == seedId);
+      if (byId >= 0) return byId;
+    }
+
+    String seedPath = '';
+    if (previousIndex >= 0 && previousIndex < previous.imagePaths.length) {
+      seedPath = previous.imagePaths[previousIndex].trim();
+    }
+    if (seedPath.isNotEmpty) {
+      final byPath = _indexOfImagePath(updated.imagePaths, seedPath);
+      if (byPath >= 0) return byPath;
+    }
+
+    // Wishlist often seeds one liked photo — prefer first liked id in updated.
+    for (final id in preferredPhotoIds) {
+      final i = updated.photoAssetIds.indexWhere((e) => e.trim() == id);
+      if (i >= 0) return i;
+    }
+
+    return _clampIndex(previousIndex, updated);
   }
 
   /// After detail load, align feed entries for [updated] with real photo indexes.
@@ -223,19 +269,30 @@ class ProductDetailsBloc
         feedIndex: state.galleryFeedIndex,
         updated: updated,
       );
+      // Prefer the photo the user opened with (wishlist / collage index), not
+      // always slot 0 after detail expands from a single seeded image.
       final resolvedImageIndex =
           remapped.feed != null &&
                   remapped.feed!.isNotEmpty &&
                   remapped.feedIndex >= 0 &&
                   remapped.feedIndex < remapped.feed!.length
               ? remapped.feed![remapped.feedIndex].imageIndex
-              : state.initialImageIndex;
+              : _resolvePreferredImageIndex(
+                previous: state.product,
+                updated: updated,
+                previousIndex: state.initialImageIndex,
+                preferredPhotoIds: state.likedPhotoIds,
+              );
       AppLog.d(
         _tag,
         'Loaded collection detail photos=${updated.imagePaths.length} '
         'feed=${remapped.feed?.length ?? 0} feedIndex=${remapped.feedIndex} '
+        'imageIndex=$resolvedImageIndex '
         'edit=${perms?.edit} delete=${perms?.delete}',
       );
+      final likedFromDetail = CatalogUiMapper.likedPhotoIdsFromDetail(detail);
+      final likeCounts = CatalogUiMapper.photoLikeCountsFromDetail(detail);
+      final viewCounts = CatalogUiMapper.photoViewCountsFromDetail(detail);
       emit(
         state.copyWith(
           product: updated,
@@ -252,6 +309,9 @@ class ProductDetailsBloc
           subGroups: detail.subGroups,
           canEdit: canEdit,
           canDelete: canDelete,
+          likedPhotoIds: {...state.likedPhotoIds, ...likedFromDetail},
+          photoLikeCounts: {...state.photoLikeCounts, ...likeCounts},
+          photoViewCounts: {...state.photoViewCounts, ...viewCounts},
         ),
       );
     } catch (e) {
@@ -584,5 +644,173 @@ class ProductDetailsBloc
     Emitter<ProductDetailsState> emit,
   ) {
     emit(state.copyWith(clearInfoMessage: true));
+  }
+
+  Future<void> _onLikePressed(
+    ProductDetailsLikePressed event,
+    Emitter<ProductDetailsState> emit,
+  ) async {
+    if (state.isLikeBusy) return;
+    final listingId = state.product.id.trim();
+    if (listingId.isEmpty) {
+      emit(
+        state.copyWith(infoMessage: 'Unable to like this photo right now.'),
+      );
+      return;
+    }
+
+    final resolved = await _resolvePhotoIdForLike(
+      emit,
+      imageIndex: event.imageIndex,
+    );
+    if (emit.isDone) return;
+    final photoId = resolved.photoId;
+    if (photoId.isEmpty) {
+      emit(
+        state.copyWith(
+          isLikeBusy: false,
+          infoMessage:
+              state.isLoadingPhotos
+                  ? 'Photo is still loading. Try again in a moment.'
+                  : 'This photo cannot be liked yet. Open the product again.',
+        ),
+      );
+      return;
+    }
+
+    final currentlyLiked = state.likedPhotoIds.contains(photoId);
+    final storeId = state.storeId;
+    emit(state.copyWith(isLikeBusy: true, clearInfoMessage: true));
+    try {
+      if (currentlyLiked) {
+        final result = await _wishlistRepository.unlikePhoto(
+          listingId: listingId,
+          photoId: photoId,
+          storeId: storeId,
+        );
+        if (emit.isDone) return;
+        final removedId =
+            result.assetId.trim().isNotEmpty ? result.assetId.trim() : photoId;
+        final next = Set<String>.from(state.likedPhotoIds)..remove(removedId);
+        final nextCounts = Map<String, int>.from(state.photoLikeCounts);
+        final prev = nextCounts[removedId] ?? 1;
+        nextCounts[removedId] = prev > 0 ? prev - 1 : 0;
+        emit(
+          state.copyWith(
+            likedPhotoIds: next,
+            photoLikeCounts: nextCounts,
+            isLikeBusy: false,
+            clearWishlistSnack: true,
+          ),
+        );
+      } else {
+        final result = await _wishlistRepository.likePhoto(
+          listingId: listingId,
+          photoId: photoId,
+          storeId: storeId,
+        );
+        if (emit.isDone) return;
+        final addedId =
+            result.assetId.trim().isNotEmpty ? result.assetId.trim() : photoId;
+        final next = Set<String>.from(state.likedPhotoIds)..add(addedId);
+        final nextCounts = Map<String, int>.from(state.photoLikeCounts);
+        nextCounts[addedId] = (nextCounts[addedId] ?? 0) + 1;
+        emit(
+          state.copyWith(
+            likedPhotoIds: next,
+            photoLikeCounts: nextCounts,
+            isLikeBusy: false,
+            showWishlistSnack: true,
+          ),
+        );
+      }
+    } on CatalogApiException catch (e) {
+      AppLog.e(_tag, 'Like toggle failed', e);
+      if (emit.isDone) return;
+      if (e.code == 'PHOTO_NOT_FOUND') {
+        emit(
+          state.copyWith(
+            isLikeBusy: false,
+            infoMessage: CatalogErrorMapper.toUserMessage(e),
+          ),
+        );
+        add(const ProductDetailsLoadPhotos());
+        return;
+      }
+      emit(
+        state.copyWith(
+          isLikeBusy: false,
+          infoMessage: CatalogErrorMapper.toUserMessage(e),
+        ),
+      );
+    } catch (e) {
+      AppLog.e(_tag, 'Like toggle failed', e);
+      if (emit.isDone) return;
+      emit(
+        state.copyWith(
+          isLikeBusy: false,
+          infoMessage: CatalogErrorMapper.toUserMessage(e),
+        ),
+      );
+    }
+  }
+
+  /// Ensures [photoAssetIds] are populated from collection detail when missing.
+  Future<({String photoId, StoreProduct? product})> _resolvePhotoIdForLike(
+    Emitter<ProductDetailsState> emit, {
+    required int imageIndex,
+  }) async {
+    var photoId = state.photoIdAt(imageIndex);
+    if (photoId.isNotEmpty) {
+      return (photoId: photoId, product: null);
+    }
+
+    final storeId = state.storeId;
+    if (!_canFetchPhotos(storeId, state.product)) {
+      return (photoId: '', product: null);
+    }
+
+    emit(state.copyWith(isLikeBusy: true));
+    try {
+      final detail = await _collectionRepository.fetchCollection(
+        storeId: storeId!,
+        listingId: state.product.id,
+      );
+      if (emit.isDone) return (photoId: '', product: null);
+      final updated = CatalogUiMapper.detailToProduct(detail);
+      photoId = CatalogUiMapper.photoIdAtIndex(
+        detail,
+        updated,
+        imageIndex: imageIndex,
+      );
+      final likedFromDetail = CatalogUiMapper.likedPhotoIdsFromDetail(detail);
+      final likeCounts = CatalogUiMapper.photoLikeCountsFromDetail(detail);
+      final viewCounts = CatalogUiMapper.photoViewCountsFromDetail(detail);
+      emit(
+        state.copyWith(
+          product: updated,
+          likedPhotoIds: {...state.likedPhotoIds, ...likedFromDetail},
+          photoLikeCounts: {...state.photoLikeCounts, ...likeCounts},
+          photoViewCounts: {...state.photoViewCounts, ...viewCounts},
+          revision: detail.revision,
+          subGroups: detail.subGroups,
+          isLoadingPhotos: false,
+        ),
+      );
+      return (photoId: photoId, product: updated);
+    } catch (e) {
+      AppLog.e(_tag, 'Resolve photo id for like failed', e);
+      if (!emit.isDone) {
+        emit(state.copyWith(isLikeBusy: false));
+      }
+      return (photoId: '', product: null);
+    }
+  }
+
+  void _onClearWishlistSnack(
+    ProductDetailsClearWishlistSnack event,
+    Emitter<ProductDetailsState> emit,
+  ) {
+    emit(state.copyWith(clearWishlistSnack: true));
   }
 }

@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:project_c/bloc/bulk_upload/bulk_upload_bloc.dart';
@@ -10,9 +12,12 @@ import 'package:project_c/helper/text_styles.dart';
 import 'package:project_c/helper/widgets/screen_wrapper.dart';
 import 'package:project_c/models/store_product.dart';
 import 'package:project_c/navigation/routes.dart';
+import 'package:project_c/presentation/main_shell/shell_nav.dart';
 import 'package:project_c/presentation/product_details/product_details_widgets/product_details_widgets.dart';
 import 'package:project_c/services/product_details_preferences.dart';
 import 'package:project_c/services/store_products_prefetcher.dart';
+import 'package:project_c/services/view_beacon.dart';
+import 'package:project_c/session/catalog_session.dart';
 import 'package:project_c/webservice/catalog_error_mapper.dart';
 import 'package:project_c/webservice/collection/collection_repository.dart';
 
@@ -35,6 +40,7 @@ class _ProductDetailsRouteState extends State<ProductDetailsRoute> {
   late bool _previewDetails;
   bool _imageZoomed = false;
   Map<String, Object?>? _popResult;
+  Timer? _viewDwellTimer;
 
   @override
   void initState() {
@@ -66,6 +72,26 @@ class _ProductDetailsRouteState extends State<ProductDetailsRoute> {
     } else if (_previewAll) {
       _scheduleThumbScroll();
     }
+    _warmMedia(blocState);
+    _restartViewDwell(blocState);
+  }
+
+  void _warmMedia(ProductDetailsState state) {
+    final urls = <String>[
+      ...ProductImagePaths.displayable(state.product.imagePaths),
+      if (state.hasGalleryFeed)
+        for (final item in state.galleryFeed!) item.path,
+    ];
+    // Disk for feed; decode only current page ± lookahead (scales to long feeds).
+    // ignore: unawaited_futures
+    CatalogImageCache.precacheUrls(urls);
+    // ignore: unawaited_futures
+    CatalogImageCache.warmWindow(
+      urls: urls,
+      firstIndex: _pageIndex - 2,
+      lastIndex: _pageIndex + 3,
+      cacheWidth: CatalogImageCache.fullCacheWidth(),
+    );
   }
 
   void _scheduleThumbScroll() {
@@ -77,9 +103,33 @@ class _ProductDetailsRouteState extends State<ProductDetailsRoute> {
 
   @override
   void dispose() {
+    _viewDwellTimer?.cancel();
+    // ignore: unawaited_futures
+    ViewBeacon.instance.flush();
     _pageController.dispose();
     _thumbController.dispose();
     super.dispose();
+  }
+
+  void _restartViewDwell(ProductDetailsState state) {
+    _viewDwellTimer?.cancel();
+    _viewDwellTimer = Timer(const Duration(seconds: 1), () {
+      if (!mounted) return;
+      final current = context.read<ProductDetailsBloc>().state;
+      final photoIndex = _productImageIndex(current);
+      final photoId = current.photoIdAt(photoIndex);
+      if (photoId.isNotEmpty) {
+        ViewBeacon.instance.enqueuePhoto(photoId);
+      }
+      final listingId = current.product.id.trim();
+      if (listingId.isNotEmpty) {
+        ViewBeacon.instance.enqueueCollection(listingId);
+      }
+      final subId = current.subGroupIdForPhoto(photoIndex);
+      if (subId != null && subId.isNotEmpty) {
+        ViewBeacon.instance.enqueueSubgroup(subId);
+      }
+    });
   }
 
   /// Swap pager so the next paint lands on [targetPage] (fallback when a
@@ -175,6 +225,7 @@ class _ProductDetailsRouteState extends State<ProductDetailsRoute> {
       // Re-enable swipe after leaving a zoomed page (page itself resets on dispose).
       _imageZoomed = false;
     });
+    _warmMedia(state);
     if (_previewAll) _scrollThumbTo(index);
     if (state.hasGalleryFeed) {
       final entry = state.galleryFeed![index];
@@ -191,11 +242,13 @@ class _ProductDetailsRouteState extends State<ProductDetailsRoute> {
         );
       }
     }
+    final latest = context.read<ProductDetailsBloc>().state;
+    _restartViewDwell(latest);
   }
 
   List<String> _editTags(ProductDetailsState state) {
     final raw = state.apiTag.trim();
-    if (raw.isEmpty) return const [];
+    if (raw.isEmpty) return [];
     return raw
         .split(',')
         .map((t) => t.trim().toLowerCase())
@@ -344,6 +397,25 @@ class _ProductDetailsRouteState extends State<ProductDetailsRoute> {
     Navigator.of(context).pop(_popResult);
   }
 
+  void _openOwnWishlist(BuildContext context) {
+    final session = ServiceLocator.get<CatalogSession>();
+    final storeId = session.ownStoreId?.trim() ?? '';
+    if (storeId.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Create a store to open Wishlist from My store.'),
+        ),
+      );
+      return;
+    }
+    // Land on shell Wishlist tab (owner bottom-nav removed from store profile).
+    Navigator.of(context).popUntil(
+      (route) =>
+          route.settings.name == Routes.storeListingRoute || route.isFirst,
+    );
+    ShellNav.request(ShellNavTab.wishlist);
+  }
+
   Future<void> _confirmDeletePhoto(ProductDetailsState state) async {
     final isLastPhoto = state.product.imagePaths.length <= 1;
     final confirmed = await showDialog<bool>(
@@ -406,6 +478,25 @@ class _ProductDetailsRouteState extends State<ProductDetailsRoute> {
           },
         ),
         BlocListener<ProductDetailsBloc, ProductDetailsState>(
+          listenWhen:
+              (prev, curr) =>
+                  curr.showWishlistSnack && !prev.showWishlistSnack,
+          listener: (context, state) {
+            context.read<ProductDetailsBloc>().add(
+              const ProductDetailsClearWishlistSnack(),
+            );
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: const Text('Saved to Wishlist'),
+                action: SnackBarAction(
+                  label: 'View',
+                  onPressed: () => _openOwnWishlist(context),
+                ),
+              ),
+            );
+          },
+        ),
+        BlocListener<ProductDetailsBloc, ProductDetailsState>(
           listenWhen: (prev, curr) => curr.shouldOpenEdit && !prev.shouldOpenEdit,
           listener: (context, state) => _openEdit(state),
         ),
@@ -422,6 +513,31 @@ class _ProductDetailsRouteState extends State<ProductDetailsRoute> {
             // fallback when a 1-item seed expands — reseat before paint.
             _reseatPager(state.galleryFeedIndex);
           },
+        ),
+        BlocListener<ProductDetailsBloc, ProductDetailsState>(
+          listenWhen:
+              (prev, curr) =>
+                  prev.isLoadingPhotos &&
+                  !curr.isLoadingPhotos &&
+                  !curr.hasGalleryFeed &&
+                  (prev.product.imagePaths.length !=
+                          curr.product.imagePaths.length ||
+                      prev.initialImageIndex != curr.initialImageIndex),
+          listener: (context, state) {
+            // Wishlist / single-photo seed → full collection: jump to the
+            // matched liked photo (keeps heart filled, avoids flash to photo 0).
+            _reseatPager(state.initialImageIndex);
+            _restartViewDwell(state);
+          },
+        ),
+        BlocListener<ProductDetailsBloc, ProductDetailsState>(
+          listenWhen:
+              (prev, curr) =>
+                  prev.isLoadingPhotos &&
+                  !curr.isLoadingPhotos &&
+                  curr.product.photoAssetIds.isNotEmpty &&
+                  prev.product.id == curr.product.id,
+          listener: (context, state) => _restartViewDwell(state),
         ),
         BlocListener<ProductDetailsBloc, ProductDetailsState>(
           listenWhen:
@@ -598,7 +714,7 @@ class _ProductDetailsRouteState extends State<ProductDetailsRoute> {
                                     ),
                                   ),
                                   if (state.isDeleting)
-                                    const Padding(
+                                    Padding(
                                       padding: EdgeInsets.only(right: 8),
                                       child: SizedBox(
                                         width: 22,
@@ -609,6 +725,24 @@ class _ProductDetailsRouteState extends State<ProductDetailsRoute> {
                                         ),
                                       ),
                                     ),
+                                  _ViewCountChip(
+                                    count: state.viewCountForPhoto(photoIndex),
+                                  ),
+                                  _LikeIconButton(
+                                    liked: state.isPhotoLiked(photoIndex),
+                                    likeCount: state.likeCountForPhoto(
+                                      photoIndex,
+                                    ),
+                                    busy: state.isLikeBusy,
+                                    onTap: () {
+                                      context.read<ProductDetailsBloc>().add(
+                                        ProductDetailsLikePressed(
+                                          imageIndex: photoIndex,
+                                        ),
+                                      );
+                                    },
+                                  ),
+                                  const SizedBox(width: 4),
                                   PopupMenuButton<_OverflowAction>(
                                     tooltip: 'More',
                                     color: AppColors.surface,
@@ -668,7 +802,7 @@ class _ProductDetailsRouteState extends State<ProductDetailsRoute> {
                                             value: _OverflowAction.edit,
                                             child: Row(
                                               children: [
-                                                const Icon(
+                                                Icon(
                                                   Icons.edit_outlined,
                                                   size: 20,
                                                   color: AppColors.textPrimary,
@@ -685,7 +819,7 @@ class _ProductDetailsRouteState extends State<ProductDetailsRoute> {
                                           value: _OverflowAction.share,
                                           child: Row(
                                             children: [
-                                              const Icon(
+                                              Icon(
                                                 Icons.share_rounded,
                                                 size: 20,
                                                 color: AppColors.textPrimary,
@@ -703,7 +837,7 @@ class _ProductDetailsRouteState extends State<ProductDetailsRoute> {
                                             value: _OverflowAction.delete,
                                             child: Row(
                                               children: [
-                                                const Icon(
+                                                Icon(
                                                   Icons.delete_outline_rounded,
                                                   size: 20,
                                                   color: AppColors.error,
@@ -743,7 +877,7 @@ class _ProductDetailsRouteState extends State<ProductDetailsRoute> {
                                         alpha: 0.35,
                                       ),
                                       shape: const CircleBorder(),
-                                      child: const SizedBox(
+                                      child: SizedBox(
                                         width: 36,
                                         height: 36,
                                         child: Icon(
@@ -1102,6 +1236,140 @@ class _RoundIconButton extends StatelessWidget {
   }
 }
 
+class _ViewCountChip extends StatelessWidget {
+  const _ViewCountChip({this.count});
+
+  final int? count;
+
+  @override
+  Widget build(BuildContext context) {
+    if (count == null) return const SizedBox.shrink();
+    return Padding(
+      padding: const EdgeInsets.only(right: 4),
+      child: Material(
+        color: Colors.black.withValues(alpha: 0.35),
+        borderRadius: BorderRadius.circular(18),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                Icons.visibility_outlined,
+                size: 15,
+                color: AppColors.textOnPrimary,
+              ),
+              const SizedBox(width: 4),
+              Text(
+                _formatCount(count!),
+                style: AppTextStyles.caption(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                  color: AppColors.textOnPrimary,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _LikeIconButton extends StatelessWidget {
+  const _LikeIconButton({
+    required this.liked,
+    required this.busy,
+    required this.onTap,
+    this.likeCount,
+  });
+
+  final bool liked;
+  final int? likeCount;
+  final bool busy;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final showCount = likeCount != null;
+    final child =
+        busy
+            ? Padding(
+              padding: const EdgeInsets.all(9),
+              child: SizedBox(
+                width: 18,
+                height: 18,
+                child: CircularProgressIndicator(
+                  strokeWidth: 2,
+                  color: AppColors.textOnPrimary,
+                ),
+              ),
+            )
+            : Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(
+                  liked
+                      ? Icons.favorite_rounded
+                      : Icons.favorite_border_rounded,
+                  size: 18,
+                  color:
+                      liked ? AppColors.error : AppColors.textOnPrimary,
+                ),
+                if (showCount) ...[
+                  const SizedBox(width: 4),
+                  Text(
+                    _formatCount(likeCount!),
+                    style: AppTextStyles.caption(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                      color: AppColors.textOnPrimary,
+                    ),
+                  ),
+                ],
+              ],
+            );
+
+    if (!showCount) {
+      return Material(
+        color: Colors.black.withValues(alpha: 0.35),
+        shape: const CircleBorder(),
+        child: InkWell(
+          onTap: busy ? null : onTap,
+          customBorder: const CircleBorder(),
+          child: SizedBox(width: 36, height: 36, child: child),
+        ),
+      );
+    }
+
+    return Material(
+      color: Colors.black.withValues(alpha: 0.35),
+      borderRadius: BorderRadius.circular(18),
+      child: InkWell(
+        onTap: busy ? null : onTap,
+        borderRadius: BorderRadius.circular(18),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+          child: SizedBox(height: 20, child: child),
+        ),
+      ),
+    );
+  }
+}
+
+String _formatCount(int value) {
+  if (value < 1000) return '$value';
+  if (value < 10000) {
+    final k = value / 1000;
+    final text = k == k.roundToDouble() ? '${k.toInt()}' : k.toStringAsFixed(1);
+    return '${text}k';
+  }
+  if (value < 1000000) return '${(value / 1000).floor()}k';
+  final m = value / 1000000;
+  final text = m == m.roundToDouble() ? '${m.toInt()}' : m.toStringAsFixed(1);
+  return '${text}M';
+}
+
 class _ImagePlaceholder extends StatelessWidget {
   const _ImagePlaceholder({required this.tone});
 
@@ -1136,7 +1404,7 @@ class _ImagePlaceholder extends StatelessWidget {
           colors: colors,
         ),
       ),
-      child: const Center(
+      child: Center(
         child: Icon(
           Icons.diamond_outlined,
           size: 48,

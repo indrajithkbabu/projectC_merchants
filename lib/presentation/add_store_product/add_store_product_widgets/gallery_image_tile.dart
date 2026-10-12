@@ -114,7 +114,7 @@ class _PlaceholderThumb extends StatelessWidget {
           colors: colors,
         ),
       ),
-      child: const Center(
+      child: Center(
         child: Icon(
           Icons.diamond_outlined,
           size: 28,

@@ -24,6 +24,11 @@ class ProductDetailsState extends Equatable {
     this.isDeleting = false,
     this.isDeleted = false,
     this.infoMessage,
+    this.likedPhotoIds = const {},
+    this.photoLikeCounts = const {},
+    this.photoViewCounts = const {},
+    this.isLikeBusy = false,
+    this.showWishlistSnack = false,
   });
 
   final StoreProduct product;
@@ -55,6 +60,19 @@ class ProductDetailsState extends Equatable {
   final bool isDeleting;
   final bool isDeleted;
   final String? infoMessage;
+
+  /// Photo asset ids the viewer has liked (wishlist).
+  final Set<String> likedPhotoIds;
+
+  /// Per-photo like counts hydrated from collection detail (optimistic ±1 on toggle).
+  final Map<String, int> photoLikeCounts;
+
+  /// Per-photo view counts from collection detail (display only).
+  final Map<String, int> photoViewCounts;
+  final bool isLikeBusy;
+
+  /// One-shot: show "Saved to Wishlist" snack after a successful like.
+  final bool showWishlistSnack;
 
   bool get hasGalleryFeed =>
       galleryFeed != null && galleryFeed!.isNotEmpty;
@@ -361,6 +379,12 @@ class ProductDetailsState extends Equatable {
     bool clearDeleted = false,
     String? infoMessage,
     bool clearInfoMessage = false,
+    Set<String>? likedPhotoIds,
+    Map<String, int>? photoLikeCounts,
+    Map<String, int>? photoViewCounts,
+    bool? isLikeBusy,
+    bool? showWishlistSnack,
+    bool clearWishlistSnack = false,
   }) {
     return ProductDetailsState(
       product: product ?? this.product,
@@ -391,7 +415,53 @@ class ProductDetailsState extends Equatable {
       isDeleting: isDeleting ?? this.isDeleting,
       isDeleted: clearDeleted ? false : (isDeleted ?? this.isDeleted),
       infoMessage: clearInfoMessage ? null : (infoMessage ?? this.infoMessage),
+      likedPhotoIds: likedPhotoIds ?? this.likedPhotoIds,
+      photoLikeCounts: photoLikeCounts ?? this.photoLikeCounts,
+      photoViewCounts: photoViewCounts ?? this.photoViewCounts,
+      isLikeBusy: isLikeBusy ?? this.isLikeBusy,
+      showWishlistSnack:
+          clearWishlistSnack
+              ? false
+              : (showWishlistSnack ?? this.showWishlistSnack),
     );
+  }
+
+  bool isPhotoLiked(int imageIndex) {
+    final id = photoIdAt(imageIndex);
+    return id.isNotEmpty && likedPhotoIds.contains(id);
+  }
+
+  int? likeCountForPhoto(int imageIndex) {
+    final id = photoIdAt(imageIndex);
+    if (id.isEmpty) return null;
+    return photoLikeCounts[id];
+  }
+
+  int? viewCountForPhoto(int imageIndex) {
+    final id = photoIdAt(imageIndex);
+    if (id.isEmpty) return null;
+    return photoViewCounts[id];
+  }
+
+  /// Sub-group id owning the photo at [imageIndex], if any.
+  String? subGroupIdForPhoto(int imageIndex) {
+    final photoId = photoIdAt(imageIndex);
+    if (photoId.isEmpty) return null;
+    for (final sub in subGroups) {
+      final match = sub.photos.any((p) => (p.id?.trim() ?? '') == photoId);
+      if (match) {
+        final id = sub.id.trim();
+        return id.isEmpty ? null : id;
+      }
+    }
+    return null;
+  }
+
+  String photoIdAt(int imageIndex) {
+    if (imageIndex < 0 || imageIndex >= product.photoAssetIds.length) {
+      return '';
+    }
+    return product.photoAssetIds[imageIndex].trim();
   }
 
   @override
@@ -418,6 +488,11 @@ class ProductDetailsState extends Equatable {
     isDeleting,
     isDeleted,
     infoMessage,
+    likedPhotoIds,
+    photoLikeCounts,
+    photoViewCounts,
+    isLikeBusy,
+    showWishlistSnack,
   ];
 }
 

@@ -80,7 +80,7 @@ class StoreProductsPrefetcher {
               ];
       visible.sort((a, b) => b.id.compareTo(a.id));
       await CatalogImageCache.precacheUrls([
-        for (final p in visible) ...p.imagePaths,
+        for (final p in visible) ...p.imagePaths.take(4),
       ]);
       return visible;
     }
@@ -98,14 +98,30 @@ class StoreProductsPrefetcher {
         for (final summary in page.items)
           if (!hidden.contains(summary.id)) summary,
       ];
-      final products = await Future.wait([
-        for (final summary in summaries)
-          _productFromSummary(repo: repo, storeId: storeId, summary: summary),
-      ]);
+      // Cap parallel detail GETs — same budget as StoreProfileBloc.
+      const concurrency = 4;
+      final products = <StoreProduct>[];
+      for (var i = 0; i < summaries.length; i += concurrency) {
+        final end =
+            i + concurrency > summaries.length
+                ? summaries.length
+                : i + concurrency;
+        final chunk = summaries.sublist(i, end);
+        products.addAll(
+          await Future.wait([
+            for (final summary in chunk)
+              _productFromSummary(
+                repo: repo,
+                storeId: storeId,
+                summary: summary,
+              ),
+          ]),
+        );
+      }
       // Match store profile: newest listing first (API returns oldest-first).
       products.sort((a, b) => b.id.compareTo(a.id));
       await CatalogImageCache.precacheUrls([
-        for (final p in products) ...p.imagePaths,
+        for (final p in products) ...p.imagePaths.take(4),
       ]);
       await StoreProductsCache.instance.write(storeId, products);
       AppLog.d(_tag, 'Prefetched store=$storeId products=${products.length}');

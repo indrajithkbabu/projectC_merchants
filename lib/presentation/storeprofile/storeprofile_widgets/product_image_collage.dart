@@ -38,7 +38,7 @@ class ProductImageCollage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (imagePaths.isEmpty) {
-      return const ColoredBox(color: AppColors.surfaceSecondary);
+      return ColoredBox(color: AppColors.surfaceSecondary);
     }
 
     final paths = imagePaths;

@@ -1,4 +1,5 @@
 import 'package:equatable/equatable.dart';
+import 'package:project_c/models/store_privacy_mode.dart';
 
 /// `GET /search/meta` response (Discover pre-search).
 class SearchMeta extends Equatable {
@@ -121,6 +122,9 @@ class SearchSuggestMatch extends Equatable {
     this.netWeight,
     this.purity,
     this.thumbnailUrl,
+    this.privacy,
+    this.followStatus = StoreFollowStatus.none,
+    this.canViewContent,
   });
 
   /// `store` | `product`
@@ -140,9 +144,60 @@ class SearchSuggestMatch extends Equatable {
   final String? purity;
   final String? thumbnailUrl;
 
+  /// Store privacy from suggest / enriched payloads (null when omitted).
+  final StorePrivacyMode? privacy;
+  final StoreFollowStatus followStatus;
+  final bool? canViewContent;
+
   bool get isStore => type == 'store';
 
+  bool get isPrivate => privacy?.isPrivate == true;
+
+  /// Whether the viewer may open this product (or see private-store products).
+  bool get isContentVisible {
+    if (canViewContent != null) return canViewContent!;
+    if (!isPrivate) return true;
+    return followStatus.isFollowing;
+  }
+
+  /// Private store rows that are not yet followed show Follow / Requested.
+  bool get showFollowChrome =>
+      isStore && isPrivate && !followStatus.isFollowing;
+
+  SearchSuggestMatch copyWith({
+    StoreFollowStatus? followStatus,
+    bool? canViewContent,
+    StorePrivacyMode? privacy,
+  }) {
+    return SearchSuggestMatch(
+      type: type,
+      id: id,
+      name: name,
+      title: title,
+      slug: slug,
+      city: city,
+      storeImage: storeImage,
+      collectionId: collectionId,
+      subGroupId: subGroupId,
+      storeId: storeId,
+      storeName: storeName,
+      netWeight: netWeight,
+      purity: purity,
+      thumbnailUrl: thumbnailUrl,
+      privacy: privacy ?? this.privacy,
+      followStatus: followStatus ?? this.followStatus,
+      canViewContent: canViewContent ?? this.canViewContent,
+    );
+  }
+
   factory SearchSuggestMatch.fromJson(Map<String, dynamic> json) {
+    final privacyRaw = json['privacy'];
+    final StorePrivacyMode? privacy =
+        privacyRaw is String && privacyRaw.trim().isNotEmpty
+            ? StorePrivacyModeX.fromApi(privacyRaw)
+            : null;
+    final followRaw =
+        (json['followStatus'] as String?) ?? (json['status'] as String?);
     return SearchSuggestMatch(
       type: json['type'] as String? ?? 'product',
       id: json['id'] as String? ?? '',
@@ -158,6 +213,9 @@ class SearchSuggestMatch extends Equatable {
       netWeight: (json['netWeight'] as num?)?.toDouble(),
       purity: json['purity']?.toString(),
       thumbnailUrl: json['thumbnailUrl'] as String?,
+      privacy: privacy,
+      followStatus: storeFollowStatusFromString(followRaw),
+      canViewContent: json['canViewContent'] as bool?,
     );
   }
 
@@ -177,6 +235,9 @@ class SearchSuggestMatch extends Equatable {
         netWeight,
         purity,
         thumbnailUrl,
+        privacy,
+        followStatus,
+        canViewContent,
       ];
 }
 
@@ -334,24 +395,56 @@ class SearchHitStore extends Equatable {
     required this.name,
     this.slug = '',
     this.city = '',
+    this.privacy,
+    this.followStatus = StoreFollowStatus.none,
+    this.canViewContent,
   });
 
   final String id;
   final String name;
   final String slug;
   final String city;
+  final StorePrivacyMode? privacy;
+  final StoreFollowStatus followStatus;
+  final bool? canViewContent;
+
+  bool get isPrivate => privacy?.isPrivate == true;
+
+  bool get isContentVisible {
+    if (canViewContent != null) return canViewContent!;
+    if (!isPrivate) return true;
+    return followStatus.isFollowing;
+  }
 
   factory SearchHitStore.fromJson(Map<String, dynamic> json) {
+    final privacyRaw = json['privacy'];
+    final StorePrivacyMode? privacy =
+        privacyRaw is String && privacyRaw.trim().isNotEmpty
+            ? StorePrivacyModeX.fromApi(privacyRaw)
+            : null;
+    final followRaw =
+        (json['followStatus'] as String?) ?? (json['status'] as String?);
     return SearchHitStore(
       id: json['id'] as String? ?? '',
       name: json['name'] as String? ?? '',
       slug: json['slug'] as String? ?? '',
       city: json['city'] as String? ?? '',
+      privacy: privacy,
+      followStatus: storeFollowStatusFromString(followRaw),
+      canViewContent: json['canViewContent'] as bool?,
     );
   }
 
   @override
-  List<Object?> get props => [id, name, slug, city];
+  List<Object?> get props => [
+        id,
+        name,
+        slug,
+        city,
+        privacy,
+        followStatus,
+        canViewContent,
+      ];
 }
 
 class SearchHitDetails extends Equatable {
@@ -419,6 +512,7 @@ class SearchHit extends Equatable {
     this.thumbnailUrl,
     this.store,
     this.details = const SearchHitDetails(),
+    this.viewCount,
   });
 
   final String id;
@@ -428,6 +522,12 @@ class SearchHit extends Equatable {
   final String? thumbnailUrl;
   final SearchHitStore? store;
   final SearchHitDetails details;
+
+  /// Product/card popularity count when the search index includes it.
+  final int? viewCount;
+
+  /// Hide products from private stores the viewer cannot access.
+  bool get isVisibleToViewer => store?.isContentVisible ?? true;
 
   factory SearchHit.fromJson(Map<String, dynamic> json) {
     final rawStore = json['store'];
@@ -446,6 +546,7 @@ class SearchHit extends Equatable {
           rawDetails is Map
               ? SearchHitDetails.fromJson(Map<String, dynamic>.from(rawDetails))
               : const SearchHitDetails(),
+      viewCount: (json['viewCount'] as num?)?.toInt(),
     );
   }
 
@@ -458,6 +559,7 @@ class SearchHit extends Equatable {
         thumbnailUrl,
         store,
         details,
+        viewCount,
       ];
 }
 

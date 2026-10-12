@@ -1,4 +1,3 @@
-import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:project_c/helper/colors.dart';
 import 'package:project_c/helper/product_image.dart';
@@ -78,34 +77,38 @@ class _StoreAvatar extends StatelessWidget {
   final StoreChannel store;
   final VoidCallback? onImageTap;
 
-  static const double _radius = 26;
+  static const double _diameter = 52;
 
   @override
   Widget build(BuildContext context) {
     final cover = store.coverImageUrl.trim();
     final hasImage = cover.isNotEmpty;
-
-    final avatar = CircleAvatar(
-      radius: _radius,
-      backgroundColor: Color(store.avatarColor),
-      backgroundImage:
-          hasImage
-              ? CachedNetworkImageProvider(
-                cover,
-                cacheManager: CatalogImageCache.instance,
-              )
-              : null,
-      child:
-          hasImage
-              ? null
-              : Text(
-                store.initials,
-                style: AppTextStyles.label(
-                  fontWeight: FontWeight.w700,
-                  color: AppColors.textOnPrimary,
-                ),
-              ),
+    final initials = Text(
+      store.initials,
+      style: AppTextStyles.label(
+        fontWeight: FontWeight.w700,
+        color: AppColors.textOnPrimary,
+      ),
     );
+
+    final avatar =
+        hasImage
+            ? CatalogNetworkAvatar(
+              url: cover,
+              size: _diameter,
+              backgroundColor: Color(store.avatarColor),
+              fallback: initials,
+            )
+            : Container(
+              width: _diameter,
+              height: _diameter,
+              alignment: Alignment.center,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: Color(store.avatarColor),
+              ),
+              child: initials,
+            );
 
     if (onImageTap == null) return avatar;
 

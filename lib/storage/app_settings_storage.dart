@@ -1,6 +1,8 @@
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:project_c/helper/app_log.dart';
+import 'package:project_c/helper/colors.dart';
 import 'package:project_c/models/product_view_mode.dart';
+import 'package:project_c/models/store_privacy_mode.dart';
 
 /// Persists non-session app preferences (survives logout).
 class AppSettingsStorage {
@@ -13,6 +15,9 @@ class AppSettingsStorage {
   static const _kSearchRecents = 'search_recents_json';
   static const _kPreviewAll = 'product_details_preview_all';
   static const _kPreviewDetails = 'product_details_preview_details';
+  static const _kAppearance = 'app_appearance';
+  static const _kStorePrivacyMode = 'store_privacy_mode';
+  static const _kMockPendingFollowRequests = 'mock_pending_follow_requests';
 
   final FlutterSecureStorage _storage;
 
@@ -40,6 +45,20 @@ class AppSettingsStorage {
   Future<void> writeProductViewMode(ProductViewMode mode) async {
     await _storage.write(key: _kProductViewMode, value: mode.storageValue);
     AppLog.d(_tag, 'productViewMode=${mode.storageValue}');
+  }
+
+  /// Defaults to [AppAppearance.day].
+  Future<AppAppearance> readAppearance() async {
+    final raw = await _storage.read(key: _kAppearance);
+    return AppAppearanceX.fromStorage(raw);
+  }
+
+  Future<void> writeAppearance(AppAppearance appearance) async {
+    await _storage.write(
+      key: _kAppearance,
+      value: appearance.storageValue,
+    );
+    AppLog.d(_tag, 'appearance=${appearance.storageValue}');
   }
 
   /// Defaults to `false` (thumbnail strip hidden until user enables it).
@@ -76,5 +95,32 @@ class AppSettingsStorage {
 
   Future<void> writeSearchRecentsJson(String json) async {
     await _storage.write(key: _kSearchRecents, value: json);
+  }
+
+  /// Defaults to [StorePrivacyMode.public] (new stores start public).
+  Future<StorePrivacyMode> readStorePrivacyMode() async {
+    final raw = await _storage.read(key: _kStorePrivacyMode);
+    return StorePrivacyModeX.fromStorage(raw);
+  }
+
+  Future<void> writeStorePrivacyMode(StorePrivacyMode mode) async {
+    await _storage.write(key: _kStorePrivacyMode, value: mode.storageValue);
+    AppLog.d(_tag, 'storePrivacyMode=${mode.storageValue}');
+  }
+
+  /// Defaults to `0` until hydrated from GET store `pendingRequestsCount`.
+  Future<int> readPendingFollowRequestCount() async {
+    final raw = await _storage.read(key: _kMockPendingFollowRequests);
+    if (raw == null || raw.isEmpty) return 0;
+    return int.tryParse(raw) ?? 0;
+  }
+
+  Future<void> writePendingFollowRequestCount(int value) async {
+    final clamped = value < 0 ? 0 : value;
+    await _storage.write(
+      key: _kMockPendingFollowRequests,
+      value: '$clamped',
+    );
+    AppLog.d(_tag, 'pendingFollowRequestCount=$clamped');
   }
 }

@@ -80,9 +80,31 @@ class _CollectionBrowseRouteState extends State<CollectionBrowseRoute> {
       _product = CatalogUiMapper.detailToProduct(widget.seedDetail!);
       _loading = false;
       _logTiles(_tiles());
+      _warmMedia();
     } else {
       _load();
     }
+  }
+
+  void _warmMedia() {
+    final detail = _detail;
+    final urls = <String>[
+      if (detail != null)
+        for (final photo in detail.photos) photo.url,
+      ...ProductImagePaths.displayable(widget.product.imagePaths),
+      if (widget.forcedSingles != null)
+        for (final photo in widget.forcedSingles!) photo.url,
+    ];
+    // Disk for all; decode first viewport only (scroll warms the rest).
+    // ignore: unawaited_futures
+    CatalogImageCache.precacheUrls(urls);
+    // ignore: unawaited_futures
+    CatalogImageCache.warmWindow(
+      urls: urls,
+      firstIndex: 0,
+      lastIndex: _crossAxisCount * 12 - 1,
+      cacheWidth: CatalogImageCache.gridCacheWidth(),
+    );
   }
 
   Future<void> _load({bool quiet = false}) async {
@@ -107,6 +129,7 @@ class _CollectionBrowseRouteState extends State<CollectionBrowseRoute> {
         _selectedPhotoIds.clear();
         // Keep select mode if user was managing; drop empty selection.
       });
+      _warmMedia();
       AppLog.d(
         _logTag,
         'loaded listing=${detail.id} photos=${detail.photoCount} '
@@ -184,7 +207,7 @@ class _CollectionBrowseRouteState extends State<CollectionBrowseRoute> {
       ];
     }
 
-    if (detail == null) return const [];
+    if (detail == null) return [];
 
     // Main first, then each sub-group. Auto-named Precise/Standalone clusters
     // share the collection section; custom sub-group names keep their own.
@@ -304,6 +327,8 @@ class _CollectionBrowseRouteState extends State<CollectionBrowseRoute> {
     );
     if (next != _crossAxisCount) {
       setState(() => _crossAxisCount = next);
+      // Pinch remounts tiles — decode-warm nearby at the new cell size key.
+      _warmMedia();
     }
   }
 
@@ -899,7 +924,6 @@ class _CollectionBrowseRouteState extends State<CollectionBrowseRoute> {
 
     return ScreenWrapper(
       backgroundColor: AppColors.background,
-      statusBarIconBrightness: Brightness.dark,
       child: PopScope(
         canPop: false,
         onPopInvokedWithResult: (didPop, result) {
@@ -1086,7 +1110,7 @@ class _BrowseToolbarAction extends StatelessWidget {
 }
 
 /// Gallery-style scroll (date + section titles + pinch columns). Keeps light theme.
-class _BrowseGalleryBody extends StatelessWidget {
+class _BrowseGalleryBody extends StatefulWidget {
   const _BrowseGalleryBody({
     required this.sections,
     required this.dateLabel,
@@ -1108,14 +1132,81 @@ class _BrowseGalleryBody extends StatelessWidget {
   final Set<String> selectedIds;
 
   @override
+  State<_BrowseGalleryBody> createState() => _BrowseGalleryBodyState();
+}
+
+class _BrowseGalleryBodyState extends State<_BrowseGalleryBody> {
+  int _lastWarmKey = -1;
+  DateTime? _lastWarmAt;
+
+  List<String> get _urls => [
+    for (final section in widget.sections)
+      for (final tile in section.tiles) tile.photo.url,
+  ];
+
+  void _warmDecode([ScrollMetrics? metrics]) {
+    final urls = _urls;
+    if (urls.isEmpty) return;
+    final now = DateTime.now();
+    final lastAt = _lastWarmAt;
+    final pixels = metrics?.pixels.round() ?? 0;
+    final key = widget.crossAxisCount * 100000 + pixels ~/ 120;
+    if (key == _lastWarmKey &&
+        lastAt != null &&
+        now.difference(lastAt).inMilliseconds < 80) {
+      return;
+    }
+    _lastWarmKey = key;
+    _lastWarmAt = now;
+    if (metrics == null) {
+      // ignore: unawaited_futures
+      CatalogImageCache.warmWindow(
+        urls: urls,
+        firstIndex: 0,
+        lastIndex: widget.crossAxisCount * 12 - 1,
+        cacheWidth: CatalogImageCache.gridCacheWidth(),
+      );
+      return;
+    }
+    // ignore: unawaited_futures
+    CatalogImageCache.warmAroundScroll(
+      urls: urls,
+      metrics: metrics,
+      cacheWidth: CatalogImageCache.gridCacheWidth(),
+    );
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _warmDecode();
+    });
+  }
+
+  @override
+  void didUpdateWidget(covariant _BrowseGalleryBody oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.crossAxisCount != widget.crossAxisCount ||
+        oldWidget.sections.length != widget.sections.length) {
+      _lastWarmKey = -1;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        _warmDecode();
+      });
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
-    if (sections.isEmpty) {
+    if (widget.sections.isEmpty) {
       return Center(
         child: Text('Nothing to browse.', style: AppTextStyles.bodySecondary()),
       );
     }
 
-    final singleSection = sections.length == 1;
+    final singleSection = widget.sections.length == 1;
 
     return RawGestureDetector(
       gestures: {
@@ -1124,57 +1215,67 @@ class _BrowseGalleryBody extends StatelessWidget {
               () => ScaleGestureRecognizer(),
               (instance) {
                 instance
-                  ..onStart = onScaleStart
-                  ..onUpdate = onScaleUpdate;
+                  ..onStart = widget.onScaleStart
+                  ..onUpdate = widget.onScaleUpdate;
               },
             ),
       },
-      child: CustomScrollView(
-        physics: const BouncingScrollPhysics(),
-        slivers: [
-          SliverToBoxAdapter(
-            child: Padding(
-              padding: AppPadding.screen(top: 14, bottom: 8),
-              child: Text(
-                singleSection
-                    ? '$dateLabel  |  ${sections.first.title}'
-                    : dateLabel,
-                style: AppTextStyles.headline(fontSize: 18),
-              ),
-            ),
-          ),
-          for (var i = 0; i < sections.length; i++) ...[
-            if (!singleSection)
-              SliverToBoxAdapter(
-                child: Padding(
-                  padding: AppPadding.screen(top: i == 0 ? 0 : 18, bottom: 8),
-                  child: Text(
-                    sections[i].title,
-                    style: AppTextStyles.body(fontWeight: FontWeight.w600),
-                  ),
+      child: NotificationListener<ScrollNotification>(
+        onNotification: (notification) {
+          if (notification is ScrollUpdateNotification ||
+              notification is ScrollEndNotification) {
+            _warmDecode(notification.metrics);
+          }
+          return false;
+        },
+        child: CustomScrollView(
+          physics: const BouncingScrollPhysics(),
+          slivers: [
+            SliverToBoxAdapter(
+              child: Padding(
+                padding: AppPadding.screen(top: 14, bottom: 8),
+                child: Text(
+                  singleSection
+                      ? '${widget.dateLabel}  |  ${widget.sections.first.title}'
+                      : widget.dateLabel,
+                  style: AppTextStyles.headline(fontSize: 18),
                 ),
               ),
-            SliverGrid(
-              gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-                crossAxisCount: crossAxisCount,
-                mainAxisSpacing: 1.5,
-                crossAxisSpacing: 1.5,
-              ),
-              delegate: SliverChildBuilderDelegate((context, index) {
-                final tile = sections[i].tiles[index];
-                final id = tile.photo.id?.trim() ?? '';
-                final selected = id.isNotEmpty && selectedIds.contains(id);
-                return _BrowseGalleryTile(
-                  tile: tile,
-                  selectMode: selectMode,
-                  selected: selected,
-                  onTap: () => onTap(tile),
-                );
-              }, childCount: sections[i].tiles.length),
             ),
+            for (var i = 0; i < widget.sections.length; i++) ...[
+              if (!singleSection)
+                SliverToBoxAdapter(
+                  child: Padding(
+                    padding: AppPadding.screen(top: i == 0 ? 0 : 18, bottom: 8),
+                    child: Text(
+                      widget.sections[i].title,
+                      style: AppTextStyles.body(fontWeight: FontWeight.w600),
+                    ),
+                  ),
+                ),
+              SliverGrid(
+                gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                  crossAxisCount: widget.crossAxisCount,
+                  mainAxisSpacing: 1.5,
+                  crossAxisSpacing: 1.5,
+                ),
+                delegate: SliverChildBuilderDelegate((context, index) {
+                  final tile = widget.sections[i].tiles[index];
+                  final id = tile.photo.id?.trim() ?? '';
+                  final selected =
+                      id.isNotEmpty && widget.selectedIds.contains(id);
+                  return _BrowseGalleryTile(
+                    tile: tile,
+                    selectMode: widget.selectMode,
+                    selected: selected,
+                    onTap: () => widget.onTap(tile),
+                  );
+                }, childCount: widget.sections[i].tiles.length),
+              ),
+            ],
+            const SliverToBoxAdapter(child: SizedBox(height: 24)),
           ],
-          const SliverToBoxAdapter(child: SizedBox(height: 24)),
-        ],
+        ),
       ),
     );
   }
@@ -1211,7 +1312,7 @@ class _BrowseGalleryTile extends StatelessWidget {
                 child: Container(
                   width: 8,
                   height: 8,
-                  decoration: const BoxDecoration(
+                  decoration: BoxDecoration(
                     shape: BoxShape.circle,
                     color: AppColors.primary,
                   ),
@@ -1236,7 +1337,7 @@ class _BrowseGalleryTile extends StatelessWidget {
                   ),
                   child:
                       selected
-                          ? const Icon(
+                          ? Icon(
                             Icons.check_rounded,
                             size: 14,
                             color: AppColors.textOnPrimary,

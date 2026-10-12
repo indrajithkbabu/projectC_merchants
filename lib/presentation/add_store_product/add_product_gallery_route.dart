@@ -93,7 +93,6 @@ class AddProductGalleryRoute extends StatelessWidget {
       ],
       child: ScreenWrapper(
         backgroundColor: AppColors.background,
-        statusBarIconBrightness: Brightness.dark,
         child: BlocBuilder<AddStoreProductBloc, AddStoreProductState>(
           builder: (context, state) {
             return Column(
@@ -122,7 +121,7 @@ class AddProductGalleryRoute extends StatelessWidget {
                               ),
                             ),
                             const SizedBox(width: 2),
-                            const Icon(
+                            Icon(
                               Icons.keyboard_arrow_down_rounded,
                               size: 20,
                               color: AppColors.textPrimary,

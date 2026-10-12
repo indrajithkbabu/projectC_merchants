@@ -79,6 +79,7 @@ class CollectionSubGroup extends Equatable {
     this.usePrecisionTag = false,
     this.precisionTag = '',
     this.photos = const [],
+    this.viewCount,
   });
 
   final String id;
@@ -90,6 +91,7 @@ class CollectionSubGroup extends Equatable {
   final bool usePrecisionTag;
   final String precisionTag;
   final List<CatalogPhoto> photos;
+  final int? viewCount;
 
   factory CollectionSubGroup.fromJson(Map<String, dynamic> json) {
     final rawPhotos = json['photos'];
@@ -113,6 +115,7 @@ class CollectionSubGroup extends Equatable {
                   .map(CatalogPhoto.fromJson)
                   .toList()
               : const [],
+      viewCount: (json['viewCount'] as num?)?.toInt(),
     );
   }
 
@@ -127,5 +130,6 @@ class CollectionSubGroup extends Equatable {
     usePrecisionTag,
     precisionTag,
     photos,
+    viewCount,
   ];
 }

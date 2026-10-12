@@ -16,6 +16,7 @@ Future<MediaPickSource?> showMediaSourceSheet(
 }) {
   return showModalBottomSheet<MediaPickSource>(
     context: context,
+    useRootNavigator: true,
     backgroundColor: Colors.transparent,
     barrierColor: Colors.black.withValues(alpha: 0.45),
     isScrollControlled: true,

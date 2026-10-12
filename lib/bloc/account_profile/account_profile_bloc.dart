@@ -29,7 +29,13 @@ class AccountProfileBloc
            profileRepository ?? ServiceLocator.get<ProfileRepository>(),
        _session = session ?? ServiceLocator.get<CatalogSession>(),
        _imagePicker = imagePicker ?? ImagePicker(),
-       super(const AccountProfileState()) {
+       // Seed session profile immediately so bottom-nav avatar never paints
+       // initials→photo on cold reopen (auth already warmed the image).
+       super(
+         AccountProfileState(
+           profile: (session ?? ServiceLocator.get<CatalogSession>()).profile,
+         ),
+       ) {
     on<AccountProfileStarted>(_onStarted);
     on<AccountProfileRefreshed>(_onRefreshed);
     on<AccountProfilePickImageRequested>(_onPickImageRequested);
@@ -49,8 +55,8 @@ class AccountProfileBloc
     AccountProfileStarted event,
     Emitter<AccountProfileState> emit,
   ) async {
-    // Show disk/memory session cache first (e.g. profile completed with no image).
-    _emitFromCache(emit);
+    // Show disk/memory session cache first (await avatar warm — no nav flash).
+    await _emitFromCache(emit);
     await _refreshQuietly(emit);
   }
 
@@ -66,11 +72,11 @@ class AccountProfileBloc
     try {
       await _profileRepository.fetchMe();
       AppLog.d(_tag, 'GET /me → ${_session.profile?.displayName}');
-      _emitFromCache(emit, isRefreshing: false, clearError: true);
+      await _emitFromCache(emit, isRefreshing: false, clearError: true);
     } catch (e) {
       AppLog.e(_tag, 'GET /me failed', e);
       // Keep showing last cached profile on refresh failure.
-      _emitFromCache(
+      await _emitFromCache(
         emit,
         isRefreshing: false,
         errorMessage: CatalogErrorMapper.toUserMessage(e),
@@ -79,18 +85,19 @@ class AccountProfileBloc
   }
 
   /// Emit only what [CatalogSession] holds (after API has written cache).
-  void _emitFromCache(
+  Future<void> _emitFromCache(
     Emitter<AccountProfileState> emit, {
     bool? isRefreshing,
     bool? isUpdatingImage,
     String? errorMessage,
     bool clearError = false,
-  }) {
+  }) async {
     final cached = _session.profile;
     if (cached != null) {
       final url = cached.effectiveProfileImageUrl.trim();
       if (url.isNotEmpty) {
-        unawaited(CatalogImageCache.precacheUrls([url]));
+        // Decode into ImageCache before UI sees the URL (bottom nav + header).
+        await CatalogImageCache.warmAvatars([url]);
       }
     }
     if (emit.isDone) return;
@@ -123,7 +130,7 @@ class AccountProfileBloc
       // POST → GET /me → session cache (repository), then paint from cache.
       await _profileRepository.uploadProfileImage(File(picked.path));
       AppLog.d(_tag, 'Profile image uploaded');
-      _emitFromCache(emit, isUpdatingImage: false, clearError: true);
+      await _emitFromCache(emit, isUpdatingImage: false, clearError: true);
     } catch (e) {
       AppLog.e(_tag, 'Profile image upload failed', e);
       emit(
@@ -144,7 +151,7 @@ class AccountProfileBloc
     try {
       await _profileRepository.deleteProfileImage();
       AppLog.d(_tag, 'Profile image deleted');
-      _emitFromCache(emit, isUpdatingImage: false, clearError: true);
+      await _emitFromCache(emit, isUpdatingImage: false, clearError: true);
     } catch (e) {
       AppLog.e(_tag, 'Profile image delete failed', e);
       emit(

@@ -173,6 +173,7 @@ Both singular and plural parameter names are accepted interchangeably:
 - `q` *(string, optional)*: Text query matching title, tag, category, store name, or city.
 - `sort` *(string, optional)*: Sort order:
   - `newest` *(default)*: Most recently added first.
+  - `most_viewed`: Highest `viewCount` first (view-counting engine).
   - `weight_asc`: Lowest net weight first.
   - `weight_desc`: Heaviest net weight first.
 - `limit` *(integer, default 20, max 100)*: Items per page.

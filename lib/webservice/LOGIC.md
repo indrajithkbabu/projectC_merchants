@@ -9,7 +9,8 @@ repositories; repositories call request classes; request classes use
 - `catalog_api_client.dart` — JSON + multipart, auth header, refresh-once retry
 - `catalog_api_exception.dart` — typed API/transport errors (incl. `failedPhotos`)
 - `catalog_error_mapper.dart` — maps codes → user-friendly UI messages
-- `auth/`, `profile/`, `store/`, `collection/`, `import/` — domain pairs
+- `auth/`, `profile/`, `store/`, `collection/`, `import/`, `notification/` —
+  domain pairs (`notification/` = FCM device tokens + Activity feed)
 
 ## Rules
 1. Flavor `baseUrl` already includes `/v1/catalog`.

@@ -61,10 +61,10 @@ This file defines what to follow for UI and logic inside `lib/presentation/add_s
   same clear-on-hide logic). Tap the photo → iOS-style centered preview
   (`showBulkPhotosIosPreview`: blur backdrop, no top chrome; same add /
   delete / edit icons on the image, bottom thumbnail scroller; keep ≥1
-  photo). Tap outside to dismiss. Add from that preview uses shared `showMediaSourceSheet` (Camera /
-  Gallery); Gallery opens `ProductGalleryPicker` (`drag_select_grid_view`),
-  same as store-profile Add products. Multi-photo pick goes straight to this
-  screen (no forced crop).
+  photo). Tap outside to dismiss. Add from that preview opens one
+  `ProductGalleryPicker(includeCamera: true)` sheet (same Telegram gallery +
+  Camera cell as store-profile Add products — no Camera/Gallery chooser).
+  Multi-photo pick goes straight to this screen (no forced crop).
 - **Specs incomplete / blank:** CTA **Publish to store** enqueues title-only create on
   `ProductUploadCoordinator` and **immediately** pops to store profile (no button
   loader). Store shows a pending shimmer slot; snackbar on success.

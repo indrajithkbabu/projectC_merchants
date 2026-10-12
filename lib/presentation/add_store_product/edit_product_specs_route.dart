@@ -76,7 +76,7 @@ class _EditProductSpecsRouteState extends State<EditProductSpecsRoute> {
             if (spec.category.isNotEmpty) spec.category,
             ...spec.metalType,
           ],
-          imagePaths: const [],
+          imagePaths: [],
           canEdit: true,
           canDelete: true,
         );
@@ -104,7 +104,6 @@ class _EditProductSpecsRouteState extends State<EditProductSpecsRoute> {
 
     return ScreenWrapper(
       backgroundColor: AppColors.background,
-      statusBarIconBrightness: Brightness.dark,
       child: AbsorbPointer(
         absorbing: _isSaving,
         child: Column(
@@ -139,7 +138,7 @@ class _EditProductSpecsRouteState extends State<EditProductSpecsRoute> {
                     ),
                     const SizedBox(height: 18),
                     if (_isSaving) ...[
-                      const LinearProgressIndicator(
+                      LinearProgressIndicator(
                         minHeight: 2,
                         color: AppColors.primary,
                         backgroundColor: AppColors.surfaceSecondary,
@@ -162,7 +161,7 @@ class _EditProductSpecsRouteState extends State<EditProductSpecsRoute> {
               top: false,
               child: Container(
                 width: double.infinity,
-                decoration: const BoxDecoration(
+                decoration: BoxDecoration(
                   color: AppColors.background,
                   border: Border(
                     top: BorderSide(color: AppColors.border, width: 0.7),

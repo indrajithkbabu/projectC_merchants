@@ -6,12 +6,12 @@ class AppBackButton extends StatelessWidget {
   const AppBackButton({
     super.key,
     this.onPressed,
-    this.color = AppColors.accent,
+    this.color,
     this.size = 20,
   });
 
   final VoidCallback? onPressed;
-  final Color color;
+  final Color? color;
   final double size;
 
   @override
@@ -31,7 +31,7 @@ class AppBackButton extends StatelessWidget {
           icon: Icon(
             Icons.arrow_back_ios_new_rounded,
             size: size,
-            color: color,
+            color: color ?? AppColors.backIcon,
           ),
         ),
       ),

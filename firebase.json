@@ -1,0 +1,30 @@
+{
+  "flutter": {
+    "platforms": {
+      "android": {
+        "default": {
+          "projectId": "project-c-jewelflow",
+          "appId": "1:264112638081:android:2b7426d28842e0c5b96580",
+          "fileOutput": "android/app/google-services.json"
+        }
+      },
+      "ios": {
+        "default": {
+          "projectId": "project-c-jewelflow",
+          "appId": "1:264112638081:ios:159dad09bdf71a12b96580",
+          "uploadDebugSymbols": false,
+          "fileOutput": "ios/Runner/GoogleService-Info.plist"
+        }
+      },
+      "dart": {
+        "lib/firebase_options.dart": {
+          "projectId": "project-c-jewelflow",
+          "configurations": {
+            "android": "1:264112638081:android:2b7426d28842e0c5b96580",
+            "ios": "1:264112638081:ios:159dad09bdf71a12b96580"
+          }
+        }
+      }
+    }
+  }
+}

@@ -185,7 +185,7 @@ class _StoreSetupPhotosPreviewSheetState
                                               StoreImageRemoved(index),
                                             );
                                           },
-                                          child: const SizedBox(
+                                          child: SizedBox(
                                             width: 36,
                                             height: 36,
                                             child: Icon(

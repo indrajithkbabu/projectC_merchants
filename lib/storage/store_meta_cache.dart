@@ -7,6 +7,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:project_c/helper/app_log.dart';
 import 'package:project_c/models/catalog/catalog_store.dart';
 import 'package:project_c/models/catalog/collection_models.dart';
+import 'package:project_c/models/store_privacy_mode.dart';
 
 /// Cached store header / showcase snapshot (display always reads from here).
 class StoreMetaSnapshot extends Equatable {
@@ -15,19 +16,50 @@ class StoreMetaSnapshot extends Equatable {
     this.storeLink = '',
     this.coverImageUrl = '',
     this.storeImages = const [],
+    this.city = '',
+    this.privacy = StorePrivacyMode.public,
+    this.followerCount = 0,
+    this.followingCount = 0,
+    this.productCount,
+    this.pendingRequestsCount,
+    this.canViewContent = true,
+    this.followStatus = StoreFollowStatus.none,
   });
 
   final String storeName;
   final String storeLink;
   final String coverImageUrl;
   final List<CatalogPhoto> storeImages;
+  final String city;
+  final StorePrivacyMode privacy;
+  final int followerCount;
+  final int followingCount;
+  final int? productCount;
+  final int? pendingRequestsCount;
+  final bool canViewContent;
+  final StoreFollowStatus followStatus;
 
   factory StoreMetaSnapshot.fromCatalogStore(CatalogStore store) {
+    final follow = storeFollowStatusFromString(store.followStatusRaw);
+    final isOwnerOrMember =
+        store.relationship == StoreRelationship.owner ||
+        store.relationship == StoreRelationship.member ||
+        follow == StoreFollowStatus.self ||
+        follow == StoreFollowStatus.member;
     return StoreMetaSnapshot(
       storeName: store.name.trim(),
       storeLink: store.storeLink,
       coverImageUrl: store.coverImageUrl.trim(),
       storeImages: List<CatalogPhoto>.from(store.images),
+      city: store.city.trim(),
+      privacy: store.privacy ?? StorePrivacyMode.public,
+      followerCount: store.followerCount,
+      followingCount: store.followingCount,
+      productCount: store.productCount,
+      pendingRequestsCount: store.pendingRequestsCount,
+      canViewContent:
+          isOwnerOrMember ? true : store.resolvedCanViewContent,
+      followStatus: follow,
     );
   }
 
@@ -38,6 +70,15 @@ class StoreMetaSnapshot extends Equatable {
     'storeImages': [
       for (final photo in storeImages) photo.toJson(),
     ],
+    'city': city,
+    'privacy': privacy.apiValue,
+    'followerCount': followerCount,
+    'followingCount': followingCount,
+    if (productCount != null) 'productCount': productCount,
+    if (pendingRequestsCount != null)
+      'pendingRequestsCount': pendingRequestsCount,
+    'canViewContent': canViewContent,
+    'followStatus': followStatus.apiValue,
   };
 
   factory StoreMetaSnapshot.fromJson(Map<String, dynamic> json) {
@@ -55,11 +96,65 @@ class StoreMetaSnapshot extends Equatable {
                   )
                   .toList()
               : const [],
+      city: '${json['city'] ?? ''}'.trim(),
+      privacy: StorePrivacyModeX.fromApi(json['privacy'] as String?),
+      followerCount: (json['followerCount'] as num?)?.toInt() ?? 0,
+      followingCount: (json['followingCount'] as num?)?.toInt() ?? 0,
+      productCount: (json['productCount'] as num?)?.toInt(),
+      pendingRequestsCount: (json['pendingRequestsCount'] as num?)?.toInt(),
+      canViewContent: json['canViewContent'] as bool? ?? true,
+      followStatus: storeFollowStatusFromString(
+        json['followStatus'] as String?,
+      ),
+    );
+  }
+
+  StoreMetaSnapshot copyWith({
+    String? storeName,
+    String? storeLink,
+    String? coverImageUrl,
+    List<CatalogPhoto>? storeImages,
+    String? city,
+    StorePrivacyMode? privacy,
+    int? followerCount,
+    int? followingCount,
+    int? productCount,
+    int? pendingRequestsCount,
+    bool? canViewContent,
+    StoreFollowStatus? followStatus,
+  }) {
+    return StoreMetaSnapshot(
+      storeName: storeName ?? this.storeName,
+      storeLink: storeLink ?? this.storeLink,
+      coverImageUrl: coverImageUrl ?? this.coverImageUrl,
+      storeImages: storeImages ?? this.storeImages,
+      city: city ?? this.city,
+      privacy: privacy ?? this.privacy,
+      followerCount: followerCount ?? this.followerCount,
+      followingCount: followingCount ?? this.followingCount,
+      productCount: productCount ?? this.productCount,
+      pendingRequestsCount:
+          pendingRequestsCount ?? this.pendingRequestsCount,
+      canViewContent: canViewContent ?? this.canViewContent,
+      followStatus: followStatus ?? this.followStatus,
     );
   }
 
   @override
-  List<Object?> get props => [storeName, storeLink, coverImageUrl, storeImages];
+  List<Object?> get props => [
+    storeName,
+    storeLink,
+    coverImageUrl,
+    storeImages,
+    city,
+    privacy,
+    followerCount,
+    followingCount,
+    productCount,
+    pendingRequestsCount,
+    canViewContent,
+    followStatus,
+  ];
 }
 
 /// Memory + disk cache for store meta. UI paints from cache; API writes cache.
@@ -127,12 +222,7 @@ class StoreMetaCache {
     final prev = await read(id);
     await write(
       id,
-      StoreMetaSnapshot(
-        storeName: prev?.storeName ?? '',
-        storeLink: prev?.storeLink ?? '',
-        coverImageUrl: cover,
-        storeImages: prev?.storeImages ?? const [],
-      ),
+      (prev ?? const StoreMetaSnapshot()).copyWith(coverImageUrl: cover),
     );
   }
 

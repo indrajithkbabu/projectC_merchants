@@ -84,7 +84,6 @@ class _AddTeamRouteState extends State<AddTeamRoute> {
       ],
       child: ScreenWrapper(
         backgroundColor: AppColors.background,
-        statusBarIconBrightness: Brightness.dark,
         child: BlocBuilder<TeamBloc, TeamState>(
           builder: (context, state) {
             return Column(
@@ -197,7 +196,7 @@ class _TeamBody extends StatelessWidget {
       padding: AppPadding.screen(top: 4, bottom: 16),
       itemCount: state.searchResults.length,
       separatorBuilder:
-          (_, __) => const Divider(
+          (_, __) => Divider(
             height: 1,
             indent: 56,
             color: AppColors.border,
@@ -262,7 +261,7 @@ class _TeamAppBar extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 8),
-          const Divider(height: 1, color: AppColors.border),
+          Divider(height: 1, color: AppColors.border),
         ],
       ),
     );
