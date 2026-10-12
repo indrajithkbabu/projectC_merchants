@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:project_c/helper/app_padding.dart';
+import 'package:project_c/helper/app_shimmer.dart';
 import 'package:project_c/helper/colors.dart';
 
 /// Skeleton list matching [StoreListingTile] row layout (avatar + title lines).
@@ -47,7 +48,7 @@ class _StoreListingShimmerState extends State<StoreListingShimmer>
           padding: widget.padding ?? AppPadding.screen(top: 8, bottom: 24),
           itemCount: widget.itemCount,
           separatorBuilder:
-              (_, __) => const Divider(
+              (_, __) => Divider(
                 height: 1,
                 indent: 68,
                 color: AppColors.border,
@@ -102,20 +103,12 @@ class _ShimmerBlock extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final highlight = 0.35 + (0.35 * (1 - (2 * (t - 0.5).abs())));
-    final base = AppColors.surfaceSecondary;
-    final shine = Color.lerp(base, Colors.white, highlight)!;
     return Container(
       width: width,
       height: height,
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(radius),
-        gradient: LinearGradient(
-          begin: Alignment(-1.2 + 2.4 * t, -0.4),
-          end: Alignment(-0.2 + 2.4 * t, 0.6),
-          colors: [base, shine, base],
-          stops: const [0.25, 0.5, 0.75],
-        ),
+        gradient: AppShimmer.gradient(t),
       ),
     );
   }

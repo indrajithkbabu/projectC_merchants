@@ -243,7 +243,7 @@ class _ProductCard extends StatelessWidget {
                       Colors.transparent,
                       Colors.black.withValues(alpha: 0.4),
                     ],
-                    stops: const [0.45, 1],
+                    stops: [0.45, 1],
                   ),
                 ),
               ),
@@ -255,19 +255,22 @@ class _ProductCard extends StatelessWidget {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    if (selectionMode)
-                      Align(
-                        alignment: Alignment.topRight,
-                        child: _SelectionCheck(
-                          isSelected: isSelected,
-                          isDeleting: isDeleting,
-                        ),
-                      )
-                    else if (status != null)
-                      Align(
-                        alignment: Alignment.topRight,
-                        child: _ImportStatusChip(label: status),
-                      ),
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        if (product.viewCount != null &&
+                            product.viewCount! > 0)
+                          _ViewCountBadge(count: product.viewCount!),
+                        const Spacer(),
+                        if (selectionMode)
+                          _SelectionCheck(
+                            isSelected: isSelected,
+                            isDeleting: isDeleting,
+                          )
+                        else if (status != null)
+                          _ImportStatusChip(label: status),
+                      ],
+                    ),
                     const Spacer(),
                     Text(
                       product.title,
@@ -291,6 +294,48 @@ class _ProductCard extends StatelessWidget {
   }
 }
 
+class _ViewCountBadge extends StatelessWidget {
+  const _ViewCountBadge({required this.count});
+
+  final int count;
+
+  @override
+  Widget build(BuildContext context) {
+    final label =
+        count < 1000
+            ? '$count'
+            : count < 1000000
+            ? '${(count / 1000).floor()}k'
+            : '${(count / 1000000).toStringAsFixed(1)}M';
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 4),
+      decoration: BoxDecoration(
+        color: Colors.black.withValues(alpha: 0.45),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(
+            Icons.visibility_outlined,
+            size: 12,
+            color: AppColors.textOnPrimary,
+          ),
+          const SizedBox(width: 3),
+          Text(
+            label,
+            style: AppTextStyles.caption(
+              fontSize: 11,
+              fontWeight: FontWeight.w600,
+              color: AppColors.textOnPrimary,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class _SelectionCheck extends StatelessWidget {
   const _SelectionCheck({
     required this.isSelected,
@@ -303,7 +348,7 @@ class _SelectionCheck extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (isDeleting) {
-      return const SizedBox(
+      return SizedBox(
         width: 24,
         height: 24,
         child: CircularProgressIndicator(
@@ -322,7 +367,7 @@ class _SelectionCheck extends StatelessWidget {
       ),
       child:
           isSelected
-              ? const Icon(
+              ? Icon(
                 Icons.check_rounded,
                 size: 16,
                 color: AppColors.textOnPrimary,

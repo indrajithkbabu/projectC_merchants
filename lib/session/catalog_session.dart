@@ -3,6 +3,7 @@ import 'package:project_c/helper/product_image.dart';
 import 'package:project_c/models/catalog/catalog_profile.dart';
 import 'package:project_c/models/catalog/catalog_tokens.dart';
 import 'package:project_c/storage/session_storage.dart';
+import 'package:project_c/storage/store_home_cache.dart';
 import 'package:project_c/storage/store_meta_cache.dart';
 import 'package:project_c/storage/store_products_cache.dart';
 import 'package:project_c/webservice/catalog_api_client.dart';
@@ -64,6 +65,7 @@ class CatalogSession {
     await _storage.clear();
     // Drop store / image caches so the next account never sees prior data.
     await Future.wait([
+      StoreHomeCache.instance.clearAll(),
       StoreProductsCache.instance.clearAll(),
       StoreMetaCache.instance.clearAll(),
       CatalogImageCache.clearAll(),

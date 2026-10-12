@@ -45,6 +45,11 @@
 	<true/>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>fetch</string>
+		<string>remote-notification</string>
+	</array>
 	<key>NSContactsUsageDescription</key>
 	<string>Jewel Flow needs access to your contacts so you can add teammates to your store.</string>
 	<key>NSCameraUsageDescription</key>

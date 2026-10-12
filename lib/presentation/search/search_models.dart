@@ -8,6 +8,7 @@ import 'package:project_c/models/store_product.dart';
 /// Sort options — values match API `sort` query param.
 enum SearchSortOption {
   newest('Newest', 'newest'),
+  mostViewed('Most viewed', 'most_viewed'),
   lightest('Lightest first', 'weight_asc'),
   heaviest('Heaviest first', 'weight_desc');
 
@@ -329,6 +330,7 @@ class SearchProductResult extends Equatable {
     this.sizeLabel = '',
     this.precisionTag = '',
     this.thumbnailUrl,
+    this.viewCount,
   });
 
   final String id;
@@ -348,6 +350,7 @@ class SearchProductResult extends Equatable {
   final String sizeLabel;
   final String precisionTag;
   final String? thumbnailUrl;
+  final int? viewCount;
 
   List<String> get imagePaths =>
       thumbnailUrl == null || thumbnailUrl!.isEmpty
@@ -357,13 +360,13 @@ class SearchProductResult extends Equatable {
   int get toneIndex => id.hashCode.abs() % 6;
 
   Color get storeMarkColor {
-    const palette = <Color>[
+    final palette = <Color>[
       AppColors.primary,
-      Color(0xFFE8A838),
-      Color(0xFF4FAE4E),
-      Color(0xFFE67E22),
-      Color(0xFF9B59B6),
-      Color(0xFF1ABC9C),
+      const Color(0xFFE8A838),
+      const Color(0xFF4FAE4E),
+      const Color(0xFFE67E22),
+      const Color(0xFF9B59B6),
+      const Color(0xFF1ABC9C),
     ];
     return palette[toneIndex % palette.length];
   }
@@ -406,6 +409,7 @@ class SearchProductResult extends Equatable {
       sizeLabel: details.size,
       precisionTag: details.precisionTag,
       thumbnailUrl: hit.thumbnailUrl,
+      viewCount: hit.viewCount,
     );
   }
 
@@ -446,6 +450,7 @@ class SearchProductResult extends Equatable {
       ],
       imagePaths: imagePaths,
       toneIndex: toneIndex % 4,
+      viewCount: viewCount,
     );
   }
 
@@ -582,6 +587,7 @@ class SearchProductResult extends Equatable {
         wastage,
         sizeLabel,
         precisionTag,
+        viewCount,
         thumbnailUrl,
       ];
 }

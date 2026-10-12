@@ -47,7 +47,7 @@ class ProductPreviewImage extends StatelessWidget {
             child:
                 hasImage
                     ? ProductMediaImage(path: path)
-                    : const Icon(
+                    : Icon(
                       Icons.diamond_outlined,
                       size: 32,
                       color: AppColors.textOnPrimary,
@@ -110,7 +110,7 @@ class ProductTagChip extends StatelessWidget {
           mainAxisSize: MainAxisSize.min,
           children: [
             if (isSuggestion) ...[
-              const Icon(Icons.add, size: 14, color: AppColors.textSecondary),
+              Icon(Icons.add, size: 14, color: AppColors.textSecondary),
               const SizedBox(width: 2),
             ],
             Text(
@@ -125,7 +125,7 @@ class ProductTagChip extends StatelessWidget {
               const SizedBox(width: 4),
               GestureDetector(
                 onTap: onRemove,
-                child: const Icon(
+                child: Icon(
                   Icons.close_rounded,
                   size: 14,
                   color: AppColors.primary,

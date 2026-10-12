@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
-import 'package:image_picker/image_picker.dart';
 import 'package:project_c/bloc/add_store_product/add_store_product_bloc.dart';
 import 'package:project_c/bloc/bulk_upload/bulk_upload_bloc.dart';
 import 'package:project_c/helper/app_padding.dart';
@@ -8,7 +7,6 @@ import 'package:project_c/helper/colors.dart';
 import 'package:project_c/helper/product_gallery_picker.dart';
 import 'package:project_c/helper/product_image_cropper.dart';
 import 'package:project_c/helper/text_styles.dart';
-import 'package:project_c/helper/widgets/media_source_sheet.dart';
 import 'package:project_c/presentation/add_store_product/add_store_product_widgets/product_image_carousel.dart';
 
 /// Photo preview sheet (same pattern as [add_product_form_route]): carousel with
@@ -62,7 +60,6 @@ class _BulkPhotosPreviewSheetBody extends StatefulWidget {
 
 class _BulkPhotosPreviewSheetBodyState
     extends State<_BulkPhotosPreviewSheetBody> {
-  final _imagePicker = ImagePicker();
   bool _picking = false;
 
   List<GalleryImageItem> _visibleImages(BulkUploadState state) {
@@ -137,29 +134,14 @@ class _BulkPhotosPreviewSheetBodyState
   Future<void> _addMore(BuildContext sheetContext) async {
     if (_picking || widget.readOnly) return;
     final bloc = context.read<BulkUploadBloc>();
-    final source = await showMediaSourceSheet(
-      sheetContext,
-      title: 'Add photos',
-      subtitle: 'Capture new photos or pick from your gallery',
-    );
-    if (!mounted || !sheetContext.mounted || source == null) return;
-
     setState(() => _picking = true);
     try {
-      final paths = <String>[];
-      if (source == MediaPickSource.camera) {
-        final photo = await _imagePicker.pickImage(
-          source: ImageSource.camera,
-          imageQuality: 85,
-          maxWidth: 1920,
-          maxHeight: 1920,
-        );
-        if (photo != null) paths.add(photo.path);
-      } else {
-        if (!sheetContext.mounted) return;
-        // Same drag_select gallery used from store profile Add products.
-        paths.addAll(await ProductGalleryPicker.pickImagePaths(sheetContext));
-      }
+      if (!sheetContext.mounted) return;
+      // Same one-sheet Telegram gallery as store-profile Add products.
+      final paths = await ProductGalleryPicker.pickImagePaths(
+        sheetContext,
+        includeCamera: true,
+      );
       if (!mounted || paths.isEmpty) return;
 
       // Close sheet first (same as form route), then append so the strip updates.

@@ -61,7 +61,6 @@ class StoreImportSelectRoute extends StatelessWidget {
       ],
       child: ScreenWrapper(
         backgroundColor: AppColors.background,
-        statusBarIconBrightness: Brightness.dark,
         child: BlocBuilder<StoreImportBloc, StoreImportState>(
           builder: (context, state) {
             final store = state.sourceStore;
@@ -127,7 +126,7 @@ class StoreImportSelectRoute extends StatelessWidget {
                   child: Row(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      const Icon(
+                      Icon(
                         Icons.download_rounded,
                         color: AppColors.primary,
                         size: 20,
@@ -310,7 +309,7 @@ class _ImportProductTile extends StatelessWidget {
                         child:
                             hasImage
                                 ? null
-                                : const Icon(
+                                : Icon(
                                   Icons.diamond_outlined,
                                   size: 34,
                                   color: AppColors.textOnPrimary,
@@ -382,7 +381,7 @@ class _ImportProductTile extends StatelessWidget {
                           ),
                           child:
                               selected
-                                  ? const Icon(
+                                  ? Icon(
                                     Icons.check_rounded,
                                     size: 16,
                                     color: AppColors.textOnPrimary,

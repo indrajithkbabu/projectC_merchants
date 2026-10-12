@@ -9,6 +9,7 @@ class Routes {
   static const String addTeamRoute = 'add_team_route';
   static const String storeListingRoute = 'store_listing_route';
   static const String storeProfileRoute = 'store_profile_route';
+  static const String storeChannelRoute = 'store_channel_route';
   static const String storeGalleryRoute = 'store_gallery_route';
   static const String storeImportSelectRoute = 'store_import_select_route';
   static const String storeImportPendingRoute = 'store_import_pending_route';
@@ -29,5 +30,14 @@ class Routes {
   static const String searchFiltersRoute = 'search_filters_route';
   static const String countryPickerRoute = 'country_picker_route';
   static const String inviteFriendsRoute = 'invite_friends_route';
+  /// Full-screen Settings (opened from My store when the user has a store).
+  static const String settingsRoute = 'settings_route';
+  /// Activity feed (opened from Stores home notification icon).
+  static const String activityRoute = 'activity_route';
+  static const String accountPrivacyRoute = 'account_privacy_route';
+  static const String followRequestsRoute = 'follow_requests_route';
+  static const String followRequesterProfileRoute =
+      'follow_requester_profile_route';
+  static const String followersFollowingRoute = 'followers_following_route';
   static const String homePlaceholderRoute = 'home_placeholder_route';
 }

@@ -4,6 +4,7 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:project_c/bloc/network_status/network_status_cubit.dart';
 import 'package:project_c/helper/colors.dart';
 import 'package:project_c/helper/text_styles.dart';
+import 'package:project_c/helper/widgets/appearance_scope.dart';
 
 /// PhonePe-style network strip + [AbsorbPointer] gate for all routes.
 ///
@@ -25,24 +26,18 @@ class NetworkStatusGate extends StatelessWidget {
     statusBarBrightness: Brightness.dark,
   );
 
-  /// Matches default light-chrome style used when the strip dismisses.
-  static const SystemUiOverlayStyle _defaultOverlay = SystemUiOverlayStyle(
-    statusBarColor: Colors.transparent,
-    statusBarIconBrightness: Brightness.dark,
-    statusBarBrightness: Brightness.light,
-    systemNavigationBarColor: AppColors.scaffold,
-    systemNavigationBarIconBrightness: Brightness.dark,
-  );
-
   @override
   Widget build(BuildContext context) {
+    AppearanceScope.maybeOf(context);
     return BlocListener<NetworkStatusCubit, NetworkStatusState>(
       listenWhen: (prev, curr) => prev.banner != curr.banner,
       listener: (context, state) {
         // Route-level [ScreenWrapper] AnnotatedRegions sit deeper than this
         // builder, so force status-bar icon contrast while the strip is up.
         SystemChrome.setSystemUIOverlayStyle(
-          state.showBanner ? _bannerOverlay : _defaultOverlay,
+          state.showBanner
+              ? _bannerOverlay
+              : AppColors.systemOverlayStyle,
         );
       },
       child: BlocBuilder<NetworkStatusCubit, NetworkStatusState>(

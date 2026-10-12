@@ -220,9 +220,9 @@ class _ProductImageEditorPageState extends State<ProductImageEditorPage> {
               designMode: _designMode,
               theme: ThemeData.dark().copyWith(
                 primaryColor: AppColors.primary,
-                colorScheme: const ColorScheme.dark(
+                colorScheme: ColorScheme.dark(
                   primary: AppColors.primary,
-                  secondary: Color(0xFF25D366),
+                  secondary: const Color(0xFF25D366),
                 ),
               ),
               imageGeneration: const ImageGenerationConfigs(
@@ -456,7 +456,7 @@ class _ModeChip extends StatelessWidget {
               const SizedBox(width: 6),
               Text(
                 label,
-                style: const TextStyle(
+                style: TextStyle(
                   color: AppColors.textOnPrimary,
                   fontSize: 12,
                   fontWeight: FontWeight.w600,

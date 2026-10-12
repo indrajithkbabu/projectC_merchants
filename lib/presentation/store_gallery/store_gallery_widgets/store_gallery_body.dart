@@ -27,11 +27,70 @@ class _StoreGalleryBodyState extends State<StoreGalleryBody> {
   final ScrollController _scrollController = ScrollController();
   final Map<String, GlobalKey> _productKeys = {};
   bool _didScrollToFocus = false;
+  int? _lastDiskWarmCount;
+  int _lastDecodeKey = -1;
+  DateTime? _lastDecodeAt;
+  List<String> _flatUrls = const [];
 
   @override
   void dispose() {
     _scrollController.dispose();
     super.dispose();
+  }
+
+  List<String> _collectUrls(StoreGalleryState state) {
+    return [
+      for (final day in state.sections)
+        for (final section in day.products)
+          ...ProductImagePaths.displayable(section.imagePaths),
+    ];
+  }
+
+  void _warmDisk(StoreGalleryState state) {
+    final urls = _collectUrls(state);
+    _flatUrls = urls;
+    if (_lastDiskWarmCount == urls.length) return;
+    _lastDiskWarmCount = urls.length;
+    // Disk only — decode is viewport-scoped via scroll.
+    // ignore: unawaited_futures
+    CatalogImageCache.precacheUrls(urls);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _warmDecodeWindow();
+    });
+  }
+
+  void _warmDecodeWindow([ScrollMetrics? metrics]) {
+    if (_flatUrls.isEmpty) return;
+    final now = DateTime.now();
+    final lastAt = _lastDecodeAt;
+    final m = metrics ??
+        (_scrollController.hasClients ? _scrollController.position : null);
+    final pixels = m?.pixels.round() ?? 0;
+    final key = pixels ~/ 120;
+    if (key == _lastDecodeKey &&
+        lastAt != null &&
+        now.difference(lastAt).inMilliseconds < 80) {
+      return;
+    }
+    _lastDecodeKey = key;
+    _lastDecodeAt = now;
+    if (m == null) {
+      // ignore: unawaited_futures
+      CatalogImageCache.warmWindow(
+        urls: _flatUrls,
+        firstIndex: 0,
+        lastIndex: CatalogImageCache.defaultMaxDecode - 1,
+        cacheWidth: CatalogImageCache.gridCacheWidth(),
+      );
+      return;
+    }
+    // ignore: unawaited_futures
+    CatalogImageCache.warmAroundScroll(
+      urls: _flatUrls,
+      metrics: m,
+      cacheWidth: CatalogImageCache.gridCacheWidth(),
+    );
   }
 
   GlobalKey _keyFor(String productId) {
@@ -91,6 +150,7 @@ class _StoreGalleryBodyState extends State<StoreGalleryBody> {
           );
         }
 
+        _warmDisk(state);
         _scheduleScrollToFocus();
 
         return RawGestureDetector(
@@ -101,21 +161,48 @@ class _StoreGalleryBodyState extends State<StoreGalleryBody> {
                   (instance) {
                     instance
                       ..onStart = _onScaleStart
-                      ..onUpdate = _onScaleUpdate;
+                      ..onUpdate = (details) {
+                        final before =
+                            context
+                                .read<StoreGalleryBloc>()
+                                .state
+                                .crossAxisCount;
+                        _onScaleUpdate(details);
+                        final after =
+                            context
+                                .read<StoreGalleryBloc>()
+                                .state
+                                .crossAxisCount;
+                        if (after != before) {
+                          _lastDecodeKey = -1;
+                          _warmDecodeWindow();
+                        }
+                      };
                   },
                 ),
           },
-          child: CustomScrollView(
-            controller: _scrollController,
-            physics: const BouncingScrollPhysics(),
-            slivers: [
-              for (var dayIndex = 0; dayIndex < state.sections.length; dayIndex++)
-                ..._daySlivers(
-                  state.sections[dayIndex],
-                  state.crossAxisCount,
-                  isLastDay: dayIndex == state.sections.length - 1,
-                ),
-            ],
+          child: NotificationListener<ScrollNotification>(
+            onNotification: (notification) {
+              if (notification is ScrollUpdateNotification ||
+                  notification is ScrollEndNotification) {
+                _warmDecodeWindow(notification.metrics);
+              }
+              return false;
+            },
+            child: CustomScrollView(
+              controller: _scrollController,
+              physics: const BouncingScrollPhysics(),
+              slivers: [
+                for (var dayIndex = 0;
+                    dayIndex < state.sections.length;
+                    dayIndex++)
+                  ..._daySlivers(
+                    state.sections[dayIndex],
+                    state.crossAxisCount,
+                    isLastDay: dayIndex == state.sections.length - 1,
+                  ),
+              ],
+            ),
           ),
         );
       },

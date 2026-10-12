@@ -222,7 +222,7 @@ class _FallbackThumb extends StatelessWidget {
           ],
         ),
       ),
-      child: const Center(
+      child: Center(
         child: Icon(
           Icons.diamond_outlined,
           size: 42,
@@ -265,7 +265,7 @@ class _EmptyImageSlot extends StatelessWidget {
                     : Column(
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        const Icon(
+                        Icon(
                           Icons.add_photo_alternate_outlined,
                           size: 34,
                           color: AppColors.accent,

@@ -1,4 +1,5 @@
 import 'package:equatable/equatable.dart';
+import 'package:project_c/helper/device_contact_names.dart';
 import 'package:project_c/models/store_product.dart';
 
 class StoreChannel extends Equatable {
@@ -37,9 +38,13 @@ class StoreChannel extends Equatable {
   String get storeLink => '$handle.jewelflow.app';
 
   /// Subtitle under the store name: contact name → phone (no store link).
+  ///
+  /// While device contacts are still indexing, omit the phone fallback so the
+  /// UI does not flash number → name on cold start.
   String get listingSubtitle {
     final contact = contactName.trim();
     if (contact.isNotEmpty) return contact;
+    if (!DeviceContactNames.isReady) return '';
     return phone.trim();
   }
 

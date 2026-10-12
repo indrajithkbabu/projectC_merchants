@@ -162,10 +162,10 @@ class _AddProductGroupRouteState extends State<AddProductGroupRoute> {
     return InputDecoration(
       hintText: hint,
       hintStyle: AppTextStyles.hint(fontSize: size, fontWeight: FontWeight.w400),
-      enabledBorder: const UnderlineInputBorder(
+      enabledBorder: UnderlineInputBorder(
         borderSide: BorderSide(color: AppColors.border),
       ),
-      focusedBorder: const UnderlineInputBorder(
+      focusedBorder: UnderlineInputBorder(
         borderSide: BorderSide(color: AppColors.primary, width: 1.6),
       ),
     );
@@ -203,7 +203,6 @@ class _AddProductGroupRouteState extends State<AddProductGroupRoute> {
       ],
       child: ScreenWrapper(
         backgroundColor: AppColors.background,
-        statusBarIconBrightness: Brightness.dark,
         child: BlocBuilder<BulkUploadBloc, BulkUploadState>(
           builder: (context, state) {
             final canSubmit = state.canContinue;
@@ -339,7 +338,7 @@ class _AddProductGroupRouteState extends State<AddProductGroupRoute> {
                                 minWidth: 36,
                                 minHeight: 36,
                               ),
-                              icon: const Icon(
+                              icon: Icon(
                                 Icons.add_circle_rounded,
                                 color: AppColors.accent,
                                 size: 26,

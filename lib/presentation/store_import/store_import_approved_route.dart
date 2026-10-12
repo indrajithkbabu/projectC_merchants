@@ -15,7 +15,6 @@ class StoreImportApprovedRoute extends StatelessWidget {
   Widget build(BuildContext context) {
     return ScreenWrapper(
       backgroundColor: AppColors.background,
-      statusBarIconBrightness: Brightness.dark,
       child: BlocBuilder<StoreImportBloc, StoreImportState>(
         builder: (context, state) {
           final count = state.importedCount;
@@ -32,11 +31,11 @@ class StoreImportApprovedRoute extends StatelessWidget {
                 Container(
                   width: 72,
                   height: 72,
-                  decoration: const BoxDecoration(
+                  decoration: BoxDecoration(
                     color: AppColors.success,
                     shape: BoxShape.circle,
                   ),
-                  child: const Icon(
+                  child: Icon(
                     Icons.check_rounded,
                     size: 38,
                     color: AppColors.textOnPrimary,

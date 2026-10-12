@@ -52,7 +52,7 @@ class SearchResultCard extends StatelessWidget {
                   if (hasImages)
                     ProductImageCollage(imagePaths: paths)
                   else
-                    const Center(
+                    Center(
                       child: Icon(
                         Icons.diamond_outlined,
                         size: 34,
@@ -79,6 +79,42 @@ class SearchResultCard extends StatelessWidget {
                             fontWeight: FontWeight.w600,
                             color: AppColors.textOnPrimary,
                           ),
+                        ),
+                      ),
+                    ),
+                  if (product.viewCount != null && product.viewCount! > 0)
+                    Positioned(
+                      right: 8,
+                      top: 8,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 7,
+                          vertical: 4,
+                        ),
+                        decoration: BoxDecoration(
+                          color: Colors.black.withValues(alpha: 0.35),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(
+                              Icons.visibility_outlined,
+                              size: 12,
+                              color: AppColors.textOnPrimary,
+                            ),
+                            const SizedBox(width: 3),
+                            Text(
+                              product.viewCount! < 1000
+                                  ? '${product.viewCount}'
+                                  : '${(product.viewCount! / 1000).floor()}k',
+                              style: AppTextStyles.caption(
+                                fontSize: 11,
+                                fontWeight: FontWeight.w600,
+                                color: AppColors.textOnPrimary,
+                              ),
+                            ),
+                          ],
                         ),
                       ),
                     ),
@@ -190,6 +226,7 @@ class SearchResultsGrid extends StatelessWidget {
     this.onLoadMore,
     this.isLoadingMore = false,
     this.controller,
+    this.header,
   });
 
   final List<SearchProductResult> products;
@@ -200,9 +237,13 @@ class SearchResultsGrid extends StatelessWidget {
   final bool isLoadingMore;
   final ScrollController? controller;
 
+  /// Optional leading content (e.g. matching Stores strip on global results).
+  final Widget? header;
+
   @override
   Widget build(BuildContext context) {
-    if (products.isEmpty) {
+    final hasHeader = header != null;
+    if (products.isEmpty && !hasHeader) {
       return Center(
         child: Text(
           'No products match',
@@ -221,27 +262,52 @@ class SearchResultsGrid extends StatelessWidget {
         onLoadMore!();
         return false;
       },
-      child: GridView.builder(
+      child: CustomScrollView(
         controller: controller,
-        padding: padding,
-        itemCount: products.length + (isLoadingMore ? 1 : 0),
-        gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-          crossAxisCount: 2,
-          crossAxisSpacing: 10,
-          mainAxisSpacing: 14,
-          childAspectRatio: 0.58,
-        ),
-        itemBuilder: (context, index) {
-          if (index >= products.length) {
-            return SearchResultCardShimmer(showStoreLine: showStoreLine);
-          }
-          final product = products[index];
-          return SearchResultCard(
-            product: product,
-            showStoreLine: showStoreLine,
-            onTap: () => onProductTap(product),
-          );
-        },
+        keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+        slivers: [
+          if (hasHeader)
+            SliverToBoxAdapter(child: header),
+          if (products.isEmpty)
+            SliverFillRemaining(
+              hasScrollBody: false,
+              child: Center(
+                child: Text(
+                  'No products match',
+                  style: AppTextStyles.bodySecondary(),
+                ),
+              ),
+            )
+          else
+            SliverPadding(
+              padding: padding,
+              sliver: SliverGrid(
+                gridDelegate:
+                    const SliverGridDelegateWithFixedCrossAxisCount(
+                      crossAxisCount: 2,
+                      crossAxisSpacing: 10,
+                      mainAxisSpacing: 14,
+                      childAspectRatio: 0.58,
+                    ),
+                delegate: SliverChildBuilderDelegate(
+                  (context, index) {
+                    if (index >= products.length) {
+                      return SearchResultCardShimmer(
+                        showStoreLine: showStoreLine,
+                      );
+                    }
+                    final product = products[index];
+                    return SearchResultCard(
+                      product: product,
+                      showStoreLine: showStoreLine,
+                      onTap: () => onProductTap(product),
+                    );
+                  },
+                  childCount: products.length + (isLoadingMore ? 1 : 0),
+                ),
+              ),
+            ),
+        ],
       ),
     );
   }

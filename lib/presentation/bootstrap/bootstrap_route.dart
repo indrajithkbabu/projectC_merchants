@@ -10,10 +10,9 @@ class BootstrapRoute extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return const ScreenWrapper(
+    return ScreenWrapper(
       backgroundColor: AppColors.background,
-      statusBarIconBrightness: Brightness.dark,
-      child: Center(child: JewelFlowLogo(size: 92)),
+      child: const Center(child: JewelFlowLogo(size: 92)),
     );
   }
 }

@@ -88,7 +88,7 @@ class _ProfileRouteState extends State<ProfileRoute> {
                 ),
                 if (hasImage)
                   ListTile(
-                    leading: const Icon(
+                    leading: Icon(
                       Icons.delete_outline_rounded,
                       color: AppColors.error,
                     ),
@@ -155,7 +155,6 @@ class _ProfileRouteState extends State<ProfileRoute> {
       ],
       child: ScreenWrapper(
         backgroundColor: AppColors.background,
-        statusBarIconBrightness: Brightness.dark,
         child: BlocBuilder<ProfileBloc, ProfileState>(
           builder: (context, state) {
             return Column(

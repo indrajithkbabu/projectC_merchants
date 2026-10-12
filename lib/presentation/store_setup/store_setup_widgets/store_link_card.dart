@@ -79,7 +79,7 @@ class _AvailabilityBadge extends StatelessWidget {
       return Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          const Icon(
+          Icon(
             Icons.check_circle_rounded,
             size: 16,
             color: AppColors.success,
@@ -98,7 +98,7 @@ class _AvailabilityBadge extends StatelessWidget {
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
-        const Icon(
+        Icon(
           Icons.error_outline_rounded,
           size: 16,
           color: AppColors.error,

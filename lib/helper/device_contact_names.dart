@@ -25,6 +25,9 @@ abstract final class DeviceContactNames {
   /// True once [load] has finished (granted or denied).
   static bool get isReady => _cache != null;
 
+  /// True while a [load] is already in progress (e.g. auth cold-start prefetch).
+  static bool get isLoading => _inFlight != null;
+
   static bool get permissionDenied => _permissionDenied;
 
   /// Fire-and-forget warm (safe to call repeatedly).

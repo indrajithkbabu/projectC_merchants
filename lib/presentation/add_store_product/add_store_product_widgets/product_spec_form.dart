@@ -134,7 +134,7 @@ class _ProductSpecFormState extends State<ProductSpecForm> {
           label: 'Weight',
           trailing: SpecModeToggle<WeightMode>(
             value: _weightMode,
-            options: const [
+            options: [
               (WeightMode.fixed, 'Fixed'),
               (WeightMode.range, 'Range'),
             ],
@@ -202,7 +202,7 @@ class _ProductSpecFormState extends State<ProductSpecForm> {
           label: 'Purity',
           trailing: SpecModeToggle<FieldMode>(
             value: _purityMode,
-            options: const [
+            options: [
               (FieldMode.fixed, 'Fixed'),
               (FieldMode.varied, 'Varied'),
             ],
@@ -514,10 +514,10 @@ class _ProductSpecFormState extends State<ProductSpecForm> {
       hintStyle: AppTextStyles.hint(fontSize: 16, fontWeight: FontWeight.w400),
       suffixText: suffix,
       suffixStyle: AppTextStyles.caption(fontWeight: FontWeight.w600),
-      enabledBorder: const UnderlineInputBorder(
+      enabledBorder: UnderlineInputBorder(
         borderSide: BorderSide(color: AppColors.border),
       ),
-      focusedBorder: const UnderlineInputBorder(
+      focusedBorder: UnderlineInputBorder(
         borderSide: BorderSide(color: AppColors.primary, width: 1.6),
       ),
     );

@@ -27,9 +27,10 @@ This file defines what to follow for UI and logic inside `lib/presentation/profi
 - Profile tab (main shell) edits avatar via `POST /me/profile-image` and
   `DELETE /me/profile-image` through `AccountProfileBloc`, then `GET /me` is
   called, cached, and shown everywhere that reads the session.
-- When the user has an own store, Profile tab shows **Import requests** (opens
-  `store_import_requests_route`) with a quiet pending-count badge, then
-  **Open my store**.
+- Profile tab is shown on the shell only when the user has **no** own store
+  (Create store CTA). With an own store, shell swaps Profile for **My store**;
+  **Account privacy** + **Import requests** live under My store → Settings
+  (`settings_route`).
 
 ## Route and Navigation Notes
 - Register profile routes in centralized navigation setup.

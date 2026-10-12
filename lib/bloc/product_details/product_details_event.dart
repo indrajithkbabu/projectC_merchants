@@ -88,3 +88,17 @@ class ProductDetailsMorePressed extends ProductDetailsEvent {
 class ProductDetailsClearMessage extends ProductDetailsEvent {
   const ProductDetailsClearMessage();
 }
+
+/// Toggle like on the photo at [imageIndex] (wishlist entry).
+class ProductDetailsLikePressed extends ProductDetailsEvent {
+  const ProductDetailsLikePressed({required this.imageIndex});
+
+  final int imageIndex;
+
+  @override
+  List<Object?> get props => [imageIndex];
+}
+
+class ProductDetailsClearWishlistSnack extends ProductDetailsEvent {
+  const ProductDetailsClearWishlistSnack();
+}

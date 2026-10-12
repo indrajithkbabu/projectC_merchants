@@ -2,7 +2,12 @@ import 'package:flutter/material.dart';
 import 'package:project_c/helper/colors.dart';
 import 'package:project_c/helper/text_styles.dart';
 
-enum FloatingNavTab { stores, contacts, settings, profile }
+/// Shell bottom-nav destinations.
+///
+/// No-store users: [stores] · [contacts] · [settings] · [profile].
+/// Own-store users: [stores] · [contacts] · [wishlist] · [myStore]
+/// (Settings lives under My store, not as its own tab).
+enum FloatingNavTab { stores, contacts, settings, profile, wishlist, myStore }
 
 class FloatingNavItem {
   const FloatingNavItem({
@@ -67,12 +72,13 @@ class FloatingBottomNavBar extends StatelessWidget {
           color: AppColors.navBar,
           borderRadius: BorderRadius.circular(32),
           border: Border.all(color: AppColors.navBarBorder),
-          boxShadow: const [
-            BoxShadow(
-              color: AppColors.navBarShadow,
-              blurRadius: 20,
-              offset: Offset(0, 8),
-            ),
+          boxShadow: [
+            if (!AppColors.isNight)
+              BoxShadow(
+                color: AppColors.navBarShadow,
+                blurRadius: 20,
+                offset: const Offset(0, 8),
+              ),
           ],
         ),
         child: SizedBox(
@@ -108,7 +114,7 @@ class _NavItemButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final color = selected ? AppColors.primary : AppColors.navBarInactive;
+    final color = selected ? AppColors.navBarActive : AppColors.navBarInactive;
 
     return Semantics(
       button: true,

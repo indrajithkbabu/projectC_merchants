@@ -11,8 +11,10 @@ import 'package:project_c/helper/widgets/floating_bottom_nav_bar.dart';
 import 'package:project_c/helper/widgets/primary_button.dart';
 import 'package:project_c/helper/widgets/screen_wrapper.dart';
 import 'package:project_c/models/catalog/catalog_profile.dart';
+import 'package:project_c/models/store_privacy_mode.dart';
 import 'package:project_c/navigation/routes.dart';
 import 'package:project_c/presentation/profile/profile_widgets/profile_photo_picker.dart';
+import 'package:project_c/services/store_privacy_preferences.dart';
 import 'package:project_c/services/store_products_prefetcher.dart';
 import 'package:project_c/webservice/import/import_repository.dart';
 
@@ -131,7 +133,7 @@ class _ProfileTabState extends State<ProfileTab> {
                 ),
                 if (hasImage)
                   ListTile(
-                    leading: const Icon(
+                    leading: Icon(
                       Icons.delete_outline_rounded,
                       color: AppColors.error,
                     ),
@@ -289,6 +291,13 @@ class _ProfileTabState extends State<ProfileTab> {
                 ),
                 if (ownStore != null) ...[
                   const SizedBox(height: 16),
+                  _AccountPrivacyTile(
+                    onTap:
+                        () => Navigator.of(
+                          context,
+                        ).pushNamed(Routes.accountPrivacyRoute),
+                  ),
+                  const SizedBox(height: 16),
                   _ImportRequestsTile(
                     pendingCount: _pendingImportCount,
                     onTap:
@@ -354,6 +363,75 @@ class _ProfileTabState extends State<ProfileTab> {
 
 enum _ProfileTabPhotoAction { camera, gallery, delete }
 
+class _AccountPrivacyTile extends StatelessWidget {
+  const _AccountPrivacyTile({required this.onTap});
+
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final prefs = ServiceLocator.get<StorePrivacyPreferences>();
+    return ListenableBuilder(
+      listenable: prefs,
+      builder: (context, _) {
+        return Material(
+          color: AppColors.surfaceSecondary,
+          borderRadius: BorderRadius.circular(14),
+          child: InkWell(
+            onTap: onTap,
+            borderRadius: BorderRadius.circular(14),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+              child: Row(
+                children: [
+                  Container(
+                    width: 36,
+                    height: 36,
+                    decoration: BoxDecoration(
+                      color: AppColors.primary.withValues(alpha: 0.12),
+                      shape: BoxShape.circle,
+                    ),
+                    child: Icon(
+                      prefs.isPrivate
+                          ? Icons.lock_outline_rounded
+                          : Icons.public_rounded,
+                      size: 20,
+                      color: AppColors.primary,
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Account privacy',
+                          style: AppTextStyles.body(
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          prefs.mode.label,
+                          style: AppTextStyles.caption(),
+                        ),
+                      ],
+                    ),
+                  ),
+                  Icon(
+                    Icons.chevron_right_rounded,
+                    color: AppColors.textSecondary,
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
+
 class _ImportRequestsTile extends StatelessWidget {
   const _ImportRequestsTile({
     required this.pendingCount,
@@ -383,7 +461,7 @@ class _ImportRequestsTile extends StatelessWidget {
                   color: AppColors.primary.withValues(alpha: 0.12),
                   shape: BoxShape.circle,
                 ),
-                child: const Icon(
+                child: Icon(
                   Icons.inbox_outlined,
                   size: 20,
                   color: AppColors.primary,
@@ -429,7 +507,7 @@ class _ImportRequestsTile extends StatelessWidget {
                   ),
                 )
               else
-                const Icon(
+                Icon(
                   Icons.chevron_right_rounded,
                   color: AppColors.textSecondary,
                 ),

@@ -137,7 +137,7 @@ class SearchRemovableChip extends StatelessWidget {
               padding: EdgeInsets.zero,
               constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
               onPressed: onRemove,
-              icon: const Icon(
+              icon: Icon(
                 Icons.close_rounded,
                 size: 16,
                 color: AppColors.primary,

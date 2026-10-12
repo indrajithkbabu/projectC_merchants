@@ -95,7 +95,6 @@ class _InviteFriendsRouteState extends State<InviteFriendsRoute> {
   Widget build(BuildContext context) {
     return ScreenWrapper(
       backgroundColor: AppColors.scaffold,
-      statusBarIconBrightness: Brightness.dark,
       child: BlocListener<ContactsBloc, ContactsState>(
         listenWhen:
             (prev, curr) =>
@@ -153,7 +152,7 @@ class _InviteFriendsRouteState extends State<InviteFriendsRoute> {
                             fontSize: 15,
                             fontWeight: FontWeight.w400,
                           ),
-                          prefixIcon: const Icon(
+                          prefixIcon: Icon(
                             Icons.search_rounded,
                             color: AppColors.textSecondary,
                           ),
@@ -166,7 +165,7 @@ class _InviteFriendsRouteState extends State<InviteFriendsRoute> {
                                       _searchController.clear();
                                       _filterQuery.value = '';
                                     },
-                                    icon: const Icon(
+                                    icon: Icon(
                                       Icons.close_rounded,
                                       color: AppColors.textSecondary,
                                     ),
@@ -184,7 +183,7 @@ class _InviteFriendsRouteState extends State<InviteFriendsRoute> {
                           ),
                           focusedBorder: OutlineInputBorder(
                             borderRadius: BorderRadius.circular(32),
-                            borderSide: const BorderSide(
+                            borderSide: BorderSide(
                               color: AppColors.primary,
                               width: 1.2,
                             ),
@@ -305,7 +304,7 @@ class _InviteFriendsRouteState extends State<InviteFriendsRoute> {
                               children: [
                                 if (isFirst) const SizedBox(height: 4),
                                 if (!isFirst)
-                                  const Divider(
+                                  Divider(
                                     height: 1,
                                     indent: 68,
                                     color: AppColors.border,
@@ -359,7 +358,7 @@ class _ShareCard extends StatelessWidget {
             horizontal: 16,
             vertical: 2,
           ),
-          leading: const CircleAvatar(
+          leading: CircleAvatar(
             radius: 22,
             backgroundColor: AppColors.primary,
             child: Icon(

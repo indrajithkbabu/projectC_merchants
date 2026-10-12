@@ -12,6 +12,7 @@ class StoreProduct extends Equatable {
     this.canEdit = false,
     this.canDelete = false,
     this.toneIndex = 0,
+    this.viewCount,
     DateTime? createdAt,
   }) : createdAt = createdAt ?? DateTime.now();
 
@@ -29,6 +30,9 @@ class StoreProduct extends Equatable {
   final bool canEdit;
   final bool canDelete;
   final int toneIndex;
+
+  /// Collection-level view count when provided by list/detail APIs.
+  final int? viewCount;
   final DateTime createdAt;
 
   String get meta {
@@ -60,6 +64,8 @@ class StoreProduct extends Equatable {
     bool? canEdit,
     bool? canDelete,
     int? toneIndex,
+    int? viewCount,
+    bool clearViewCount = false,
     DateTime? createdAt,
   }) {
     return StoreProduct(
@@ -73,6 +79,7 @@ class StoreProduct extends Equatable {
       canEdit: canEdit ?? this.canEdit,
       canDelete: canDelete ?? this.canDelete,
       toneIndex: toneIndex ?? this.toneIndex,
+      viewCount: clearViewCount ? null : (viewCount ?? this.viewCount),
       createdAt: createdAt ?? this.createdAt,
     );
   }
@@ -89,6 +96,7 @@ class StoreProduct extends Equatable {
       'canEdit': canEdit,
       'canDelete': canDelete,
       'toneIndex': toneIndex,
+      if (viewCount != null) 'viewCount': viewCount,
       'createdAt': createdAt.millisecondsSinceEpoch,
     };
   }
@@ -99,6 +107,7 @@ class StoreProduct extends Equatable {
     final rawAssetIds = map['photoAssetIds'];
     final rawThumbhashes = map['imageThumbhashes'];
     final rawCreatedAt = map['createdAt'];
+    final rawViewCount = map['viewCount'];
     return StoreProduct(
       id:
           (map['id'] as String?) ??
@@ -124,6 +133,10 @@ class StoreProduct extends Equatable {
       canEdit: map['canEdit'] == true,
       canDelete: map['canDelete'] == true,
       toneIndex: (map['toneIndex'] as int?) ?? 0,
+      viewCount:
+          rawViewCount is num
+              ? rawViewCount.toInt()
+              : (rawViewCount is int ? rawViewCount : null),
       createdAt:
           rawCreatedAt is int
               ? DateTime.fromMillisecondsSinceEpoch(rawCreatedAt)
@@ -187,6 +200,7 @@ class StoreProduct extends Equatable {
     canEdit,
     canDelete,
     toneIndex,
+    viewCount,
     createdAt,
   ];
 }

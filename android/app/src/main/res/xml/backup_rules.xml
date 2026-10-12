@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Exclude Firebase Installation / FCM state from backup — shared FIDs
+     across devices cause FCM Registration / "Invalid argument for the given fid". -->
+<full-backup-content>
+    <exclude domain="sharedpref" path="."/>
+    <exclude domain="file" path="PersistedInstallation."/>
+    <exclude domain="database" path="com.google.android.gms.appid.db"/>
+    <exclude domain="file" path="datastore/"/>
+</full-backup-content>

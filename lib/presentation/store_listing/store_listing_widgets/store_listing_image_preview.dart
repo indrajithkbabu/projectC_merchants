@@ -110,7 +110,7 @@ class _StoreListingImagePreviewState extends State<_StoreListingImagePreview> {
                       child: Stack(
                         fit: StackFit.expand,
                         children: [
-                          const ColoredBox(color: AppColors.surfaceSecondary),
+                          ColoredBox(color: AppColors.surfaceSecondary),
                           PageView.builder(
                             controller: _pageController,
                             physics:

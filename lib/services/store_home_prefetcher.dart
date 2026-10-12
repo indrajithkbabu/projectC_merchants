@@ -1,13 +1,18 @@
+import 'dart:async';
+
 import 'package:project_c/di/service_locator.dart';
 import 'package:project_c/helper/app_log.dart';
+import 'package:project_c/helper/product_image.dart';
 import 'package:project_c/models/catalog/catalog_page.dart';
 import 'package:project_c/models/catalog/catalog_store.dart';
+import 'package:project_c/storage/store_home_cache.dart';
 import 'package:project_c/webservice/store/store_repository.dart';
 
 /// Warms `GET /home` before the Stores tab mounts (cold start / post-auth).
 ///
 /// Call [prefetch] as soon as auth tokens are ready. [StoreListingBloc]
 /// awaits [ensure] so the first paint can use the in-flight or completed page.
+/// Successful fetches are written to [StoreHomeCache] for kill+reopen.
 class StoreHomePrefetcher {
   StoreHomePrefetcher._();
 
@@ -21,6 +26,15 @@ class StoreHomePrefetcher {
 
   /// Fire-and-forget warm (safe to call repeatedly).
   void prefetch({int limit = defaultLimit}) {
+    // Hydrate disk → memory so listing can paint before network returns.
+    // ignore: unawaited_futures
+    () async {
+      final page = await StoreHomeCache.instance.read();
+      if (page == null || page.items.isEmpty) return;
+      await CatalogImageCache.warmAvatars([
+        for (final s in page.items) s.coverImageUrl,
+      ]);
+    }();
     // ignore: unawaited_futures
     ensure(limit: limit);
   }
@@ -78,6 +92,16 @@ class StoreHomePrefetcher {
     AppLog.d(_tag, 'fetchHome limit=$limit');
     final page = await ServiceLocator.get<StoreRepository>().fetchHome(
       limit: limit,
+    );
+    // Keep prior contact-name sidecar; listing rewrite after enrich.
+    await StoreHomeCache.instance.write(
+      page,
+      contactNames: StoreHomeCache.instance.contactNamesMemory(),
+    );
+    unawaited(
+      CatalogImageCache.warmAvatars([
+        for (final s in page.items) s.coverImageUrl,
+      ]),
     );
     AppLog.d(_tag, 'Prefetched ${page.items.length} stores');
     return page;

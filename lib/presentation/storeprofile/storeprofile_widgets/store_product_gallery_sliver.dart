@@ -184,7 +184,7 @@ class StoreProductGallerySliver extends StatelessWidget {
             ],
           ),
         ),
-        child: const Center(
+        child: Center(
           child: Icon(
             Icons.diamond_outlined,
             size: 16,
@@ -217,7 +217,7 @@ class _MiniCheck extends StatelessWidget {
       ),
       child:
           isSelected
-              ? const Icon(
+              ? Icon(
                 Icons.check_rounded,
                 size: 14,
                 color: AppColors.textOnPrimary,

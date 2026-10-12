@@ -11,8 +11,8 @@ This file defines what to follow for UI and logic inside `lib/presentation/produ
 - Use `AppTextStyles` and `AppColors`.
 - Keep product-detail-specific visual pieces in `product_details_widgets/`.
 - On land, show the photo only. Tap the image to toggle the top chrome (**back +
-  product title (16 / w600) + overflow `⋮`**, store name, category) and the
-  bottom weight panel. Multi-photo browsing is via horizontal PageView swipe;
+  product title (16 / w600) + heart + overflow `⋮`**, store name, category) and
+  the bottom weight panel. Multi-photo browsing is via horizontal PageView swipe;
   optional **Preview all** thumbnail strip (see overflow menu). Pinch to zoom
   (1×–4×) and pan while zoomed; at 1× horizontal swipes change photos.
   Double-tap toggles ~2.2× zoom. Page swipe is disabled while zoomed so pan
@@ -61,6 +61,18 @@ This file defines what to follow for UI and logic inside `lib/presentation/produ
 - Product details presentation should render product state and dispatch user actions only.
 - Keep side effects in listeners/handlers outside build-only sections.
 - Do not mix unrelated feature domain logic into this folder.
+- **Photo like / Wishlist:** heart toggles like on the **current photo**
+  (`photoAssetIds[index]`) via `WishlistRepository` (`PUT`/`DELETE` …/like).
+  Hydrate `liked` / `likeCount` from collection detail when the API sends them.
+  Chrome shows **like count** beside the heart (optimistic ±1 on toggle).
+  Successful like shows snack “Saved to Wishlist” with **View** → pops to main
+  shell Wishlist tab (`ShellNav`). Unlike clears local liked state (no snack).
+  Double-tap zoom is unchanged (heart is the like control).
+- **Photo views:** after ≥1s dwell on the current photo, enqueue
+  `photo` (+ `collection` / `subgroup` when applicable) via `ViewBeacon`
+  (`POST /views`). Chrome shows **photo `viewCount`** (eye chip) when the
+  detail API includes it. Collection-level counts are shown on store profile
+  tiles, not here.
 - When `storeId` is provided, load full collection photos via `GET /stores/:storeId/collections/:id` (list API only supplies cover).
 - Capture `revision`, `apiTag`, permission flags, specs, and `subGroups` from that detail response.
 - Route args include `isOwnStore` (from store profile / gallery / browse) so edit stays available if the detail payload omits `permissions.edit`.

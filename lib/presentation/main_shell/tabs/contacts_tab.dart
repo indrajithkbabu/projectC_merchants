@@ -9,7 +9,7 @@ import 'package:project_c/helper/colors.dart';
 import 'package:project_c/helper/safe_display_text.dart';
 import 'package:project_c/helper/text_styles.dart';
 import 'package:project_c/helper/widgets/floating_bottom_nav_bar.dart';
-import 'package:project_c/helper/widgets/screen_wrapper.dart';
+import 'package:project_c/helper/widgets/shell_tab_title_bar.dart';
 import 'package:project_c/models/store_channel.dart';
 import 'package:project_c/navigation/routes.dart';
 import 'package:project_c/services/store_products_prefetcher.dart';
@@ -89,7 +89,7 @@ class _ContactsTabState extends State<ContactsTab> {
       Routes.storeProfileRoute,
       arguments: <String, Object?>{
         'store': store,
-        'members': const [],
+        'members': [],
       },
     );
   }
@@ -140,20 +140,11 @@ class _ContactsTabState extends State<ContactsTab> {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             Padding(
-              padding: AppPadding.screen(
-                top: ScreenWrapper.statusBarTop(context) + 8,
-                bottom: 8,
-              ),
+              padding: ShellTabTitleBar.padding(context),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(
-                    'Contacts',
-                    style: AppTextStyles.headline(
-                      fontSize: 22,
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
+                  const ShellTabTitleBar(title: 'Contacts'),
                   const SizedBox(height: 12),
                   _ContactsSearchField(
                     controller: _searchController,
@@ -265,7 +256,7 @@ class _ContactsSearchField extends StatelessWidget {
               fontSize: 15,
               fontWeight: FontWeight.w400,
             ),
-            prefixIcon: const Icon(
+            prefixIcon: Icon(
               Icons.search_rounded,
               color: AppColors.textSecondary,
             ),
@@ -274,7 +265,7 @@ class _ContactsSearchField extends StatelessWidget {
                     ? IconButton(
                       tooltip: 'Clear',
                       onPressed: onClear,
-                      icon: const Icon(
+                      icon: Icon(
                         Icons.close_rounded,
                         color: AppColors.textSecondary,
                       ),
@@ -292,7 +283,7 @@ class _ContactsSearchField extends StatelessWidget {
             ),
             focusedBorder: OutlineInputBorder(
               borderRadius: BorderRadius.circular(32),
-              borderSide: const BorderSide(
+              borderSide: BorderSide(
                 color: AppColors.primary,
                 width: 1.2,
               ),
@@ -382,7 +373,7 @@ class _ContactsResultsList extends StatelessWidget {
                 children: [
                   for (var i = 0; i < peerStores.length; i++) ...[
                     if (i > 0)
-                      const Divider(
+                      Divider(
                         height: 1,
                         indent: 68,
                         color: AppColors.border,
@@ -403,7 +394,7 @@ class _ContactsResultsList extends StatelessWidget {
                 children: [
                   for (var i = 0; i < invites.length; i++) ...[
                     if (i > 0)
-                      const Divider(
+                      Divider(
                         height: 1,
                         indent: 68,
                         color: AppColors.border,

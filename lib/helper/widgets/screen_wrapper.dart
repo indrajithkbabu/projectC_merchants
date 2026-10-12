@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:project_c/helper/colors.dart';
+import 'package:project_c/helper/widgets/appearance_scope.dart';
 
 /// Wraps every screen so content draws under the status bar.
 ///
@@ -30,7 +31,7 @@ class ScreenWrapper extends StatelessWidget {
     super.key,
     required this.child,
     this.backgroundColor,
-    this.statusBarIconBrightness = Brightness.dark,
+    this.statusBarIconBrightness,
     this.resizeToAvoidBottomInset = true,
     this.extendBodyBehindBottom = false,
     this.floatingActionButton,
@@ -40,8 +41,10 @@ class ScreenWrapper extends StatelessWidget {
   final Widget child;
   final Color? backgroundColor;
 
-  /// Dark icons for light headers; light icons for blue/dark headers.
-  final Brightness statusBarIconBrightness;
+  /// Override status-bar icon brightness. Defaults to [AppColors.statusBarIconBrightness]
+  /// (dark icons in Day, light icons in Night). Pass explicitly for immersive
+  /// dark photo surfaces that always need light icons.
+  final Brightness? statusBarIconBrightness;
 
   final bool resizeToAvoidBottomInset;
 
@@ -73,16 +76,22 @@ class ScreenWrapper extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // Rebuild this screen when Day/Night flips (AppColors is static otherwise).
+    AppearanceScope.maybeOf(context);
+    Theme.of(context);
+
+    final iconBrightness =
+        statusBarIconBrightness ?? AppColors.statusBarIconBrightness;
     final overlayStyle = SystemUiOverlayStyle(
       statusBarColor: Colors.transparent,
-      statusBarIconBrightness: statusBarIconBrightness,
+      statusBarIconBrightness: iconBrightness,
       // iOS uses statusBarBrightness inverted vs Android icon brightness.
       statusBarBrightness:
-          statusBarIconBrightness == Brightness.dark
+          iconBrightness == Brightness.dark
               ? Brightness.light
               : Brightness.dark,
       systemNavigationBarColor: backgroundColor ?? AppColors.scaffold,
-      systemNavigationBarIconBrightness: Brightness.dark,
+      systemNavigationBarIconBrightness: AppColors.systemNavIconBrightness,
     );
 
     return AnnotatedRegion<SystemUiOverlayStyle>(

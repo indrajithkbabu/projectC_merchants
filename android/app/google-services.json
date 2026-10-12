@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "264112638081",
+    "project_id": "project-c-jewelflow",
+    "storage_bucket": "project-c-jewelflow.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:264112638081:android:2b7426d28842e0c5b96580",
+        "android_client_info": {
+          "package_name": "com.example.project_c"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAVxBt5ULDLem8HD2aHmdMpbRVLdktPYoQ"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

@@ -211,7 +211,7 @@ class _MultiFilterDropdownState extends State<_MultiFilterDropdown> {
     return MenuAnchor(
       controller: _menuController,
       style: MenuStyle(
-        backgroundColor: const WidgetStatePropertyAll(AppColors.surface),
+        backgroundColor: WidgetStatePropertyAll(AppColors.surface),
         elevation: const WidgetStatePropertyAll(6),
         shadowColor: WidgetStatePropertyAll(
           Colors.black.withValues(alpha: 0.12),
@@ -310,7 +310,7 @@ class _SortDropdown extends StatelessWidget {
   Widget build(BuildContext context) {
     return MenuAnchor(
       style: MenuStyle(
-        backgroundColor: const WidgetStatePropertyAll(AppColors.surface),
+        backgroundColor: WidgetStatePropertyAll(AppColors.surface),
         elevation: const WidgetStatePropertyAll(6),
         shadowColor: WidgetStatePropertyAll(
           Colors.black.withValues(alpha: 0.12),
@@ -341,7 +341,7 @@ class _SortDropdown extends StatelessWidget {
             onPressed: () => onChanged(option),
             trailingIcon:
                 sort == option
-                    ? const Icon(
+                    ? Icon(
                       Icons.check_rounded,
                       size: 18,
                       color: AppColors.primary,

@@ -37,7 +37,7 @@ class BulkItemTile extends StatelessWidget {
                 child: Container(
                   width: 8,
                   height: 8,
-                  decoration: const BoxDecoration(
+                  decoration: BoxDecoration(
                     shape: BoxShape.circle,
                     color: AppColors.primary,
                   ),
@@ -62,7 +62,7 @@ class BulkItemTile extends StatelessWidget {
                   ),
                   child:
                       selected
-                          ? const Icon(
+                          ? Icon(
                             Icons.check_rounded,
                             size: 14,
                             color: AppColors.textOnPrimary,

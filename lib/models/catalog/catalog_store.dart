@@ -1,5 +1,6 @@
 import 'package:equatable/equatable.dart';
 import 'package:project_c/models/catalog/collection_models.dart';
+import 'package:project_c/models/store_privacy_mode.dart';
 
 enum StoreRelationship { owner, member, other }
 
@@ -24,6 +25,16 @@ class CatalogStore extends Equatable {
     this.relationship,
     this.legalName,
     this.phone = '',
+    this.city = '',
+    this.privacy,
+    this.followerCount = 0,
+    this.followingCount = 0,
+    this.productCount,
+    this.pendingRequestsCount,
+    this.canViewContent,
+    this.followStatusRaw,
+    this.notifyUploads,
+    this.autoApprovedFollowers,
     this.images = const [],
     this.imageUrls = const [],
     this.coverImage,
@@ -38,6 +49,34 @@ class CatalogStore extends Equatable {
   /// Owner / store contact phone from `/home` (E.164 when provided).
   final String phone;
 
+  /// City shown on private-store identity preview (when provided).
+  final String city;
+
+  /// Store-wide privacy from GET store / PATCH privacy. Null when older APIs
+  /// omit it (treat as public until hydrated).
+  final StorePrivacyMode? privacy;
+
+  final int followerCount;
+  final int followingCount;
+
+  /// Server product/collection count (shown even when content is gated).
+  final int? productCount;
+
+  /// Owner-only pending follow request count from GET store / privacy PATCH.
+  final int? pendingRequestsCount;
+
+  /// Server-computed visibility; when null, use [resolvedCanViewContent].
+  final bool? canViewContent;
+
+  /// API followStatus: none | pending | following | self | member.
+  final String? followStatusRaw;
+
+  /// Upload push preference while following (GET store / follow payloads).
+  final bool? notifyUploads;
+
+  /// From privacy PATCH when switching to public (bulk-approved count).
+  final int? autoApprovedFollowers;
+
   final List<CatalogPhoto> images;
   final List<String> imageUrls;
   final CatalogPhoto? coverImage;
@@ -45,6 +84,25 @@ class CatalogStore extends Equatable {
   bool get isOwn => relationship == StoreRelationship.owner;
 
   String get storeLink => '$slug.jewelflow.app';
+
+  /// Effective visibility for product content (read-time access check).
+  bool get resolvedCanViewContent {
+    if (canViewContent != null) return canViewContent!;
+    if (relationship == StoreRelationship.owner ||
+        relationship == StoreRelationship.member) {
+      return true;
+    }
+    final status = followStatusRaw?.trim().toLowerCase() ?? '';
+    if (status == 'following' || status == 'self' || status == 'member') {
+      return true;
+    }
+    // Pending / none never unlock private stores. Unknown privacy + pending
+    // must stay locked (follow POST payloads omit privacy).
+    if (status == 'pending') return false;
+    if (privacy == StorePrivacyMode.private) return false;
+    if (privacy == null || privacy == StorePrivacyMode.public) return true;
+    return false;
+  }
 
   String get coverImageUrl {
     final cover = coverImage?.url.trim() ?? '';
@@ -112,6 +170,44 @@ class CatalogStore extends Equatable {
 
     final coverImage = _parseCoverPhoto(root, images);
 
+    final privacyRaw = root['privacy'] ?? json['privacy'];
+    final StorePrivacyMode? privacy =
+        privacyRaw is String && privacyRaw.trim().isNotEmpty
+            ? StorePrivacyModeX.fromApi(privacyRaw)
+            : null;
+
+    final followRaw =
+        (root['followStatus'] ?? json['followStatus'] ?? json['status'])
+            as String?;
+
+    // Follow POST uses status=active|pending — map active → following for
+    // CatalogStore payloads that reuse the same field name.
+    String? normalizedFollow = followRaw;
+    if (normalizedFollow != null &&
+        normalizedFollow.trim().toLowerCase() == 'active') {
+      normalizedFollow = 'following';
+    }
+
+    final stats = root['stats'] ?? json['stats'];
+    int? productCount =
+        (root['productCount'] as num?)?.toInt() ??
+        (root['collectionCount'] as num?)?.toInt() ??
+        (root['productsCount'] as num?)?.toInt() ??
+        (root['totalProducts'] as num?)?.toInt() ??
+        (root['listingsCount'] as num?)?.toInt() ??
+        (json['productCount'] as num?)?.toInt() ??
+        (json['collectionCount'] as num?)?.toInt() ??
+        (json['productsCount'] as num?)?.toInt() ??
+        (json['totalProducts'] as num?)?.toInt();
+    if (productCount == null && stats is Map) {
+      final s = Map<String, dynamic>.from(stats);
+      productCount =
+          (s['productCount'] as num?)?.toInt() ??
+          (s['products'] as num?)?.toInt() ??
+          (s['collectionCount'] as num?)?.toInt() ??
+          (s['collections'] as num?)?.toInt();
+    }
+
     return CatalogStore(
       id: root['id'] as String? ?? '',
       name: root['name'] as String? ?? '',
@@ -123,6 +219,31 @@ class CatalogStore extends Equatable {
         'phoneNumber',
         'phonenumber',
       ]),
+      city: _firstString(root, const ['city', 'cityName']),
+      privacy: privacy,
+      followerCount:
+          (root['followerCount'] as num?)?.toInt() ??
+          (json['followerCount'] as num?)?.toInt() ??
+          0,
+      followingCount:
+          (root['followingCount'] as num?)?.toInt() ??
+          (json['followingCount'] as num?)?.toInt() ??
+          0,
+      productCount: productCount,
+      pendingRequestsCount:
+          (root['pendingRequestsCount'] as num?)?.toInt() ??
+          (json['pendingRequestsCount'] as num?)?.toInt(),
+      canViewContent:
+          root['canViewContent'] as bool? ?? json['canViewContent'] as bool?,
+      followStatusRaw: normalizedFollow,
+      notifyUploads:
+          root['notifyUploads'] as bool? ??
+          json['notifyUploads'] as bool? ??
+          root['notify_uploads'] as bool? ??
+          json['notify_uploads'] as bool?,
+      autoApprovedFollowers:
+          (root['autoApprovedFollowers'] as num?)?.toInt() ??
+          (json['autoApprovedFollowers'] as num?)?.toInt(),
       images: images,
       imageUrls: imageUrls,
       coverImage: coverImage,
@@ -171,6 +292,18 @@ class CatalogStore extends Equatable {
     if (relationship != null) 'relationship': relationship!.name,
     if (legalName != null) 'legalName': legalName,
     if (phone.isNotEmpty) 'phone': phone,
+    if (city.isNotEmpty) 'city': city,
+    if (privacy != null) 'privacy': privacy!.apiValue,
+    'followerCount': followerCount,
+    'followingCount': followingCount,
+    if (productCount != null) 'productCount': productCount,
+    if (pendingRequestsCount != null)
+      'pendingRequestsCount': pendingRequestsCount,
+    if (canViewContent != null) 'canViewContent': canViewContent,
+    if (followStatusRaw != null) 'followStatus': followStatusRaw,
+    if (notifyUploads != null) 'notifyUploads': notifyUploads,
+    if (autoApprovedFollowers != null)
+      'autoApprovedFollowers': autoApprovedFollowers,
     'images':
         images
             .map(
@@ -205,6 +338,17 @@ class CatalogStore extends Equatable {
       if (relationship != null) 'relationship': relationship!.name,
       if (legalName != null) 'legalName': legalName,
       if (phone.isNotEmpty) 'phone': phone,
+      if (city.isNotEmpty) 'city': city,
+      if (privacy != null) 'privacy': privacy!.apiValue,
+      'followerCount': followerCount,
+      'followingCount': followingCount,
+      if (productCount != null) 'productCount': productCount,
+      if (pendingRequestsCount != null)
+        'pendingRequestsCount': pendingRequestsCount,
+      if (canViewContent != null) 'canViewContent': canViewContent,
+      if (followStatusRaw != null) 'followStatus': followStatusRaw,
+      if (autoApprovedFollowers != null)
+        'autoApprovedFollowers': autoApprovedFollowers,
       'images': root['images'],
       'imageUrls': root['imageUrls'],
       'coverImage': root['coverImage'],
@@ -226,10 +370,26 @@ class CatalogStore extends Equatable {
     StoreRelationship? relationship,
     String? legalName,
     String? phone,
+    String? city,
+    StorePrivacyMode? privacy,
+    int? followerCount,
+    int? followingCount,
+    int? productCount,
+    int? pendingRequestsCount,
+    bool? canViewContent,
+    String? followStatusRaw,
+    bool? notifyUploads,
+    int? autoApprovedFollowers,
     List<CatalogPhoto>? images,
     List<String>? imageUrls,
     CatalogPhoto? coverImage,
     bool clearCoverImage = false,
+    bool clearPendingRequestsCount = false,
+    bool clearCanViewContent = false,
+    bool clearFollowStatusRaw = false,
+    bool clearNotifyUploads = false,
+    bool clearAutoApprovedFollowers = false,
+    bool clearPrivacy = false,
   }) {
     return CatalogStore(
       id: id ?? this.id,
@@ -238,6 +398,27 @@ class CatalogStore extends Equatable {
       relationship: relationship ?? this.relationship,
       legalName: legalName ?? this.legalName,
       phone: phone ?? this.phone,
+      city: city ?? this.city,
+      privacy: clearPrivacy ? null : (privacy ?? this.privacy),
+      followerCount: followerCount ?? this.followerCount,
+      followingCount: followingCount ?? this.followingCount,
+      productCount: productCount ?? this.productCount,
+      pendingRequestsCount:
+          clearPendingRequestsCount
+              ? null
+              : (pendingRequestsCount ?? this.pendingRequestsCount),
+      canViewContent:
+          clearCanViewContent ? null : (canViewContent ?? this.canViewContent),
+      followStatusRaw:
+          clearFollowStatusRaw
+              ? null
+              : (followStatusRaw ?? this.followStatusRaw),
+      notifyUploads:
+          clearNotifyUploads ? null : (notifyUploads ?? this.notifyUploads),
+      autoApprovedFollowers:
+          clearAutoApprovedFollowers
+              ? null
+              : (autoApprovedFollowers ?? this.autoApprovedFollowers),
       images: images ?? this.images,
       imageUrls: imageUrls ?? this.imageUrls,
       coverImage: clearCoverImage ? null : (coverImage ?? this.coverImage),
@@ -252,6 +433,16 @@ class CatalogStore extends Equatable {
     relationship,
     legalName,
     phone,
+    city,
+    privacy,
+    followerCount,
+    followingCount,
+    productCount,
+    pendingRequestsCount,
+    canViewContent,
+    followStatusRaw,
+    notifyUploads,
+    autoApprovedFollowers,
     images,
     imageUrls,
     coverImage,

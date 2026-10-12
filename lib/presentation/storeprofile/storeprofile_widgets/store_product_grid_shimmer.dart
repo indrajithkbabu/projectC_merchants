@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:project_c/helper/colors.dart';
+import 'package:project_c/helper/app_shimmer.dart';
 import 'package:project_c/presentation/storeprofile/storeprofile_widgets/store_product_grid.dart';
 
 /// Skeleton grid shown only on cold (uncached) store profile loads.
@@ -57,21 +57,10 @@ class ProductUploadShimmerCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final highlight = 0.35 + (0.35 * (1 - (2 * (t - 0.5).abs())));
-    final base = AppColors.surfaceSecondary;
-    final shine = Color.lerp(base, Colors.white, highlight)!;
-
     return ClipRRect(
       borderRadius: BorderRadius.circular(14),
       child: DecoratedBox(
-        decoration: BoxDecoration(
-          gradient: LinearGradient(
-            begin: Alignment(-1.2 + 2.4 * t, -0.4),
-            end: Alignment(-0.2 + 2.4 * t, 0.6),
-            colors: [base, shine, base],
-            stops: const [0.25, 0.5, 0.75],
-          ),
-        ),
+        decoration: BoxDecoration(gradient: AppShimmer.gradient(t)),
         child: const SizedBox.expand(),
       ),
     );
@@ -86,20 +75,10 @@ class ProductUploadShimmerTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final highlight = 0.35 + (0.35 * (1 - (2 * (t - 0.5).abs())));
-    final base = AppColors.surfaceSecondary;
-    final shine = Color.lerp(base, Colors.white, highlight)!;
     return ColoredBox(
-      color: base,
+      color: AppShimmer.base,
       child: DecoratedBox(
-        decoration: BoxDecoration(
-          gradient: LinearGradient(
-            begin: Alignment(-1.2 + 2.4 * t, -0.4),
-            end: Alignment(-0.2 + 2.4 * t, 0.6),
-            colors: [base, shine, base],
-            stops: const [0.25, 0.5, 0.75],
-          ),
-        ),
+        decoration: BoxDecoration(gradient: AppShimmer.gradient(t)),
       ),
     );
   }

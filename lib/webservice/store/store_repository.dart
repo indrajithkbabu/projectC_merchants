@@ -3,7 +3,9 @@ import 'dart:io';
 import 'package:project_c/helper/app_log.dart';
 import 'package:project_c/models/catalog/catalog_page.dart';
 import 'package:project_c/models/catalog/catalog_store.dart';
+import 'package:project_c/models/catalog/follow_api_models.dart';
 import 'package:project_c/models/catalog/store_member_models.dart';
+import 'package:project_c/models/store_privacy_mode.dart';
 import 'package:project_c/services/store_home_prefetcher.dart';
 import 'package:project_c/session/catalog_session.dart';
 import 'package:project_c/webservice/profile/profile_repository.dart';
@@ -27,6 +29,53 @@ abstract class StoreRepository {
   Future<CatalogStore> renameStore({
     required String storeId,
     required String name,
+  });
+
+  Future<CatalogStore> patchStorePrivacy({
+    required String storeId,
+    required StorePrivacyMode privacy,
+  });
+
+  Future<FollowActionResult> followStore(String storeId);
+
+  Future<FollowActionResult> unfollowStore(String storeId);
+
+  Future<bool> patchFollowNotifyUploads({
+    required String storeId,
+    required bool notifyUploads,
+  });
+
+  Future<FollowRequestPage> fetchFollowRequests({
+    required String storeId,
+    int limit = 20,
+    String? cursor,
+  });
+
+  Future<void> acceptFollowRequest({
+    required String storeId,
+    required String followerUserId,
+  });
+
+  Future<void> rejectFollowRequest({
+    required String storeId,
+    required String followerUserId,
+  });
+
+  Future<FollowerListPage> fetchFollowers({
+    required String storeId,
+    int limit = 20,
+    String? cursor,
+  });
+
+  Future<FollowingListPage> fetchFollowing({
+    required String storeId,
+    int limit = 20,
+    String? cursor,
+  });
+
+  Future<void> removeFollower({
+    required String storeId,
+    required String followerUserId,
   });
 
   Future<CatalogStore> appendStoreImages({
@@ -133,6 +182,117 @@ class StoreRepositoryImpl implements StoreRepository {
     required String name,
   }) {
     return _request.renameStore(storeId: storeId, name: name);
+  }
+
+  @override
+  Future<CatalogStore> patchStorePrivacy({
+    required String storeId,
+    required StorePrivacyMode privacy,
+  }) {
+    AppLog.d(_tag, 'patchStorePrivacy store=$storeId privacy=${privacy.apiValue}');
+    return _request.patchStorePrivacy(storeId: storeId, privacy: privacy);
+  }
+
+  @override
+  Future<FollowActionResult> followStore(String storeId) {
+    AppLog.d(_tag, 'followStore store=$storeId');
+    return _request.followStore(storeId);
+  }
+
+  @override
+  Future<FollowActionResult> unfollowStore(String storeId) {
+    AppLog.d(_tag, 'unfollowStore store=$storeId');
+    return _request.unfollowStore(storeId);
+  }
+
+  @override
+  Future<bool> patchFollowNotifyUploads({
+    required String storeId,
+    required bool notifyUploads,
+  }) {
+    AppLog.d(
+      _tag,
+      'patchFollowNotifyUploads store=$storeId notify=$notifyUploads',
+    );
+    return _request.patchFollowNotifyUploads(
+      storeId: storeId,
+      notifyUploads: notifyUploads,
+    );
+  }
+
+  @override
+  Future<FollowRequestPage> fetchFollowRequests({
+    required String storeId,
+    int limit = 20,
+    String? cursor,
+  }) {
+    return _request.fetchFollowRequests(
+      storeId: storeId,
+      limit: limit,
+      cursor: cursor,
+    );
+  }
+
+  @override
+  Future<void> acceptFollowRequest({
+    required String storeId,
+    required String followerUserId,
+  }) {
+    AppLog.d(_tag, 'acceptFollowRequest store=$storeId user=$followerUserId');
+    return _request.acceptFollowRequest(
+      storeId: storeId,
+      followerUserId: followerUserId,
+    );
+  }
+
+  @override
+  Future<void> rejectFollowRequest({
+    required String storeId,
+    required String followerUserId,
+  }) {
+    AppLog.d(_tag, 'rejectFollowRequest store=$storeId user=$followerUserId');
+    return _request.rejectFollowRequest(
+      storeId: storeId,
+      followerUserId: followerUserId,
+    );
+  }
+
+  @override
+  Future<FollowerListPage> fetchFollowers({
+    required String storeId,
+    int limit = 20,
+    String? cursor,
+  }) {
+    return _request.fetchFollowers(
+      storeId: storeId,
+      limit: limit,
+      cursor: cursor,
+    );
+  }
+
+  @override
+  Future<FollowingListPage> fetchFollowing({
+    required String storeId,
+    int limit = 20,
+    String? cursor,
+  }) {
+    return _request.fetchFollowing(
+      storeId: storeId,
+      limit: limit,
+      cursor: cursor,
+    );
+  }
+
+  @override
+  Future<void> removeFollower({
+    required String storeId,
+    required String followerUserId,
+  }) {
+    AppLog.d(_tag, 'removeFollower store=$storeId user=$followerUserId');
+    return _request.removeFollower(
+      storeId: storeId,
+      followerUserId: followerUserId,
+    );
   }
 
   @override

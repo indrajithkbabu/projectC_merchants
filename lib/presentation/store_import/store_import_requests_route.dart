@@ -74,7 +74,6 @@ class _StoreImportRequestsRouteState extends State<StoreImportRequestsRoute> {
       ],
       child: ScreenWrapper(
         backgroundColor: AppColors.background,
-        statusBarIconBrightness: Brightness.dark,
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
@@ -116,7 +115,7 @@ class _StoreImportRequestsRouteState extends State<StoreImportRequestsRoute> {
                 ],
               ),
             ),
-            const Divider(height: 1, color: AppColors.border),
+            Divider(height: 1, color: AppColors.border),
             Expanded(
               child: IndexedStack(
                 index: _tabIndex,
@@ -338,7 +337,7 @@ class _RequestsListPane extends StatelessWidget {
                 padding: AppPadding.screen(top: 8, bottom: 24),
                 itemCount: items.length,
                 separatorBuilder:
-                    (_, __) => const Divider(height: 1, color: AppColors.border),
+                    (_, __) => Divider(height: 1, color: AppColors.border),
                 itemBuilder: (context, index) {
                   return _ImportRequestTile(item: items[index]);
                 },
@@ -415,7 +414,7 @@ class _ImportRequestTile extends StatelessWidget {
                               ),
                       style: OutlinedButton.styleFrom(
                         foregroundColor: AppColors.error,
-                        side: const BorderSide(color: AppColors.error),
+                        side: BorderSide(color: AppColors.error),
                         shape: RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(12),
                         ),
@@ -448,7 +447,7 @@ class _ImportRequestTile extends StatelessWidget {
                       ),
                       child:
                           item.isActing
-                              ? const SizedBox(
+                              ? SizedBox(
                                 width: 18,
                                 height: 18,
                                 child: CircularProgressIndicator(

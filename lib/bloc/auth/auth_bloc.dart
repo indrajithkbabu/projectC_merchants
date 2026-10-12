@@ -5,10 +5,14 @@ import 'package:equatable/equatable.dart';
 import 'package:project_c/di/service_locator.dart';
 import 'package:project_c/helper/app_log.dart';
 import 'package:project_c/helper/device_contact_names.dart';
+import 'package:project_c/helper/product_image.dart';
 import 'package:project_c/models/catalog/catalog_profile.dart';
 import 'package:project_c/models/country_model.dart';
 import 'package:project_c/navigation/routes.dart';
+import 'package:project_c/services/push_notification_service.dart';
 import 'package:project_c/services/store_home_prefetcher.dart';
+import 'package:project_c/services/view_beacon.dart';
+import 'package:project_c/services/wishlist_prefetcher.dart';
 import 'package:project_c/webservice/auth/auth_repository.dart';
 import 'package:project_c/webservice/catalog_error_mapper.dart';
 import 'package:project_c/webservice/profile/profile_repository.dart';
@@ -229,6 +233,15 @@ class AuthBloc extends Bloc<AuthEvent, AuthState> {
       if (nextRoute == Routes.storeListingRoute) {
         StoreHomePrefetcher.instance.prefetch();
         DeviceContactNames.prefetch();
+        // After auth + home kickoff: warm wishlist so the tab never shimmers.
+        final ownId = profile.ownStore?.id.trim() ?? '';
+        if (ownId.isNotEmpty) {
+          WishlistPrefetcher.instance.prefetch();
+        }
+      }
+      final profileImage = profile.effectiveProfileImageUrl.trim();
+      if (profileImage.isNotEmpty) {
+        await CatalogImageCache.warmAvatars([profileImage]);
       }
       AppLog.d(_tag, 'OTP verified → $nextRoute');
       emit(
@@ -242,6 +255,11 @@ class AuthBloc extends Bloc<AuthEvent, AuthState> {
           clearError: true,
         ),
       );
+      // Register FCM token with catalog after Bearer session exists.
+      // ignore: avoid_print
+      print('[FCM_DEBUG] AuthBloc trigger=otp_verified → onSignedIn');
+      // ignore: unawaited_futures
+      ServiceLocator.get<PushNotificationService>().onSignedIn();
     } catch (e) {
       AppLog.e(_tag, 'OTP verify failed', e);
       emit(
@@ -320,6 +338,16 @@ class AuthBloc extends Bloc<AuthEvent, AuthState> {
       StoreHomePrefetcher.instance.prefetch();
       DeviceContactNames.prefetch();
       final profile = await _profileRepository.fetchMe();
+      // After auth + home kickoff: warm wishlist for own-store shell tab.
+      final ownId = profile.ownStore?.id.trim() ?? '';
+      if (ownId.isNotEmpty) {
+        WishlistPrefetcher.instance.prefetch();
+      }
+      // Await avatar decode before shell mounts — nav profile must not flash.
+      final profileImage = profile.effectiveProfileImageUrl.trim();
+      if (profileImage.isNotEmpty) {
+        await CatalogImageCache.warmAvatars([profileImage]);
+      }
       final nextRoute = _routeForOnboarding(profile.onboarding);
       AppLog.d(
         'TEST_COLD_START',
@@ -341,6 +369,10 @@ class AuthBloc extends Bloc<AuthEvent, AuthState> {
           isVerified: true,
         ),
       );
+      // ignore: avoid_print
+      print('[FCM_DEBUG] AuthBloc trigger=session_restore → onSignedIn');
+      // ignore: unawaited_futures
+      ServiceLocator.get<PushNotificationService>().onSignedIn();
     } catch (e) {
       AppLog.e(_tag, 'Session restore failed', e);
       AppLog.d(
@@ -353,6 +385,8 @@ class AuthBloc extends Bloc<AuthEvent, AuthState> {
         '──────── A.ENTRY END ────────',
       );
       StoreHomePrefetcher.instance.invalidate();
+      WishlistPrefetcher.instance.invalidate();
+      ViewBeacon.instance.reset();
       DeviceContactNames.invalidate();
       await _authRepository.logout();
       emit(
@@ -419,7 +453,11 @@ class AuthBloc extends Bloc<AuthEvent, AuthState> {
       '  A4 helper: after DELETE /me you should see this then auth_phone_route',
     );
     StoreHomePrefetcher.instance.invalidate();
+    WishlistPrefetcher.instance.invalidate();
+    ViewBeacon.instance.reset();
     DeviceContactNames.invalidate();
+    // Unregister FCM while Bearer is still valid, then clear session.
+    await ServiceLocator.get<PushNotificationService>().onSigningOut();
     await _authRepository.logout();
     emit(const AuthState());
   }

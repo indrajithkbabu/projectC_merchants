@@ -82,7 +82,7 @@ class _AddTile extends StatelessWidget {
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              const Icon(
+              Icon(
                 Icons.add_photo_alternate_outlined,
                 color: AppColors.textSecondary,
               ),
@@ -132,7 +132,7 @@ class _ImageTile extends StatelessWidget {
                 child: InkWell(
                   onTap: onRemove,
                   customBorder: const CircleBorder(),
-                  child: const SizedBox(
+                  child: SizedBox(
                     width: 26,
                     height: 26,
                     child: Icon(

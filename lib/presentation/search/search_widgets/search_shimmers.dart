@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:project_c/helper/colors.dart';
+import 'package:project_c/helper/app_shimmer.dart';
 import 'package:project_c/presentation/search/search_widgets/search_chips.dart';
 
 /// Shared pulse controller used by search skeleton loaders.
@@ -23,24 +23,8 @@ mixin _SearchShimmerTicker<T extends StatefulWidget>
   }
 }
 
-Color _shimmerShine(double t) {
-  final highlight = 0.35 + (0.35 * (1 - (2 * (t - 0.5).abs())));
-  return Color.lerp(AppColors.surfaceSecondary, Colors.white, highlight)!;
-}
-
-BoxDecoration _shimmerBox(double t, {double radius = 8}) {
-  final base = AppColors.surfaceSecondary;
-  final shine = _shimmerShine(t);
-  return BoxDecoration(
-    borderRadius: BorderRadius.circular(radius),
-    gradient: LinearGradient(
-      begin: Alignment(-1.2 + 2.4 * t, -0.4),
-      end: Alignment(-0.2 + 2.4 * t, 0.6),
-      colors: [base, shine, base],
-      stops: const [0.25, 0.5, 0.75],
-    ),
-  );
-}
+BoxDecoration _shimmerBox(double t, {double radius = 8}) =>
+    AppShimmer.box(t, radius: radius);
 
 class _ShimmerBlock extends StatelessWidget {
   const _ShimmerBlock({
@@ -136,7 +120,7 @@ class _SearchDiscoverShimmerState extends State<SearchDiscoverShimmer>
               itemBuilder: (context, index) {
                 return Container(
                   decoration: BoxDecoration(
-                    color: AppColors.surfaceSecondary,
+                    color: AppShimmer.base,
                     borderRadius: BorderRadius.circular(12),
                   ),
                   padding: const EdgeInsets.symmetric(

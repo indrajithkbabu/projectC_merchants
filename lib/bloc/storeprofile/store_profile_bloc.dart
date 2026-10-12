@@ -10,9 +10,11 @@ import 'package:project_c/helper/catalog_ui_mapper.dart';
 import 'package:project_c/helper/device_contact_names.dart';
 import 'package:project_c/helper/product_image.dart';
 import 'package:project_c/models/catalog/collection_models.dart';
+import 'package:project_c/models/catalog/follow_api_models.dart';
 import 'package:project_c/models/catalog/import_models.dart';
 import 'package:project_c/models/catalog/store_member_models.dart';
 import 'package:project_c/models/pending_product_upload.dart';
+import 'package:project_c/models/store_privacy_mode.dart';
 import 'package:project_c/models/store_product.dart';
 import 'package:project_c/session/catalog_session.dart';
 import 'package:project_c/services/product_upload_coordinator.dart';
@@ -72,6 +74,10 @@ class StoreProfileBloc extends Bloc<StoreProfileEvent, StoreProfileState> {
                storeName.trim().isEmpty ? 'Your Store' : storeName.trim();
            final cachedName = cachedMeta?.storeName.trim() ?? '';
            final cachedLink = cachedMeta?.storeLink.trim() ?? '';
+           final own = isOwnStore;
+           // Visitors without cached meta stay locked until GET store resolves.
+           final initialCanView =
+               own || (cachedMeta?.canViewContent ?? false);
            final coord =
                uploadCoordinator ??
                ServiceLocator.get<ProductUploadCoordinator>();
@@ -85,12 +91,19 @@ class StoreProfileBloc extends Bloc<StoreProfileEvent, StoreProfileState> {
                      if (!hidden.contains(p.id)) p,
                  ],
            )..sort((a, b) => b.id.compareTo(a.id));
+           final gatedProducts =
+               initialCanView ? visibleCached : const <StoreProduct>[];
+           // When gated, keep a count from warm/cache products if the GET
+           // store payload omits productCount (common for private visitors).
+           final seedProductCount =
+               cachedMeta?.productCount ??
+               (cachedProducts.isNotEmpty ? cachedProducts.length : null);
            return StoreProfileState(
              storeName: cachedName.isNotEmpty ? cachedName : argName,
              members: members,
-             products: visibleCached,
-             productsDetailed: visibleCached,
-             isOwnStore: isOwnStore,
+             products: gatedProducts,
+             productsDetailed: gatedProducts,
+             isOwnStore: own,
              viewerHasOwnStore: _hasOwnStoreId(
                session ?? ServiceLocator.get<CatalogSession>(),
              ),
@@ -100,13 +113,28 @@ class StoreProfileBloc extends Bloc<StoreProfileEvent, StoreProfileState> {
                  cachedLink.isNotEmpty ? cachedLink : storeLink,
              coverImageUrl: cover,
              storeImages: cachedMeta?.storeImages ?? const [],
+             city: cachedMeta?.city ?? '',
+             privacy: cachedMeta?.privacy ?? StorePrivacyMode.public,
+             followerCount: cachedMeta?.followerCount ?? 0,
+             followingCount: cachedMeta?.followingCount ?? 0,
+             apiProductCount: seedProductCount,
+             pendingFollowRequestCount:
+                 own ? (cachedMeta?.pendingRequestsCount ?? 0) : 0,
+             canViewContent: initialCanView,
+             followStatus:
+                 own
+                     ? StoreFollowStatus.self
+                     : (cachedMeta?.followStatus ?? StoreFollowStatus.none),
              currentUserId:
                  (session ?? ServiceLocator.get<CatalogSession>()).profile?.id,
-             isLoadingProducts: visibleCached.isEmpty && activeUploads.isEmpty,
-             isLoadingMembers: isOwnStore,
+             isLoadingProducts:
+                 initialCanView &&
+                 gatedProducts.isEmpty &&
+                 activeUploads.isEmpty,
+             isLoadingMembers: own,
              isLoadingStoreMeta: cachedMeta == null,
              // Survive leave/return while create upload is still in flight.
-             pendingUploads: activeUploads,
+             pendingUploads: own ? activeUploads : const [],
            );
          }(),
        ) {
@@ -134,12 +162,23 @@ class StoreProfileBloc extends Bloc<StoreProfileEvent, StoreProfileState> {
     on<StoreProfilePendingUploadSucceeded>(_onPendingUploadSucceeded);
     on<StoreProfilePendingUploadFailed>(_onPendingUploadFailed);
     on<StoreProfileHideInFlightListing>(_onHideInFlightListing);
+    on<StoreProfileFollowPressed>(_onFollowPressed);
+    on<StoreProfileUnfollowPressed>(_onUnfollowPressed);
+    on<StoreProfileToggleNotifyUploads>(_onToggleNotifyUploads);
+    on<StoreProfileLoadFollowRequestPreviews>(_onLoadFollowRequestPreviews);
     _uploadSub = _uploadCoordinator.events.listen(_onUploadCoordinatorEvent);
     add(const StoreProfileLoadStoreMeta());
-    add(const StoreProfileLoadCollections());
+    // Own store: load collections immediately. Visitors wait until meta
+    // resolves canViewContent (private gate).
     if (isOwnStore) {
+      add(const StoreProfileLoadCollections());
       add(const StoreProfileLoadMembers());
       add(const StoreProfileLoadImportRequestCount());
+    } else if (StoreMetaCache.instance.readMemory(
+          storeId ?? 'other_store',
+        )?.canViewContent ==
+        true) {
+      add(const StoreProfileLoadCollections());
     }
   }
 
@@ -219,6 +258,16 @@ class StoreProfileBloc extends Bloc<StoreProfileEvent, StoreProfileState> {
       emit(state.copyWith(isLoadingProducts: false));
       return;
     }
+    if (!state.isOwnStore && !state.canViewContent) {
+      emit(
+        state.copyWith(
+          products: const [],
+          clearProductsDetailed: true,
+          isLoadingProducts: false,
+        ),
+      );
+      return;
+    }
 
     // Disk/memory first — UI always paints from cache.
     final disk = await StoreProductsCache.instance.read(storeId);
@@ -266,6 +315,18 @@ class StoreProfileBloc extends Bloc<StoreProfileEvent, StoreProfileState> {
       }
     } catch (e) {
       AppLog.e(_tag, 'Collections load failed', e);
+      if (e is CatalogApiException && e.code == 'STORE_PRIVATE') {
+        emit(
+          state.copyWith(
+            canViewContent: false,
+            products: const [],
+            clearProductsDetailed: true,
+            isLoadingProducts: false,
+            clearError: true,
+          ),
+        );
+        return;
+      }
       emit(
         state.copyWith(
           isLoadingProducts: false,
@@ -283,6 +344,7 @@ class StoreProfileBloc extends Bloc<StoreProfileEvent, StoreProfileState> {
     if (storeId.isEmpty || storeId == 'my_store' || storeId == 'other_store') {
       return;
     }
+    if (!state.isOwnStore && !state.canViewContent) return;
     try {
       final products = await _fetchEnrichedProducts(storeId);
       if (emit.isDone) return;
@@ -314,10 +376,22 @@ class StoreProfileBloc extends Bloc<StoreProfileEvent, StoreProfileState> {
       for (final summary in page.items)
         if (!hidden.contains(summary.id)) summary,
     ];
-    final products = await Future.wait([
-      for (final summary in summaries)
-        _productFromSummary(storeId: storeId, summary: summary),
-    ]);
+    // Cap parallel detail GETs so cover-image downloads are not starved.
+    const concurrency = 4;
+    final products = <StoreProduct>[];
+    for (var i = 0; i < summaries.length; i += concurrency) {
+      final end =
+          i + concurrency > summaries.length
+              ? summaries.length
+              : i + concurrency;
+      final chunk = summaries.sublist(i, end);
+      products.addAll(
+        await Future.wait([
+          for (final summary in chunk)
+            _productFromSummary(storeId: storeId, summary: summary),
+        ]),
+      );
+    }
     // listCollections is oldest-first; grid must show newest upload first.
     final ordered = _newestFirst(products);
     await _precacheGridTiles(ordered);
@@ -341,10 +415,10 @@ class StoreProfileBloc extends Bloc<StoreProfileEvent, StoreProfileState> {
     ];
   }
 
-  /// Precache every tile the profile collage will show so paint is stable.
+  /// Precache visible collage tiles (not every photo in every listing).
   Future<void> _precacheGridTiles(List<StoreProduct> products) {
     return CatalogImageCache.precacheUrls([
-      for (final product in products) ...product.imagePaths,
+      for (final product in products) ...product.imagePaths.take(4),
     ]);
   }
 
@@ -436,6 +510,9 @@ class StoreProfileBloc extends Bloc<StoreProfileEvent, StoreProfileState> {
         clearDeletingProductId: clearDeletingProductId,
         clearError: clearError,
         pendingUploads: pendingUploads,
+        apiProductCount:
+            state.apiProductCount ??
+            (visible.isNotEmpty ? visible.length : null),
       ),
     );
   }
@@ -477,6 +554,10 @@ class StoreProfileBloc extends Bloc<StoreProfileEvent, StoreProfileState> {
     final name = cached.storeName.trim();
     final link = cached.storeLink.trim();
     final cover = cached.coverImageUrl.trim();
+    final canView = state.isOwnStore ? true : cached.canViewContent;
+    final follow =
+        state.isOwnStore ? StoreFollowStatus.self : cached.followStatus;
+    final nextProductCount = cached.productCount ?? state.apiProductCount;
     emit(
       state.copyWith(
         isLoadingStoreMeta: isLoadingStoreMeta,
@@ -485,7 +566,19 @@ class StoreProfileBloc extends Bloc<StoreProfileEvent, StoreProfileState> {
         overrideStoreLink: link.isNotEmpty ? link : state.overrideStoreLink,
         storeImages: cached.storeImages,
         coverImageUrl: cover.isNotEmpty ? cover : state.coverImageUrl,
+        city: cached.city.isNotEmpty ? cached.city : state.city,
+        privacy: cached.privacy,
+        followerCount: cached.followerCount,
+        followingCount: cached.followingCount,
+        apiProductCount: nextProductCount,
+        pendingFollowRequestCount:
+            state.isOwnStore ? (cached.pendingRequestsCount ?? 0) : 0,
+        canViewContent: canView,
+        followStatus: follow,
         infoMessage: infoMessage,
+        products: canView ? state.products : const [],
+        clearProductsDetailed: !canView,
+        isLoadingProducts: canView ? state.isLoadingProducts : false,
       ),
     );
   }
@@ -600,15 +693,29 @@ class StoreProfileBloc extends Bloc<StoreProfileEvent, StoreProfileState> {
     if (products.isEmpty) return;
 
     try {
+      // Let store meta + tile image downloads claim the connection pool first.
+      // Fan-out of N /import-targets was starving image decode on open.
+      await Future<void>.delayed(const Duration(milliseconds: 450));
+      if (emit.isDone) return;
+
       final availability = <String, ListingImportAvailability>{};
-      final results = await Future.wait([
-        for (final product in products)
-          _importRepository
-              .fetchTargets(listingId: product.id, limit: 50)
-              .then((page) => (product.id, page.items)),
-      ]);
-      for (final (listingId, targets) in results) {
-        availability[listingId] = listingAvailabilityFor(targets);
+      const concurrency = 3;
+      for (var i = 0; i < products.length; i += concurrency) {
+        if (emit.isDone) return;
+        final end =
+            i + concurrency > products.length
+                ? products.length
+                : i + concurrency;
+        final chunk = products.sublist(i, end);
+        final results = await Future.wait([
+          for (final product in chunk)
+            _importRepository
+                .fetchTargets(listingId: product.id, limit: 50)
+                .then((page) => (product.id, page.items)),
+        ]);
+        for (final (listingId, targets) in results) {
+          availability[listingId] = listingAvailabilityFor(targets);
+        }
       }
       if (emit.isDone) return;
       AppLog.d(
@@ -654,19 +761,45 @@ class StoreProfileBloc extends Bloc<StoreProfileEvent, StoreProfileState> {
     }
 
     try {
+      final previousFollow = state.followStatus;
       final store = await _storeRepository.fetchStore(storeId);
       if (emit.isDone) return;
       AppLog.d(
         _tag,
         'Store meta loaded images=${store.images.length} '
-        'cover=${store.coverImageUrl.isNotEmpty}',
+        'cover=${store.coverImageUrl.isNotEmpty} '
+        'privacy=${store.privacy?.apiValue} '
+        'canView=${store.resolvedCanViewContent} '
+        'follow=${store.followStatusRaw} '
+        'notifyUploads=${store.notifyUploads}',
       );
+      final previouslyCouldView = state.canViewContent;
       await _commitStoreMeta(
         emit,
         storeId,
         StoreMetaSnapshot.fromCatalogStore(store),
         isLoadingStoreMeta: false,
       );
+      if (emit.isDone) return;
+      if (!state.isOwnStore && state.followStatus.isFollowing) {
+        if (store.notifyUploads != null) {
+          emit(state.copyWith(notifyUploads: store.notifyUploads));
+        } else if (previousFollow.isPending) {
+          // Private store just approved — enable upload push to match bell ON.
+          emit(state.copyWith(notifyUploads: true));
+          await _enableNotifyUploads(storeId, emit);
+        }
+      }
+      if (!state.isOwnStore) {
+        if (state.canViewContent) {
+          if (!previouslyCouldView || state.products.isEmpty) {
+            add(const StoreProfileLoadCollections());
+          }
+        }
+      } else if (state.privacy.isPrivate &&
+          state.pendingFollowRequestCount > 0) {
+        add(const StoreProfileLoadFollowRequestPreviews());
+      }
     } catch (e) {
       AppLog.e(_tag, 'Load store meta failed', e);
       emit(state.copyWith(isLoadingStoreMeta: false));
@@ -740,13 +873,250 @@ class StoreProfileBloc extends Bloc<StoreProfileEvent, StoreProfileState> {
         infoMessage: 'Store photo removed.',
       );
     } catch (e) {
-      AppLog.e(_tag, 'Delete store image failed', e);
+      AppLog.e(_tag, 'Delete store images failed', e);
       emit(
         state.copyWith(
           isUpdatingStoreImages: false,
           errorMessage: CatalogErrorMapper.toUserMessage(e),
         ),
       );
+    }
+  }
+
+  Future<void> _onFollowPressed(
+    StoreProfileFollowPressed event,
+    Emitter<StoreProfileState> emit,
+  ) async {
+    if (state.isOwnStore || state.isFollowBusy) return;
+    if (state.followStatus.isFollowing || state.followStatus.isPending) return;
+    final storeId = state.storeId;
+    if (storeId.isEmpty || storeId == 'other_store') return;
+
+    emit(state.copyWith(isFollowBusy: true, clearError: true));
+    try {
+      final result = await _storeRepository.followStore(storeId);
+      if (emit.isDone) return;
+      // Slim follow payloads must not be parsed as a CatalogStore — that
+      // incorrectly unlocked private content (privacy omitted → treated public).
+      final canView = result.canViewContentAfterAction;
+      final snap = StoreMetaSnapshot(
+        storeName: state.storeName,
+        storeLink: state.overrideStoreLink ?? state.storeLink,
+        coverImageUrl: state.coverImageUrl,
+        storeImages: state.storeImages,
+        city: state.city,
+        privacy: state.privacy,
+        followerCount: result.followerCount ?? state.followerCount,
+        followingCount: state.followingCount,
+        productCount: state.apiProductCount,
+        pendingRequestsCount: result.pendingRequestsCount,
+        canViewContent: canView,
+        followStatus: result.status,
+      );
+      await _commitStoreMeta(emit, storeId, snap, isLoadingStoreMeta: false);
+      if (emit.isDone) return;
+      // UI defaults bell ON; must PATCH so backend sends `new_upload` pushes.
+      emit(state.copyWith(isFollowBusy: false, notifyUploads: true));
+      if (result.isFollowing) {
+        await _enableNotifyUploads(storeId, emit);
+      }
+      // Quiet refresh for accurate counts / canView from GET store.
+      add(const StoreProfileLoadStoreMeta());
+      if (canView) {
+        add(const StoreProfileLoadCollections());
+      }
+    } on CatalogApiException catch (e) {
+      AppLog.e(_tag, 'Follow failed', e);
+      if (e.code == 'ALREADY_FOLLOWING') {
+        await _applyFollowRecovery(
+          emit,
+          storeId,
+          StoreFollowStatus.following,
+          canView: true,
+        );
+        return;
+      }
+      if (e.code == 'FOLLOW_REQUEST_ALREADY_PENDING') {
+        await _applyFollowRecovery(
+          emit,
+          storeId,
+          StoreFollowStatus.pending,
+          canView: false,
+        );
+        return;
+      }
+      emit(
+        state.copyWith(
+          isFollowBusy: false,
+          errorMessage: CatalogErrorMapper.toUserMessage(e),
+        ),
+      );
+    } catch (e) {
+      AppLog.e(_tag, 'Follow failed', e);
+      emit(
+        state.copyWith(
+          isFollowBusy: false,
+          errorMessage: CatalogErrorMapper.toUserMessage(e),
+        ),
+      );
+    }
+  }
+
+  Future<void> _onUnfollowPressed(
+    StoreProfileUnfollowPressed event,
+    Emitter<StoreProfileState> emit,
+  ) async {
+    if (state.isOwnStore || state.isFollowBusy) return;
+    if (state.followStatus == StoreFollowStatus.none) return;
+    final storeId = state.storeId;
+    if (storeId.isEmpty || storeId == 'other_store') return;
+
+    emit(state.copyWith(isFollowBusy: true, clearError: true));
+    try {
+      await _storeRepository.unfollowStore(storeId);
+      if (emit.isDone) return;
+      final canView =
+          state.privacy == StorePrivacyMode.private ? false : true;
+      final snap = StoreMetaSnapshot(
+        storeName: state.storeName,
+        storeLink: state.overrideStoreLink ?? state.storeLink,
+        coverImageUrl: state.coverImageUrl,
+        storeImages: state.storeImages,
+        city: state.city,
+        privacy: state.privacy,
+        followerCount: state.followerCount,
+        followingCount: state.followingCount,
+        productCount: state.apiProductCount,
+        canViewContent: canView,
+        followStatus: StoreFollowStatus.none,
+      );
+      await _commitStoreMeta(emit, storeId, snap, isLoadingStoreMeta: false);
+      if (emit.isDone) return;
+      emit(state.copyWith(isFollowBusy: false));
+      add(const StoreProfileLoadStoreMeta());
+      if (canView && state.products.isEmpty) {
+        add(const StoreProfileLoadCollections());
+      }
+    } on CatalogApiException catch (e) {
+      AppLog.e(_tag, 'Unfollow failed', e);
+      if (e.code == 'FOLLOW_NOT_FOUND') {
+        await _applyFollowRecovery(
+          emit,
+          storeId,
+          StoreFollowStatus.none,
+          canView: state.privacy != StorePrivacyMode.private,
+        );
+        return;
+      }
+      emit(
+        state.copyWith(
+          isFollowBusy: false,
+          errorMessage: CatalogErrorMapper.toUserMessage(e),
+        ),
+      );
+    } catch (e) {
+      AppLog.e(_tag, 'Unfollow failed', e);
+      emit(
+        state.copyWith(
+          isFollowBusy: false,
+          errorMessage: CatalogErrorMapper.toUserMessage(e),
+        ),
+      );
+    }
+  }
+
+  Future<void> _applyFollowRecovery(
+    Emitter<StoreProfileState> emit,
+    String storeId,
+    StoreFollowStatus status, {
+    required bool canView,
+  }) async {
+    final snap = StoreMetaSnapshot(
+      storeName: state.storeName,
+      storeLink: state.overrideStoreLink ?? state.storeLink,
+      coverImageUrl: state.coverImageUrl,
+      storeImages: state.storeImages,
+      city: state.city,
+      privacy: state.privacy,
+      followerCount: state.followerCount,
+      followingCount: state.followingCount,
+      productCount: state.apiProductCount,
+      canViewContent: canView,
+      followStatus: status,
+    );
+    await _commitStoreMeta(emit, storeId, snap, isLoadingStoreMeta: false);
+    if (emit.isDone) return;
+    emit(state.copyWith(isFollowBusy: false));
+    add(const StoreProfileLoadStoreMeta());
+    if (canView) add(const StoreProfileLoadCollections());
+  }
+
+  Future<void> _onLoadFollowRequestPreviews(
+    StoreProfileLoadFollowRequestPreviews event,
+    Emitter<StoreProfileState> emit,
+  ) async {
+    if (!state.isOwnStore) return;
+    final storeId = state.storeId;
+    if (storeId.isEmpty || storeId == 'my_store') return;
+    try {
+      final page = await _storeRepository.fetchFollowRequests(
+        storeId: storeId,
+        limit: 20,
+      );
+      if (emit.isDone) return;
+      final pending =
+          page.items
+              .where((e) => e.uiStatus == FollowRequestUiStatus.pending)
+              .toList();
+      emit(
+        state.copyWith(
+          pendingFollowRequestCount: pending.length,
+          followRequestPreviewNames:
+              pending.take(2).map((e) => e.name).toList(growable: false),
+        ),
+      );
+    } catch (e) {
+      AppLog.e(_tag, 'Follow request previews failed', e);
+    }
+  }
+
+  Future<void> _onToggleNotifyUploads(
+    StoreProfileToggleNotifyUploads event,
+    Emitter<StoreProfileState> emit,
+  ) async {
+    if (!state.followStatus.isFollowing) return;
+    final next = !state.notifyUploads;
+    emit(state.copyWith(notifyUploads: next));
+    try {
+      final confirmed = await _storeRepository.patchFollowNotifyUploads(
+        storeId: state.storeId,
+        notifyUploads: next,
+      );
+      if (confirmed != next) {
+        emit(state.copyWith(notifyUploads: confirmed));
+      }
+    } catch (e) {
+      AppLog.e(_tag, 'Toggle notifyUploads failed', e);
+      emit(state.copyWith(notifyUploads: !next));
+    }
+  }
+
+  /// Aligns server follow preference with the ON bell (upload push).
+  Future<void> _enableNotifyUploads(
+    String storeId,
+    Emitter<StoreProfileState> emit,
+  ) async {
+    try {
+      final confirmed = await _storeRepository.patchFollowNotifyUploads(
+        storeId: storeId,
+        notifyUploads: true,
+      );
+      if (emit.isDone) return;
+      emit(state.copyWith(notifyUploads: confirmed));
+      AppLog.d(_tag, 'notifyUploads enabled store=$storeId → $confirmed');
+    } catch (e) {
+      // Keep local bell ON; user can re-toggle. Upload push stays off until OK.
+      AppLog.e(_tag, 'enable notifyUploads failed store=$storeId', e);
     }
   }
 

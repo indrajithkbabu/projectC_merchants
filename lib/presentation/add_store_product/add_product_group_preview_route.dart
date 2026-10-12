@@ -135,7 +135,6 @@ class _AddProductGroupPreviewRouteState
       ],
       child: ScreenWrapper(
         backgroundColor: AppColors.background,
-        statusBarIconBrightness: Brightness.dark,
         child: BlocBuilder<BulkUploadBloc, BulkUploadState>(
           builder: (context, state) {
             if (state.isPublished && !state.isEditMode) {

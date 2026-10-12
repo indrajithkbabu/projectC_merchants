@@ -2,7 +2,6 @@ import 'dart:ui';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
-import 'package:image_picker/image_picker.dart';
 import 'package:project_c/bloc/add_store_product/add_store_product_bloc.dart';
 import 'package:project_c/bloc/bulk_upload/bulk_upload_bloc.dart';
 import 'package:project_c/helper/app_padding.dart';
@@ -11,7 +10,6 @@ import 'package:project_c/helper/product_gallery_picker.dart';
 import 'package:project_c/helper/product_image.dart';
 import 'package:project_c/helper/product_image_cropper.dart';
 import 'package:project_c/helper/text_styles.dart';
-import 'package:project_c/helper/widgets/media_source_sheet.dart';
 
 /// iOS-style centered photo preview (blur backdrop) with the same add / delete /
 /// edit actions as [showBulkPhotosPreviewSheet], plus a bottom thumbnail scroller.
@@ -67,7 +65,6 @@ class _BulkPhotosIosPreview extends StatefulWidget {
 }
 
 class _BulkPhotosIosPreviewState extends State<_BulkPhotosIosPreview> {
-  final _imagePicker = ImagePicker();
   late final PageController _pageController;
   late final ScrollController _thumbController;
   late int _page;
@@ -161,28 +158,14 @@ class _BulkPhotosIosPreviewState extends State<_BulkPhotosIosPreview> {
   Future<void> _addMore(BuildContext hostContext) async {
     if (_picking || widget.readOnly) return;
     final bloc = context.read<BulkUploadBloc>();
-    final source = await showMediaSourceSheet(
-      hostContext,
-      title: 'Add photos',
-      subtitle: 'Capture new photos or pick from your gallery',
-    );
-    if (!mounted || !hostContext.mounted || source == null) return;
-
     setState(() => _picking = true);
     try {
-      final paths = <String>[];
-      if (source == MediaPickSource.camera) {
-        final photo = await _imagePicker.pickImage(
-          source: ImageSource.camera,
-          imageQuality: 85,
-          maxWidth: 1920,
-          maxHeight: 1920,
-        );
-        if (photo != null) paths.add(photo.path);
-      } else {
-        if (!hostContext.mounted) return;
-        paths.addAll(await ProductGalleryPicker.pickImagePaths(hostContext));
-      }
+      // Same one-sheet Telegram gallery as store-profile Add products.
+      if (!hostContext.mounted) return;
+      final paths = await ProductGalleryPicker.pickImagePaths(
+        hostContext,
+        includeCamera: true,
+      );
       if (!mounted || paths.isEmpty) return;
       // Keep preview open so the bottom scroller updates (same events as sheet).
       bloc.add(BulkUploadImagesAdded(paths));
@@ -256,7 +239,7 @@ class _BulkPhotosIosPreviewState extends State<_BulkPhotosIosPreview> {
                             child: Stack(
                               fit: StackFit.expand,
                               children: [
-                                const ColoredBox(
+                                ColoredBox(
                                   color: AppColors.surfaceSecondary,
                                 ),
                                 PageView.builder(

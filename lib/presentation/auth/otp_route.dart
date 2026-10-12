@@ -180,7 +180,6 @@ class _OtpRouteState extends State<OtpRoute> {
       ],
       child: ScreenWrapper(
         backgroundColor: AppColors.background,
-        statusBarIconBrightness: Brightness.dark,
         resizeToAvoidBottomInset: false,
         child: Stack(
           children: [
@@ -197,7 +196,7 @@ class _OtpRouteState extends State<OtpRoute> {
                     controller: _autofillController,
                     focusNode: _autofillFocus,
                     keyboardType: TextInputType.number,
-                    autofillHints: const [AutofillHints.oneTimeCode],
+                    autofillHints: [AutofillHints.oneTimeCode],
                     enableSuggestions: false,
                     autocorrect: false,
                     showCursor: false,
@@ -244,7 +243,7 @@ class _OtpRouteState extends State<OtpRoute> {
                                 color: AppColors.primary.withValues(alpha: 0.12),
                                 shape: BoxShape.circle,
                               ),
-                              child: const Icon(
+                              child: Icon(
                                 Icons.lock_outline_rounded,
                                 size: 34,
                                 color: AppColors.primary,

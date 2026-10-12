@@ -7,10 +7,12 @@ import 'package:project_c/helper/app_log.dart';
 import 'package:project_c/helper/catalog_ui_mapper.dart';
 import 'package:project_c/helper/device_contact_names.dart';
 import 'package:project_c/helper/product_image.dart';
+import 'package:project_c/models/catalog/catalog_page.dart';
 import 'package:project_c/models/catalog/catalog_store.dart';
 import 'package:project_c/models/store_channel.dart';
 import 'package:project_c/services/store_home_prefetcher.dart';
 import 'package:project_c/services/store_products_prefetcher.dart';
+import 'package:project_c/storage/store_home_cache.dart';
 import 'package:project_c/storage/store_meta_cache.dart';
 import 'package:project_c/webservice/catalog_error_mapper.dart';
 import 'package:project_c/webservice/profile/profile_repository.dart';
@@ -27,7 +29,7 @@ class StoreListingBloc extends Bloc<StoreListingEvent, StoreListingState> {
            storeRepository ?? ServiceLocator.get<StoreRepository>(),
        _profileRepository =
            profileRepository ?? ServiceLocator.get<ProfileRepository>(),
-       // Start loading so first paint shows shimmer until warm/network arrives.
+       // Empty + loading → shimmer only when no disk/memory home cache.
        super(const StoreListingState(isLoading: true)) {
     on<StoreListingSearchChanged>(_onSearchChanged);
     on<StoreListingRefreshed>(_onRefreshed);
@@ -35,6 +37,7 @@ class StoreListingBloc extends Bloc<StoreListingEvent, StoreListingState> {
     on<StoreListingDeleteAccountRequested>(_onDeleteAccountRequested);
     on<StoreListingClearMessage>(_onClearMessage);
     on<StoreListingClearAccountDeleted>(_onClearAccountDeleted);
+    on<StoreListingCachedNamesReady>(_onCachedNamesReady);
     add(const StoreListingRefreshed());
   }
 
@@ -61,24 +64,50 @@ class StoreListingBloc extends Bloc<StoreListingEvent, StoreListingState> {
     StoreListingRefreshed event,
     Emitter<StoreListingState> emit,
   ) async {
-    // Keep previous rows visible — never flash a blocking loader.
-    final useWarm = state.allStores.isEmpty;
-    emit(state.copyWith(isLoading: true, clearError: true, clearCursor: true));
-    try {
-      final page =
-          useWarm
-              ? await StoreHomePrefetcher.instance.ensure(limit: 40)
-              : await StoreHomePrefetcher.instance.refresh(limit: 40);
+    final hadVisible = state.allStores.isNotEmpty;
 
-      // Never block first paint on the contacts permission dialog (Android
-      // hangs if a second request races). Use warm names when ready; else
-      // paint phones first and enrich after.
-      final List<StoreChannel> stores;
-      if (DeviceContactNames.isReady) {
-        stores = await _mapAndEnrich(page.items);
-      } else {
-        stores = _mapStores(page.items);
+    // Kill+reopen: paint disk/memory home immediately — no shimmer wait.
+    if (!hadVisible) {
+      final painted = await _tryPaintCachedHome(emit);
+      if (!painted) {
+        emit(
+          state.copyWith(isLoading: true, clearError: true, clearCursor: true),
+        );
       }
+    } else {
+      // Pull-to-refresh: keep list visible (shimmer only when empty).
+      emit(state.copyWith(isLoading: true, clearError: true, clearCursor: true));
+    }
+
+    final paintedFromCache = state.allStores.isNotEmpty;
+
+    try {
+      // After a disk paint, force network so the list stays fresh.
+      final page =
+          paintedFromCache
+              ? await StoreHomePrefetcher.instance.refresh(limit: 40)
+              : await StoreHomePrefetcher.instance.ensure(limit: 40);
+
+      // Prefer names on first empty paint when contacts are warm/in-flight.
+      // If we already showed cache, never block the soft refresh on contacts.
+      final List<StoreChannel> stores;
+      final awaitContacts =
+          !paintedFromCache &&
+          (DeviceContactNames.isReady || DeviceContactNames.isLoading);
+      if (awaitContacts) {
+        stores = await _mapAndEnrich(page.items);
+      } else if (DeviceContactNames.isReady) {
+        stores = [
+          for (final store in _mapStores(page.items))
+            store.copyWith(
+              contactName:
+                  DeviceContactNames.lookup(store.phone)?.trim() ?? '',
+            ),
+        ];
+      } else {
+        stores = _applyCachedContactNames(_mapStores(page.items));
+      }
+
       AppLog.d(_tag, 'Loaded ${stores.length} stores');
       emit(
         state.copyWith(
@@ -87,38 +116,127 @@ class StoreListingBloc extends Bloc<StoreListingEvent, StoreListingState> {
           nextCursor: page.nextCursor,
         ),
       );
-      // Soft-warm first few store product grids while user browses the list.
-      StoreProductsPrefetcher.instance.prefetchVisible([
-        for (final s in stores) (id: s.id, coverImageUrl: s.coverImageUrl),
-      ]);
-      // Warm store logos so profile header / listing avatar don't flash-load.
-      unawaited(
-        CatalogImageCache.precacheUrls([
-          for (final s in stores) ...s.imageUrls,
-        ]),
-      );
-      for (final s in page.items) {
-        final cover = s.coverImageUrl.trim();
-        if (cover.isNotEmpty) {
-          unawaited(StoreMetaCache.instance.writeCover(s.id, cover));
-        }
-      }
+      await _persistHome(page, stores);
+      _afterHomePaint(stores, page.items);
 
       if (!DeviceContactNames.isReady) {
         final enriched = await _enrichContactNames(stores);
         if (!emit.isDone) {
           emit(state.copyWith(allStores: enriched));
+          await _persistHome(page, enriched);
         }
       }
     } catch (e) {
       AppLog.e(_tag, 'Home load failed', e);
-      emit(
-        state.copyWith(
-          isLoading: false,
-          errorMessage: CatalogErrorMapper.toUserMessage(e),
-        ),
-      );
+      // Keep cached rows if we already painted them.
+      if (state.allStores.isNotEmpty) {
+        emit(state.copyWith(isLoading: false, clearError: true));
+      } else {
+        emit(
+          state.copyWith(
+            isLoading: false,
+            errorMessage: CatalogErrorMapper.toUserMessage(e),
+          ),
+        );
+      }
     }
+  }
+
+  /// Returns true when disk/memory home was emitted (skip empty shimmer).
+  Future<bool> _tryPaintCachedHome(Emitter<StoreListingState> emit) async {
+    final page =
+        StoreHomeCache.instance.readMemory() ??
+        await StoreHomeCache.instance.read();
+    if (page == null || page.items.isEmpty) return false;
+
+    var stores = _applyCachedContactNames(_mapStores(page.items));
+    if (DeviceContactNames.isReady) {
+      stores = [
+        for (final store in stores)
+          store.copyWith(
+            contactName:
+                DeviceContactNames.lookup(store.phone)?.trim() ??
+                store.contactName,
+          ),
+      ];
+    }
+
+    final covers = [for (final s in stores) s.coverImageUrl];
+    // Re-attach on-disk files (fast) so FileImage paints without network flash.
+    // Full decode may already be in flight from auth/home prefetch.
+    await CatalogImageCache.probeDisk(covers);
+    unawaited(CatalogImageCache.warmAvatars(covers));
+
+    AppLog.d(_tag, 'Painted ${stores.length} stores from home cache');
+    emit(
+      state.copyWith(
+        isLoading: false,
+        allStores: stores,
+        nextCursor: page.nextCursor,
+      ),
+    );
+    _afterHomePaint(stores, page.items);
+
+    if (!DeviceContactNames.isReady) {
+      // ignore: unawaited_futures
+      () async {
+        final enriched = await _enrichContactNames(stores);
+        if (isClosed) return;
+        add(StoreListingCachedNamesReady(enriched));
+      }();
+    }
+    return true;
+  }
+
+  void _afterHomePaint(
+    List<StoreChannel> stores,
+    List<CatalogStore> raw,
+  ) {
+    StoreProductsPrefetcher.instance.prefetchVisible([
+      for (final s in stores) (id: s.id, coverImageUrl: s.coverImageUrl),
+    ]);
+    // Avatar-sized decode for visible covers (same key as CatalogNetworkAvatar).
+    unawaited(
+      CatalogImageCache.warmAvatars([
+        for (final s in stores) s.coverImageUrl,
+      ]),
+    );
+    // Disk-warm remaining showcase URLs (preview) — no full decode.
+    unawaited(
+      CatalogImageCache.precacheUrls([
+        for (final s in stores) ...s.imageUrls,
+      ]),
+    );
+    for (final s in raw) {
+      final cover = s.coverImageUrl.trim();
+      if (cover.isNotEmpty) {
+        unawaited(StoreMetaCache.instance.writeCover(s.id, cover));
+      }
+    }
+  }
+
+  Future<void> _persistHome(
+    CatalogPage<CatalogStore> page,
+    List<StoreChannel> stores,
+  ) async {
+    final names = <String, String>{
+      for (final s in stores)
+        if (s.phone.trim().isNotEmpty && s.contactName.trim().isNotEmpty)
+          s.phone.trim(): s.contactName.trim(),
+    };
+    await StoreHomeCache.instance.write(page, contactNames: names);
+  }
+
+  List<StoreChannel> _applyCachedContactNames(List<StoreChannel> stores) {
+    final cached = StoreHomeCache.instance.contactNamesMemory();
+    if (cached.isEmpty) return stores;
+    return [
+      for (final store in stores)
+        store.copyWith(
+          contactName:
+              cached[store.phone.trim()]?.trim() ?? store.contactName,
+        ),
+    ];
   }
 
   Future<void> _onLoadMore(
@@ -204,6 +322,19 @@ class StoreListingBloc extends Bloc<StoreListingEvent, StoreListingState> {
     Emitter<StoreListingState> emit,
   ) {
     emit(state.copyWith(clearAccountDeleted: true));
+  }
+
+  Future<void> _onCachedNamesReady(
+    StoreListingCachedNamesReady event,
+    Emitter<StoreListingState> emit,
+  ) async {
+    if (event.stores.isEmpty) return;
+    if (state.allStores.length != event.stores.length) return;
+    emit(state.copyWith(allStores: event.stores));
+    final mem = StoreHomeCache.instance.readMemory();
+    if (mem != null) {
+      await _persistHome(mem, event.stores);
+    }
   }
 
   List<StoreChannel> _mapStores(

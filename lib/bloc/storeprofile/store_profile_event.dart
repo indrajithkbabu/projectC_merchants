@@ -180,7 +180,24 @@ class StoreProfileHideInFlightListing extends StoreProfileEvent {
   List<Object?> get props => [pendingId, listingId];
 }
 
+class StoreProfileLoadFollowRequestPreviews extends StoreProfileEvent {
+  const StoreProfileLoadFollowRequestPreviews();
+}
+
 /// Quiet probe of GET /import-targets for other-store product badges.
 class StoreProfileProbeImportAvailability extends StoreProfileEvent {
   const StoreProfileProbeImportAvailability();
+}
+
+/// Visitor Follow / cancel request / unfollow.
+class StoreProfileFollowPressed extends StoreProfileEvent {
+  const StoreProfileFollowPressed();
+}
+
+class StoreProfileUnfollowPressed extends StoreProfileEvent {
+  const StoreProfileUnfollowPressed();
+}
+
+class StoreProfileToggleNotifyUploads extends StoreProfileEvent {
+  const StoreProfileToggleNotifyUploads();
 }

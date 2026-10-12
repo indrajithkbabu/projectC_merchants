@@ -31,6 +31,22 @@ class Endpoints {
   static String storeMember(String storeId, String userId) =>
       '/stores/$storeId/members/$userId';
   static String storeLeave(String storeId) => '/stores/$storeId/leave';
+  static String storePrivacy(String storeId) => '/stores/$storeId/privacy';
+  static String storeFollow(String storeId) => '/stores/$storeId/follow';
+  static String storeFollowRequests(String storeId) =>
+      '/stores/$storeId/follow-requests';
+  static String storeFollowRequestAccept(
+    String storeId,
+    String followerUserId,
+  ) => '/stores/$storeId/follow-requests/$followerUserId/accept';
+  static String storeFollowRequestReject(
+    String storeId,
+    String followerUserId,
+  ) => '/stores/$storeId/follow-requests/$followerUserId/reject';
+  static String storeFollowers(String storeId) => '/stores/$storeId/followers';
+  static String storeFollowing(String storeId) => '/stores/$storeId/following';
+  static String storeFollower(String storeId, String followerUserId) =>
+      '/stores/$storeId/followers/$followerUserId';
 
   // Collections (direct S3 presign + JSON commit; multipart kept for legacy)
   static String storeUploadsPresign(String storeId) =>
@@ -64,6 +80,28 @@ class Endpoints {
   static const String search = '/search';
   static String storeFacets(String storeId) => '/stores/$storeId/facets';
   static String storeSearch(String storeId) => '/stores/$storeId/search';
+
+  // Photo like + wishlist (user-scoped)
+  static String productPhotoLike(String listingId, String photoId) =>
+      '/products/$listingId/photos/$photoId/like';
+  static String storeCollectionPhotoLike(
+    String storeId,
+    String listingId,
+    String photoId,
+  ) => '/stores/$storeId/collections/$listingId/photos/$photoId/like';
+  static const String wishlist = '/wishlist';
+  static String wishlistItem(String wishlistId) => '/wishlist/$wishlistId';
+
+  // View counting (batch beacon)
+  static const String views = '/views';
+
+  // Push device tokens (FCM)
+  static const String devicesToken = '/devices/token';
+
+  // Activity feed (in-app)
+  static const String activity = '/activity';
+  static const String activityUnreadCount = '/activity/unread-count';
+  static const String activityRead = '/activity/read';
 
   // Imports
   static const String importTargets = '/import-targets';

@@ -5,7 +5,7 @@ This document defines the common implementation standards to follow across all s
 ## Core Principles
 - Always use shared helpers from `lib/helper/` for layout, spacing, typography, and common controls.
 - Avoid ad-hoc paddings, font families, and one-off navigation transitions.
-- Keep UI consistent with the Telegram-style theme already configured.
+- Keep UI consistent with the active appearance (Day / Night) via `AppColors` + `AppTheme`.
 
 ## Mandatory Building Blocks
 
@@ -20,7 +20,7 @@ Example:
 ```dart
 return ScreenWrapper(
   backgroundColor: AppColors.background,
-  statusBarIconBrightness: Brightness.dark,
+  // statusBarIconBrightness defaults from AppColors (Day=dark icons, Night=light)
   child: ...,
 );
 ```
@@ -59,9 +59,20 @@ Common picks:
 - Caption/helper text: `AppTextStyles.caption()`
 
 ### 5) Theme and Colors
-- Use colors from `AppColors` (`lib/helper/colors.dart`).
-- Do not introduce raw hex values inside feature screens unless adding to palette first.
-- Theme source of truth: `lib/helper/app_theme.dart`.
+- Use colors from `AppColors` (`lib/helper/colors.dart`). Do not hardcode palette hex in features.
+- Appearance is **Day** (Telegram light) or **Night** (Graphite dark). Source of truth:
+  - Palettes: `AppColorPalette.day` / `AppColorPalette.night` in `colors.dart`
+  - ThemeData: `AppTheme.light` / `AppTheme.dark` in `app_theme.dart`
+  - Preference: `ThemePreferences` (`lib/services/theme_preferences.dart`), persisted in
+    `AppSettingsStorage` (survives logout). Settings → Appearance radios write it.
+- `AppColors.bind(appearance)` keeps static getters in sync; `MaterialApp` uses
+  `theme` + `darkTheme` + `themeMode`. Default is Day.
+- Instant Day/Night refresh: `AppearanceScope` + `AppearanceRebuildGate` in
+  `MaterialApp.builder` (`lib/helper/widgets/appearance_scope.dart`) mark the
+  navigator subtree dirty so every open screen repaints without remounting routes.
+- Prefer omitting `statusBarIconBrightness` on `ScreenWrapper` so Day/Night chrome stays correct.
+  Override only for immersive dark photo surfaces (always light icons).
+- Night follows Graphite: grey ramp only; functional hues for status/links; no pure `#FFFFFF`.
 
 ## Navigation and Transitions
 - Route setup must go through `lib/navigation/route_initializer.dart`.
@@ -70,22 +81,33 @@ Common picks:
   - `lib/navigation/routes.dart`
   - `lib/navigation/route_initializer.dart`
 - Current route flow (auth onboarding scope):
-  - `onboarding_route` -> `auth_phone_route` -> `auth_otp_route` -> `profile_setup_route` -> `store_listing_route` (main shell with floating nav) -> Stores / Contacts / Settings / Profile tabs
+  - `onboarding_route` -> `auth_phone_route` -> `auth_otp_route` -> `profile_setup_route` -> `store_listing_route` (main shell with floating nav)
+  - Shell tabs depend on own-store: **no store** → Stores / Contacts / Settings / Profile; **own store** → Stores / Contacts / Wishlist / My store (Settings via My store gear → `settings_route`)
   - Store creation is deferred: Profile tab (or Contacts empty CTA) -> `store_setup_route` -> `add_team_route` -> `store_listing_route`
   - Contacts tab: Invite Friends → `invite_friends_route` (Share + phone contacts); default list shows peer stores only; search shows matching stores then invite contacts
   - Contacts invite / Share JewelFlow uses WhatsApp copy `Hey, I'm using JewelFlow… Download it here: https://…`
   - After store create, home `/home` warm cache is invalidated so the new store appears on Stores without a manual refresh
-  - From store profile: `store_gallery_route` (iOS-style product photo gallery); app-bar search icon → `store_search_route`
+  - From store profile Discover/visitor compact header: `store_channel_route` (Telegram-style store info + Media/Group/Gallery); `store_gallery_route` still used for dedicated gallery edits; app-bar search icon → `store_search_route`
   - Stores home search field → `global_search_route` (Discover / suggestions / results / filters via catalog search APIs); Sort & Filter → `search_filters_route`
   - Own store profile: inbox badge → `store_import_requests_route` (accept / reject incoming; outgoing waits on source)
+  - Own-store shell: My store gear → `settings_route` (Appearance, View products, screenshots, logout/delete, **Account privacy**, **Import requests**). Profile tab (no-store only) still hosts Create store.
+  - Stores home (own store): notification icon → `activity_route`. Store profile (pushed) is Discover-only for owner and visitor (no owner bottom nav). Shell Wishlist + My store tabs; product-details like snack **View** → shell Wishlist via `ShellNav` (quiet refresh).
   - From another store profile (only if viewer has own store): `store_import_select_route` -> pending -> approved (catalog import requests)
   - `country_picker_route` is opened from phone screen.
 
 ## Floating bottom navigation
 - Post-auth home is `MainShellRoute` with Telegram-style floating capsule (`FloatingBottomNavBar`).
-- Tab order: Stores, Contacts, Settings, Profile.
+- Tab order:
+  - **No own store:** Stores · Contacts · Settings · Profile
+  - **Own store:** Stores · Contacts · Wishlist (heart) · My store — Settings moves under My store toolbar gear (`settings_route`). Wishlist + My store reuse the same widgets/logic as store-profile owner tabs.
+- Own-store shell hosts a long-lived `StoreProfileBloc` (cache-first + prefetch) so My store does not cold-shimmer on every visit.
 - Content must reserve space with `FloatingBottomNavBar.reservedHeight`; shell uses `extendBodyBehindBottom: true`.
-- Prefer quiet backend refresh (no blocking loaders) and pull-to-refresh.
+- Prefer quiet backend refresh (no blocking loaders) and pull-to-refresh. Do not remount Wishlist on tab re-select (keeps grid state; pull-to-refresh still available).
+- Shell home titles (Stores / Contacts / Wishlist) use shared `ShellTabTitleBar`
+  (40px row, 22pt, `statusBar + 8` top) so IndexedStack tab switches keep the
+  title locked in place with no vertical jump.
+- Own-store Wishlist is prefetched (`WishlistPrefetcher`) after auth `/me` +
+  home warm — shell Wishlist tab must not shimmer on first open.
 
 ## Common Controls
 - Reuse these shared widgets from `lib/helper/widgets/`:
@@ -94,12 +116,20 @@ Common picks:
   - `CustomNumericKeypad`
   - `AppBackButton`
   - `ScreenWrapper`
+  - `ShellTabTitleBar` (home shell tab titles)
   - `FloatingBottomNavBar`
   - `NetworkStatusGate` (app-wide; do not re-wrap per screen)
-  - `showMediaSourceSheet` / `MediaPickSource` (camera vs gallery chooser; no Cancel)
+  - `showMediaSourceSheet` / `MediaPickSource` (camera vs gallery chooser; no
+    Cancel — keep for any remaining chooser surfaces; add-product add-more
+    uses `ProductGalleryPicker(includeCamera: true)` instead)
 - Add-product gallery multi-select: `ProductGalleryPicker` in
   `lib/helper/product_gallery_picker.dart` (`drag_select_grid_view` for tap +
-  hold/slide; albums dropdown; keep post-pick navigation unchanged).
+  hold/slide; albums dropdown; request photo permission before presenting the
+  sheet; optional `includeCamera` → live Camera preview cell (`camera`
+  package, 2×3) beside a 2×3 gallery block; tap Camera closes sheet then
+  in-app full-screen capture with the same `camera` package. Used for
+  store-profile Add products and add-more from photo preview on
+  `add_product_group_route`).
 
 Do not duplicate these widgets inside feature folders.
 
@@ -126,7 +156,9 @@ Do not duplicate these widgets inside feature folders.
 - **Main horizontal spacing:** 15 via `AppPadding.horizontal`.
 - **Back navigation control:** icon-only `AppBackButton`.
 - **Screenshot / screen recording:** Blocked app-wide by default via `ScreenshotProtectionService` + `no_screenshot`. Settings → **Allow screenshots** turns capture on. While blocked, detected capture attempts show a snackbar. Preference persists in `AppSettingsStorage` (not cleared on logout).
+- **Appearance:** Settings → **Day mode** / **Night mode** (`ThemePreferences`). Day = Telegram light; Night = Graphite dark. Persists in `AppSettingsStorage` (not cleared on logout). Default Day.
 - **Network banner:** App-wide via `NetworkStatusCubit` + `NetworkStatusGate` (`connectivity_plus`). Red offline / brief green restored; pushes layout down (no overlay); `AbsorbPointer` while offline.
+- **Push notifications (FCM):** `firebase_core` + `firebase_messaging` + `flutter_local_notifications`. Init in `defaultMain` via `PushNotificationService`. After sign-in / session restore: `POST /devices/token`; before logout: `DELETE /devices/token`. Foreground shows a local notification. Tap / cold-open deep-links by `data.type` → `follow_request` → `follow_requests_route`; `request_approved` / `new_follower` → `store_profile_route`; `new_upload` → `store_profile_route` (+ `focusProductId` when `listingId` present). Defers open until signed in; never replaces auth/shell roots. Upload bell: `PATCH /stores/:id/follow` `{ notifyUploads }` via store profile (enable on active follow). **In-app Activity:** Stores home bell → `activity_route` (`GET /activity`, unread badge, mark-all-read). Config: FlutterFire (`lib/firebase_options.dart`, `google-services.json`, `GoogleService-Info.plist`). Project: `project-c-jewelflow`.
 
 ## Auth Flow Implementation Rules
 - `AuthBloc` owns phone input, OTP input, resend timer, verification state, and OTP auto-fill (`AuthOtpAutoFilled`).
@@ -185,7 +217,6 @@ class ExampleRoute extends StatelessWidget {
       listeners: const [],
       child: ScreenWrapper(
         backgroundColor: AppColors.background,
-        statusBarIconBrightness: Brightness.dark,
         child: SingleChildScrollView(
           padding: AppPadding.screen(
             top: ScreenWrapper.statusBarTop(context),

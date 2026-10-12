@@ -31,7 +31,7 @@ class StoreProfileSearchFooter extends StatelessWidget {
             fontSize: 15,
             fontWeight: FontWeight.w400,
           ),
-          prefixIcon: const Icon(
+          prefixIcon: Icon(
             Icons.search_rounded,
             color: AppColors.textSecondary,
           ),
@@ -47,7 +47,7 @@ class StoreProfileSearchFooter extends StatelessWidget {
           ),
           focusedBorder: OutlineInputBorder(
             borderRadius: BorderRadius.circular(32),
-            borderSide: const BorderSide(
+            borderSide: BorderSide(
               color: AppColors.primary,
               width: 1.2,
             ),

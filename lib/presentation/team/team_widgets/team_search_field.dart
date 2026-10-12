@@ -25,7 +25,7 @@ class TeamSearchField extends StatelessWidget {
           fontSize: 15,
           fontWeight: FontWeight.w400,
         ),
-        prefixIcon: const Padding(
+        prefixIcon: Padding(
           padding: EdgeInsets.only(left: 12, right: 8),
           child: Icon(
             Icons.search_rounded,
@@ -46,7 +46,7 @@ class TeamSearchField extends StatelessWidget {
         ),
         focusedBorder: OutlineInputBorder(
           borderRadius: BorderRadius.circular(12),
-          borderSide: const BorderSide(color: AppColors.primary, width: 1.2),
+          borderSide: BorderSide(color: AppColors.primary, width: 1.2),
         ),
         contentPadding: const EdgeInsets.symmetric(
           horizontal: 12,

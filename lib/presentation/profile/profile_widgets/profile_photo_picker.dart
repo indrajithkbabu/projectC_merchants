@@ -1,6 +1,5 @@
 import 'dart:io';
 
-import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:project_c/helper/colors.dart';
 import 'package:project_c/helper/product_image.dart';
@@ -28,20 +27,40 @@ class ProfilePhotoPicker extends StatelessWidget {
     final networkUrl = imageUrl?.trim() ?? '';
     final hasLocal = localPath.isNotEmpty;
     final hasNetwork = !hasLocal && networkUrl.isNotEmpty;
-    final hasImage = hasLocal || hasNetwork;
     final trimmed = firstName.trim();
     final initial =
         trimmed.isEmpty ? 'A' : trimmed.substring(0, 1).toUpperCase();
+    final initials = Text(
+      initial,
+      style: AppTextStyles.headline(
+        fontSize: 40,
+        color: AppColors.textSecondary,
+        fontWeight: FontWeight.w500,
+      ),
+    );
 
-    ImageProvider? provider;
+    const size = 104.0;
+    final Widget photo;
     if (hasLocal) {
-      provider = FileImage(File(localPath));
-    } else if (hasNetwork) {
-      // Disk+memory cache — same CatalogImageCache as product media.
-      provider = CachedNetworkImageProvider(
-        networkUrl,
-        cacheManager: CatalogImageCache.instance,
+      photo = ClipOval(
+        child: Image.file(
+          File(localPath),
+          width: size,
+          height: size,
+          fit: BoxFit.cover,
+          gaplessPlayback: true,
+          errorBuilder: (_, __, ___) => _fallbackShell(initials),
+        ),
       );
+    } else if (hasNetwork) {
+      photo = CatalogNetworkAvatar(
+        url: networkUrl,
+        size: size,
+        backgroundColor: AppColors.surfaceSecondary,
+        fallback: initials,
+      );
+    } else {
+      photo = _fallbackShell(initials);
     }
 
     return Center(
@@ -50,31 +69,7 @@ class ProfilePhotoPicker extends StatelessWidget {
         children: [
           GestureDetector(
             onTap: isLoading ? null : onTap,
-            child: Container(
-              width: 104,
-              height: 104,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                color: AppColors.surfaceSecondary,
-                image:
-                    provider == null
-                        ? null
-                        : DecorationImage(image: provider, fit: BoxFit.cover),
-              ),
-              child:
-                  hasImage
-                      ? null
-                      : Center(
-                        child: Text(
-                          initial,
-                          style: AppTextStyles.headline(
-                            fontSize: 40,
-                            color: AppColors.textSecondary,
-                            fontWeight: FontWeight.w500,
-                          ),
-                        ),
-                      ),
-            ),
+            child: photo,
           ),
           Positioned(
             right: -2,
@@ -91,14 +86,14 @@ class ProfilePhotoPicker extends StatelessWidget {
                 ),
                 child:
                     isLoading
-                        ? const Padding(
+                        ? Padding(
                           padding: EdgeInsets.all(8),
                           child: CircularProgressIndicator(
                             strokeWidth: 2,
                             color: AppColors.textOnPrimary,
                           ),
                         )
-                        : const Icon(
+                        : Icon(
                           Icons.camera_alt_rounded,
                           size: 18,
                           color: AppColors.textOnPrimary,
@@ -108,6 +103,19 @@ class ProfilePhotoPicker extends StatelessWidget {
           ),
         ],
       ),
+    );
+  }
+
+  Widget _fallbackShell(Widget child) {
+    return Container(
+      width: 104,
+      height: 104,
+      alignment: Alignment.center,
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        color: AppColors.surfaceSecondary,
+      ),
+      child: child,
     );
   }
 }

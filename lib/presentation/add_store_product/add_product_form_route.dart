@@ -286,7 +286,6 @@ class _AddProductFormRouteState extends State<AddProductFormRoute> {
       ],
       child: ScreenWrapper(
         backgroundColor: AppColors.background,
-        statusBarIconBrightness: Brightness.dark,
         child: BlocBuilder<AddStoreProductBloc, AddStoreProductState>(
           builder: (context, state) {
             final images = state.selectedImages;
@@ -362,12 +361,12 @@ class _AddProductFormRouteState extends State<AddProductFormRoute> {
                                         fontSize: 18,
                                         fontWeight: FontWeight.w400,
                                       ),
-                                      enabledBorder: const UnderlineInputBorder(
+                                      enabledBorder: UnderlineInputBorder(
                                         borderSide: BorderSide(
                                           color: AppColors.border,
                                         ),
                                       ),
-                                      focusedBorder: const UnderlineInputBorder(
+                                      focusedBorder: UnderlineInputBorder(
                                         borderSide: BorderSide(
                                           color: AppColors.primary,
                                           width: 1.6,
@@ -510,7 +509,7 @@ class _AddProductFormRouteState extends State<AddProductFormRoute> {
                           child: Row(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              const Icon(
+                              Icon(
                                 Icons.info_outline_rounded,
                                 size: 18,
                                 color: AppColors.textSecondary,

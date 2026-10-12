@@ -31,7 +31,6 @@ class HomePlaceholderRoute extends StatelessWidget {
       ],
       child: ScreenWrapper(
         backgroundColor: AppColors.background,
-        statusBarIconBrightness: Brightness.dark,
         child: Padding(
           padding: AppPadding.screen(
             top: ScreenWrapper.statusBarTop(context) + 24,

@@ -55,7 +55,7 @@ class SearchAppBarField extends StatelessWidget {
             fontSize: 15,
             fontWeight: FontWeight.w400,
           ),
-          prefixIcon: const Icon(
+          prefixIcon: Icon(
             Icons.search_rounded,
             color: AppColors.textSecondary,
           ),
@@ -65,7 +65,7 @@ class SearchAppBarField extends StatelessWidget {
                   : IconButton(
                     tooltip: 'Clear',
                     onPressed: onClear,
-                    icon: const Icon(
+                    icon: Icon(
                       Icons.close_rounded,
                       color: AppColors.textSecondary,
                       size: 20,
@@ -83,7 +83,7 @@ class SearchAppBarField extends StatelessWidget {
           ),
           focusedBorder: OutlineInputBorder(
             borderRadius: BorderRadius.circular(32),
-            borderSide: const BorderSide(
+            borderSide: BorderSide(
               color: AppColors.primary,
               width: 1.2,
             ),

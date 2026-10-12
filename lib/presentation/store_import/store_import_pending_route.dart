@@ -56,7 +56,6 @@ class StoreImportPendingRoute extends StatelessWidget {
       ],
       child: ScreenWrapper(
         backgroundColor: AppColors.background,
-        statusBarIconBrightness: Brightness.dark,
         child: BlocBuilder<StoreImportBloc, StoreImportState>(
           builder: (context, state) {
             final storeName = state.sourceStore.name;
@@ -83,7 +82,7 @@ class StoreImportPendingRoute extends StatelessWidget {
                             color: AppColors.warningSoft,
                             shape: BoxShape.circle,
                           ),
-                          child: const Icon(
+                          child: Icon(
                             Icons.schedule_rounded,
                             size: 34,
                             color: AppColors.warning,
@@ -132,7 +131,7 @@ class StoreImportPendingRoute extends StatelessWidget {
                           child: Row(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              const Icon(
+                              Icon(
                                 Icons.verified_user_outlined,
                                 color: AppColors.primary,
                                 size: 20,
