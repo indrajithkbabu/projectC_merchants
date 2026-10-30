@@ -6,18 +6,23 @@ import 'package:project_c/bloc/bulk_upload/bulk_upload_bloc.dart';
 import 'package:project_c/bloc/product_details/product_details_bloc.dart';
 import 'package:project_c/di/service_locator.dart';
 import 'package:project_c/helper/app_padding.dart';
+import 'package:project_c/helper/be_verify.dart';
+import 'package:project_c/helper/catalog_ui_mapper.dart';
 import 'package:project_c/helper/colors.dart';
 import 'package:project_c/helper/product_image.dart';
 import 'package:project_c/helper/text_styles.dart';
+import 'package:project_c/helper/widgets/app_back_button.dart';
 import 'package:project_c/helper/widgets/screen_wrapper.dart';
+import 'package:project_c/models/bulk_upload.dart';
+import 'package:project_c/models/catalog/catalog_product_models.dart';
+import 'package:project_c/models/catalog/collection_models.dart';
+import 'package:project_c/models/catalog/collection_specifications.dart';
 import 'package:project_c/models/store_product.dart';
 import 'package:project_c/navigation/routes.dart';
-import 'package:project_c/presentation/main_shell/shell_nav.dart';
+import 'package:project_c/navigation/telegram_photo_page_route.dart';
 import 'package:project_c/presentation/product_details/product_details_widgets/product_details_widgets.dart';
 import 'package:project_c/services/product_details_preferences.dart';
-import 'package:project_c/services/store_products_prefetcher.dart';
 import 'package:project_c/services/view_beacon.dart';
-import 'package:project_c/session/catalog_session.dart';
 import 'package:project_c/webservice/catalog_error_mapper.dart';
 import 'package:project_c/webservice/collection/collection_repository.dart';
 
@@ -39,8 +44,30 @@ class _ProductDetailsRouteState extends State<ProductDetailsRoute> {
   late bool _previewAll;
   late bool _previewDetails;
   bool _imageZoomed = false;
+  /// Two fingers on the photo — lock [PageView] so pinch can start at 1×.
+  bool _multiTouchLockingPage = false;
   Map<String, Object?>? _popResult;
   Timer? _viewDwellTimer;
+  double _dismissDy = 0;
+
+  /// Avoid thumb↔page feedback loops while one side drives the other.
+  bool _syncingPageFromThumb = false;
+  bool _syncingThumbFromPage = false;
+  bool _thumbUserScrolling = false;
+
+  /// Defer media warm / view-dwell until filmstrip scrub settles (Telegram-smooth).
+  bool _deferWarmAfterThumbScrub = false;
+
+  /// Gallery-feed product to activate after scrub settles (avoids mid-fling work).
+  int? _pendingGalleryActivateIndex;
+
+  /// Vertical dismiss via [Listener] (does not join the gesture arena, so
+  /// horizontal PageView swipes stay snappy).
+  int? _dismissPointer;
+  Offset _dismissStart = Offset.zero;
+  bool _dismissArmed = false;
+  bool _pageSwipePreferred = false;
+  double _dismissVelocityY = 0;
 
   @override
   void initState() {
@@ -52,6 +79,7 @@ class _ProductDetailsRouteState extends State<ProductDetailsRoute> {
             : blocState.initialImageIndex;
     _pageIndex = initialPage;
     _pageController = PageController(initialPage: initialPage);
+    _pageController.addListener(_onPageScroll);
     _thumbController = ScrollController();
 
     final prefs = ServiceLocator.get<ProductDetailsPreferences>();
@@ -106,6 +134,7 @@ class _ProductDetailsRouteState extends State<ProductDetailsRoute> {
     _viewDwellTimer?.cancel();
     // ignore: unawaited_futures
     ViewBeacon.instance.flush();
+    _pageController.removeListener(_onPageScroll);
     _pageController.dispose();
     _thumbController.dispose();
     super.dispose();
@@ -140,58 +169,134 @@ class _ProductDetailsRouteState extends State<ProductDetailsRoute> {
       if (page != null && page.round() == targetPage) return;
     }
     final old = _pageController;
+    old.removeListener(_onPageScroll);
     _pageController = PageController(initialPage: targetPage);
+    _pageController.addListener(_onPageScroll);
     _pageIndex = targetPage;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       old.dispose();
-      if (mounted && _previewAll) _scrollThumbTo(targetPage);
+      if (mounted && _previewAll) _scrollThumbTo(targetPage, animate: false);
     });
   }
 
-  void _scrollThumbTo(int index) {
-    if (!_thumbController.hasClients) return;
-    const itemExtent = 72.0;
-    final targetOffset = (index * itemExtent) - 120;
-    final clamped = targetOffset.clamp(
+  static const double _thumbStride = ProductDetailsThumbStrip.itemStride;
+
+  double _thumbOffsetForPage(double page) {
+    if (!_thumbController.hasClients) return 0;
+    final target = page * _thumbStride;
+    return target.clamp(
       _thumbController.position.minScrollExtent,
       _thumbController.position.maxScrollExtent,
     );
-    _thumbController.animateTo(
-      clamped,
-      duration: const Duration(milliseconds: 200),
-      curve: Curves.easeOut,
-    );
+  }
+
+  void _scrollThumbTo(int index, {bool animate = true}) {
+    if (!_thumbController.hasClients || _syncingPageFromThumb) return;
+    final clamped = _thumbOffsetForPage(index.toDouble());
+    if ((_thumbController.offset - clamped).abs() < 0.5) return;
+    _syncingThumbFromPage = true;
+    if (animate) {
+      _thumbController
+          .animateTo(
+            clamped,
+            duration: const Duration(milliseconds: 220),
+            curve: Curves.easeOutCubic,
+          )
+          .whenComplete(() {
+            _syncingThumbFromPage = false;
+          });
+    } else {
+      _thumbController.jumpTo(clamped);
+      _syncingThumbFromPage = false;
+    }
+  }
+
+  /// Keep the filmstrip 1:1 with the pager while the main photo is mid-swipe.
+  void _onPageScroll() {
+    if (_syncingPageFromThumb || _thumbUserScrolling || !_previewAll) {
+      return;
+    }
+    if (!_pageController.hasClients || !_thumbController.hasClients) return;
+    final page = _pageController.page;
+    if (page == null) return;
+    final clamped = _thumbOffsetForPage(page);
+    if ((_thumbController.offset - clamped).abs() < 0.5) return;
+    _syncingThumbFromPage = true;
+    _thumbController.jumpTo(clamped);
+    _syncingThumbFromPage = false;
   }
 
   void _goToPage(int index) {
     if (!_pageController.hasClients) return;
-    _pageController.animateToPage(
-      index,
-      duration: const Duration(milliseconds: 220),
-      curve: Curves.easeOut,
-    );
-  }
-
-  void _openStoreGroup(ProductDetailsState state) {
-    final storeId = state.storeId?.trim() ?? '';
-    if (storeId.isEmpty || storeId == 'my_store' || storeId == 'other_store') {
+    // Telegram: tap scrolls that thumb to center and shows the photo.
+    _scrollThumbTo(index, animate: true);
+    if (index == _pageIndex) {
+      if (mounted) setState(() {});
       return;
     }
-    final productId = state.product.id.trim();
-    if (productId.isEmpty) return;
+    _syncingPageFromThumb = true;
+    _pageController.jumpToPage(index);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _syncingPageFromThumb = false;
+      // Tap path uses quiet onPageChanged — sync chrome once here.
+      if (mounted) setState(() {});
+      final state = context.read<ProductDetailsBloc>().state;
+      _activateGalleryProductIfNeeded(index, state);
+      _warmMedia(state);
+      _restartViewDwell(state);
+    });
+  }
 
-    // Warm products during the route transition (same as store listing tap).
-    StoreProductsPrefetcher.instance.prefetch(storeId);
+  /// Called when the user slows on a thumb (inspect) or when scrub ends.
+  /// Does not rebuild chrome mid-fling — that was killing free-flow momentum.
+  void _onThumbScrollIndex(int index) {
+    if (_syncingThumbFromPage || !_pageController.hasClients) return;
+    _thumbUserScrolling = true;
+    if (index == _pageIndex) return;
+    _deferWarmAfterThumbScrub = true;
+    _syncingPageFromThumb = true;
+    _pageController.jumpToPage(index);
+    // Keep flag true until the page notification finishes (same frame).
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _syncingPageFromThumb = false;
+    });
+  }
 
-    Navigator.of(context).pushNamed(
-      Routes.storeProfileRoute,
-      arguments: <String, Object?>{
-        'storeId': storeId,
-        'storeName': state.storeName,
-        'storeLink': state.storeLink,
-        'isOwnStore': state.isOwnStore,
-        'focusProductId': productId,
-      },
+  void _onThumbScrollEnd() {
+    _thumbUserScrolling = false;
+    _syncingPageFromThumb = false;
+    // One chrome rebuild after free-flow settles (title / meta / highlight).
+    if (mounted) setState(() {});
+    final state = context.read<ProductDetailsBloc>().state;
+    final pendingGallery = _pendingGalleryActivateIndex;
+    _pendingGalleryActivateIndex = null;
+    if (pendingGallery != null) {
+      _activateGalleryProductIfNeeded(pendingGallery, state);
+    }
+    if (_deferWarmAfterThumbScrub) {
+      _deferWarmAfterThumbScrub = false;
+      _warmMedia(state);
+      _restartViewDwell(state);
+    }
+  }
+
+  void _activateGalleryProductIfNeeded(
+    int index,
+    ProductDetailsState state,
+  ) {
+    if (!state.hasGalleryFeed) return;
+    if (index < 0 || index >= state.galleryFeed!.length) return;
+    final entry = state.galleryFeed![index];
+    final activeId = state.product.id;
+    if (entry.product.id == activeId) return;
+    context.read<ProductDetailsBloc>().add(
+      ProductDetailsActivateProduct(
+        entry.product,
+        storeId: entry.storeId,
+        storeName: entry.storeName,
+        storeLink: entry.storeLink,
+        seedCategory: entry.seedCategory,
+      ),
     );
   }
 
@@ -220,132 +325,272 @@ class _ProductDetailsRouteState extends State<ProductDetailsRoute> {
   }
 
   void _onPageChanged(int index, ProductDetailsState state) {
+    final scrubbing = _syncingPageFromThumb || _thumbUserScrolling;
+    if (scrubbing) {
+      // Quiet update — no setState. Parent rebuilds mid-fling stop the strip.
+      _pageIndex = index;
+      _imageZoomed = false;
+      _multiTouchLockingPage = false;
+      _deferWarmAfterThumbScrub = true;
+      if (state.hasGalleryFeed) {
+        _pendingGalleryActivateIndex = index;
+      }
+      return;
+    }
+
     setState(() {
       _pageIndex = index;
       // Re-enable swipe after leaving a zoomed page (page itself resets on dispose).
       _imageZoomed = false;
+      _multiTouchLockingPage = false;
     });
     _warmMedia(state);
-    if (_previewAll) _scrollThumbTo(index);
-    if (state.hasGalleryFeed) {
-      final entry = state.galleryFeed![index];
-      final activeId = context.read<ProductDetailsBloc>().state.product.id;
-      if (entry.product.id != activeId) {
-        context.read<ProductDetailsBloc>().add(
-          ProductDetailsActivateProduct(
-            entry.product,
-            storeId: entry.storeId,
-            storeName: entry.storeName,
-            storeLink: entry.storeLink,
-            seedCategory: entry.seedCategory,
-          ),
-        );
-      }
+    _restartViewDwell(state);
+    // PageView swipe syncs the strip via [_onPageScroll]; settle align here.
+    if (_previewAll) {
+      _scrollThumbTo(index, animate: false);
     }
-    final latest = context.read<ProductDetailsBloc>().state;
-    _restartViewDwell(latest);
-  }
-
-  List<String> _editTags(ProductDetailsState state) {
-    final raw = state.apiTag.trim();
-    if (raw.isEmpty) return [];
-    return raw
-        .split(',')
-        .map((t) => t.trim().toLowerCase())
-        .where((t) => t.isNotEmpty)
-        .toList();
+    _activateGalleryProductIfNeeded(index, state);
   }
 
   Future<void> _openEdit(ProductDetailsState state) async {
     context.read<ProductDetailsBloc>().add(const ProductDetailsClearOpenEdit());
-    final storeId = state.storeId;
-    if (storeId == null || storeId.isEmpty) return;
+    await _openRefineEdit(state);
+  }
 
-    final choice = await showModalBottomSheet<_EditChoice>(
+  Future<void> _editAvailability(ProductDetailsState state) async {
+    final product = state.product;
+    var stock = product.stockStatus ?? CatalogStockStatus.inStock;
+    var locked = product.isLocked;
+    var mtoDays = product.mtoDays ?? 7;
+    final saved = await showModalBottomSheet<bool>(
       context: context,
       backgroundColor: AppColors.surface,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
       builder: (sheetContext) {
-        return SafeArea(
-          child: Padding(
-            padding: const EdgeInsets.symmetric(vertical: 8),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                ListTile(
-                  leading: const Icon(Icons.edit_outlined),
-                  title: Text(
-                    'Edit title, tags & photos',
-                    style: AppTextStyles.body(),
+        return StatefulBuilder(
+          builder: (context, setSheetState) {
+            return Padding(
+              padding: EdgeInsets.fromLTRB(
+                AppPadding.horizontal,
+                16,
+                AppPadding.horizontal,
+                16 + MediaQuery.paddingOf(context).bottom,
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Text(
+                    'Availability',
+                    style: AppTextStyles.headline(
+                      fontSize: 18,
+                      fontWeight: FontWeight.w700,
+                      color: AppColors.textPrimary,
+                    ),
                   ),
-                  onTap:
-                      () => Navigator.of(
-                        sheetContext,
-                      ).pop(_EditChoice.metadataPhotos),
-                ),
-                ListTile(
-                  leading: const Icon(Icons.tune_rounded),
-                  title: Text(
-                    'Refine items & details',
-                    style: AppTextStyles.body(),
+                  const SizedBox(height: 12),
+                  Text(
+                    'Stock',
+                    style: AppTextStyles.caption(color: AppColors.textPrimary),
                   ),
-                  onTap:
-                      () =>
-                          Navigator.of(sheetContext).pop(_EditChoice.refine),
-                ),
-              ],
-            ),
-          ),
+                  const SizedBox(height: 6),
+                  Wrap(
+                    spacing: 8,
+                    children: [
+                      for (final s in CatalogStockStatus.values)
+                        ChoiceChip(
+                          label: Text(
+                            s.shortLabel,
+                            style: AppTextStyles.caption(
+                              fontWeight: FontWeight.w600,
+                              color:
+                                  stock == s
+                                      ? AppColors.textOnPrimary
+                                      : AppColors.textPrimary,
+                            ),
+                          ),
+                          selected: stock == s,
+                          selectedColor: AppColors.primary,
+                          backgroundColor: AppColors.surfaceSecondary,
+                          side: BorderSide(
+                            color:
+                                stock == s
+                                    ? AppColors.primary
+                                    : AppColors.textPrimary.withValues(
+                                      alpha: 0.25,
+                                    ),
+                          ),
+                          showCheckmark: false,
+                          onSelected: (_) => setSheetState(() => stock = s),
+                        ),
+                    ],
+                  ),
+                  if (stock == CatalogStockStatus.mto) ...[
+                    const SizedBox(height: 12),
+                    Text(
+                      'MTO days',
+                      style: AppTextStyles.caption(
+                        color: AppColors.textPrimary,
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                    TextFormField(
+                      initialValue: '$mtoDays',
+                      keyboardType: TextInputType.number,
+                      style: AppTextStyles.body(color: AppColors.textPrimary),
+                      decoration: InputDecoration(
+                        isDense: true,
+                        border: const OutlineInputBorder(),
+                        filled: true,
+                        fillColor: AppColors.surfaceSecondary,
+                      ),
+                      onChanged: (v) {
+                        final n = int.tryParse(v.trim());
+                        if (n != null && n > 0) mtoDays = n;
+                      },
+                    ),
+                  ],
+                  const SizedBox(height: 12),
+                  SwitchListTile.adaptive(
+                    contentPadding: EdgeInsets.zero,
+                    title: Text(
+                      'Locked',
+                      style: AppTextStyles.body(color: AppColors.textPrimary),
+                    ),
+                    subtitle: Text(
+                      'Hidden from non-followers',
+                      style: AppTextStyles.caption(
+                        color: AppColors.textPrimary.withValues(alpha: 0.7),
+                      ),
+                    ),
+                    value: locked,
+                    onChanged: (v) => setSheetState(() => locked = v),
+                  ),
+                  const SizedBox(height: 8),
+                  FilledButton(
+                    onPressed: () => Navigator.of(sheetContext).pop(true),
+                    child: Text(
+                      'Save',
+                      style: AppTextStyles.button(
+                        color: AppColors.textOnPrimary,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            );
+          },
         );
       },
     );
-    if (!mounted || choice == null) return;
+    if (!mounted || saved != true) return;
 
-    switch (choice) {
-      case _EditChoice.metadataPhotos:
-        await _openMetadataEdit(state);
-      case _EditChoice.refine:
-        await _openRefineEdit(state);
+    final productIds = _availabilityProductIds(state);
+    BeVerify.step(
+      '3 Availability UI',
+      detail:
+          'listing=${BeVerify.shortId(product.id)} '
+          'patchIds=${productIds.map(BeVerify.shortId).join(",")} '
+          'stock=${stock.apiValue} locked=$locked',
+    );
+    if (productIds.isEmpty) {
+      BeVerify.fail('availability — no product ids (would 404 on collection id)');
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Could not find a product id for availability. Try again after photos load.',
+          ),
+        ),
+      );
+      return;
+    }
+    if (productIds.contains(product.id.trim())) {
+      BeVerify.info(
+        'availability patch includes listing id',
+        detail: 'ok if listing is a real product id',
+      );
+    } else {
+      BeVerify.ok(
+        'availability uses embedded product ids (not collection id)',
+        detail: 'n=${productIds.length}',
+      );
+    }
+
+    try {
+      final repo = ServiceLocator.get<CollectionRepository>();
+      final body = <String, dynamic>{
+        'stock_status': stock.apiValue,
+        if (stock == CatalogStockStatus.mto) 'mto_days': mtoDays,
+        'is_locked': locked,
+      };
+      // Collection listings embed multiple CatalogProducts — PATCH each product
+      // id (never the collection id; that 404s as PRODUCT_NOT_FOUND).
+      CatalogProduct? last;
+      for (final id in productIds) {
+        last = await repo.updateProduct(productId: id, body: body);
+      }
+      if (!mounted) return;
+      final mapped =
+          last != null
+              ? CatalogUiMapper.catalogProductToStoreProduct(last)
+              : null;
+      final nextLocked = mapped?.isLocked ?? locked;
+      final nextStock = mapped?.stockStatus ?? stock;
+      final nextMto = mapped?.mtoDays ?? mtoDays;
+      final nextProduct = product.copyWith(
+        isLocked: nextLocked,
+        stockStatus: nextStock,
+        mtoDays: nextMto,
+      );
+      BeVerify.ok(
+        'availability applied locally',
+        detail:
+            'locked=$nextLocked stock=${nextStock.apiValue} '
+            'pop updated=true',
+      );
+      context.read<ProductDetailsBloc>().add(
+        ProductDetailsApplyEditedProduct(
+          product: nextProduct,
+          revision: state.revision,
+        ),
+      );
+      // So store profile grid keeps lock/stock after pop → reopen.
+      _popResult = <String, Object?>{
+        'updated': true,
+        ...nextProduct.toMap(),
+      };
+    } catch (e) {
+      BeVerify.fail('availability apply', detail: '$e');
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(CatalogErrorMapper.toUserMessage(e))),
+      );
     }
   }
 
-  Future<void> _openMetadataEdit(ProductDetailsState state) async {
-    final storeId = state.storeId;
-    if (storeId == null || storeId.isEmpty) return;
-
-    final result = await Navigator.of(context).pushNamed(
-      Routes.addProductFormRoute,
-      arguments: <String, Object?>{
-        'mode': 'edit',
-        'storeId': storeId,
-        'listingId': state.product.id,
-        'revision': state.revision,
-        'title': state.product.title,
-        'description': state.product.description,
-        'tags': _editTags(state),
-        'imagePaths': state.product.imagePaths,
-        'photoAssetIds': state.product.photoAssetIds,
-      },
-    );
-    if (!mounted) return;
-    if (result is! Map) return;
-
-    final payload = Map<String, Object?>.from(result);
-    final revision = payload['revision'];
-    final apiTag = (payload['apiTag'] as String?) ?? '';
-    final product = StoreProduct.fromMap(payload);
-    _popResult = <String, Object?>{
-      'updated': true,
-      ...product.toMap(),
-      if (payload['replacedListingId'] is String)
-        'replacedListingId': payload['replacedListingId'],
-    };
-    context.read<ProductDetailsBloc>().add(
-      ProductDetailsApplyEditedProduct(
-        product: product,
-        revision: revision is int ? revision : state.revision,
-        apiTag: apiTag,
-      ),
-    );
+  /// Real CatalogProduct ids for availability PATCH (not collection listing id).
+  List<String> _availabilityProductIds(ProductDetailsState state) {
+    final ids = <String>{};
+    for (final id in state.product.photoAssetIds) {
+      final trimmed = id.trim();
+      if (trimmed.isNotEmpty && !trimmed.startsWith('img_')) {
+        ids.add(trimmed);
+      }
+    }
+    for (final id in state.productSpecsById.keys) {
+      final trimmed = id.trim();
+      if (trimmed.isNotEmpty && !trimmed.startsWith('img_')) {
+        ids.add(trimmed);
+      }
+    }
+    if (ids.isEmpty && state.usesProductLike) {
+      final id = state.product.id.trim();
+      if (id.isNotEmpty) ids.add(id);
+    }
+    return ids.toList(growable: false);
   }
 
   Future<void> _openRefineEdit(ProductDetailsState state) async {
@@ -354,16 +599,29 @@ class _ProductDetailsRouteState extends State<ProductDetailsRoute> {
 
     BulkUploadBloc? bloc;
     try {
+      final listingId =
+          state.product.collectionId.trim().isNotEmpty
+              ? state.product.collectionId.trim()
+              : state.product.id;
       final detail = await ServiceLocator.get<CollectionRepository>()
-          .fetchCollection(storeId: storeId, listingId: state.product.id);
+          .fetchCollection(storeId: storeId, listingId: listingId);
       if (!mounted) return;
+      final photoId = state.photoIdAt(_productImageIndex(state));
       bloc = BulkUploadBloc.fromCollectionDetail(
         detail: detail,
         storeId: storeId,
+        initiallySelectedIds: photoId.isNotEmpty ? [photoId] : const [],
       );
       final result = await Navigator.of(context).pushNamed(
         Routes.addProductGroupPreviewRoute,
-        arguments: <String, Object?>{'bloc': bloc},
+        arguments: <String, Object?>{
+          'bloc': bloc,
+          'autoOpenEdit': photoId.isNotEmpty,
+          if (detail.stockStatus != null)
+            'stockStatus': detail.stockStatus!.apiValue,
+          if (detail.mtoDays != null) 'mtoDays': detail.mtoDays,
+          'isLocked': detail.isLocked,
+        },
       );
       if (!mounted) return;
       if (result is! Map) return;
@@ -371,7 +629,39 @@ class _ProductDetailsRouteState extends State<ProductDetailsRoute> {
       final payload = Map<String, Object?>.from(result);
       final revision = payload['revision'];
       final apiTag = (payload['apiTag'] as String?) ?? '';
-      final product = StoreProduct.fromMap(payload);
+      var product = StoreProduct.fromMap(payload);
+
+      // Re-fetch so weight/purity chrome (productSpecsById) matches what edit
+      // just PATCHed — StoreProduct alone does not carry per-photo specs.
+      ProductSpec? specifications;
+      Map<String, ProductSpec>? productSpecsById;
+      String? precisionTag;
+      List<CollectionSubGroup>? subGroups;
+      var nextRevision = revision is int ? revision : state.revision;
+      var nextApiTag = apiTag;
+      try {
+        final refreshed = await ServiceLocator.get<CollectionRepository>()
+            .fetchCollection(storeId: storeId, listingId: listingId);
+        if (!mounted) return;
+        product = CatalogUiMapper.detailToProduct(refreshed).copyWith(
+          canEdit: product.canEdit || state.canEdit,
+          canDelete: product.canDelete || state.canDelete,
+          likeCount: product.likeCount ?? refreshed.likeCount,
+          viewCount: product.viewCount ?? refreshed.viewCount,
+        );
+        nextRevision = refreshed.revision;
+        nextApiTag =
+            refreshed.tag.trim().isNotEmpty ? refreshed.tag : nextApiTag;
+        specifications = ProductSpec.fromApiJson(
+          refreshed.specifications?.toJson(),
+        );
+        productSpecsById = refreshed.productSpecsById;
+        precisionTag = refreshed.precisionTag;
+        subGroups = refreshed.subGroups;
+      } catch (_) {
+        // Keep payload product; details still get ApplyEditedProduct below.
+      }
+
       _popResult = <String, Object?>{
         'updated': true,
         ...product.toMap(),
@@ -379,8 +669,12 @@ class _ProductDetailsRouteState extends State<ProductDetailsRoute> {
       context.read<ProductDetailsBloc>().add(
         ProductDetailsApplyEditedProduct(
           product: product,
-          revision: revision is int ? revision : state.revision,
-          apiTag: apiTag,
+          revision: nextRevision,
+          apiTag: nextApiTag,
+          specifications: specifications,
+          productSpecsById: productSpecsById,
+          precisionTag: precisionTag,
+          subGroups: subGroups,
         ),
       );
     } catch (e) {
@@ -394,26 +688,94 @@ class _ProductDetailsRouteState extends State<ProductDetailsRoute> {
   }
 
   void _popDetails() {
-    Navigator.of(context).pop(_popResult);
+    // So Telegram close continues from the dragged frame (not a full-size flash).
+    if (_dismissDy > 0) {
+      final dismissT = (_dismissDy / 240).clamp(0.0, 1.0);
+      TelegramPhotoCloseAnchor.arm(
+        dy: _dismissDy,
+        scale: 1 - dismissT * 0.08,
+      );
+    } else {
+      TelegramPhotoCloseAnchor.clear();
+    }
+    // Push aggregated like / view / wishlist counts to the store card on close.
+    var result = _popResult;
+    if (mounted) {
+      final state = context.read<ProductDetailsBloc>().state;
+      final product = state.product;
+      final likes = product.likeCount ?? 0;
+      final views = product.viewCount ?? 0;
+      final wish = state.wishlistedProductIds.length;
+      if (result == null && (likes > 0 || views > 0 || wish > 0)) {
+        result = <String, Object?>{
+          'updated': true,
+          'silent': true,
+          ...product.toMap(),
+          if (wish > 0) 'wishlistCount': wish,
+        };
+      } else if (result != null && wish > 0) {
+        result = <String, Object?>{
+          ...result,
+          'wishlistCount': wish,
+        };
+      }
+    }
+    Navigator.of(context).pop(result);
   }
 
-  void _openOwnWishlist(BuildContext context) {
-    final session = ServiceLocator.get<CatalogSession>();
-    final storeId = session.ownStoreId?.trim() ?? '';
-    if (storeId.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Create a store to open Wishlist from My store.'),
-        ),
-      );
+  void _resetDismissTracking() {
+    _dismissPointer = null;
+    _dismissArmed = false;
+    _pageSwipePreferred = false;
+    _dismissVelocityY = 0;
+  }
+
+  void _onDismissPointerDown(PointerDownEvent event) {
+    if (_imageZoomed) return;
+    _dismissPointer = event.pointer;
+    _dismissStart = event.position;
+    _dismissArmed = false;
+    _pageSwipePreferred = false;
+    _dismissVelocityY = 0;
+  }
+
+  void _onDismissPointerMove(PointerMoveEvent event) {
+    if (_imageZoomed || event.pointer != _dismissPointer) return;
+    final delta = event.position - _dismissStart;
+    if (!_dismissArmed && !_pageSwipePreferred) {
+      final adx = delta.dx.abs();
+      final ady = delta.dy.abs();
+      if (adx > 10 && adx > ady) {
+        // Horizontal intent — leave the pager alone (no arena fight).
+        _pageSwipePreferred = true;
+        return;
+      }
+      if (delta.dy > 12 && ady > adx) {
+        _dismissArmed = true;
+        if (_showInfo) {
+          setState(() => _showInfo = false);
+        }
+      }
+    }
+    if (!_dismissArmed || _pageSwipePreferred) return;
+    final next = delta.dy.clamp(0.0, 280.0);
+    _dismissVelocityY = event.delta.dy;
+    if (next == _dismissDy) return;
+    setState(() => _dismissDy = next);
+  }
+
+  void _onDismissPointerEnd(PointerEvent event) {
+    if (event.pointer != _dismissPointer) return;
+    final shouldPop =
+        _dismissArmed && (_dismissDy > 90 || _dismissVelocityY > 18);
+    _resetDismissTracking();
+    if (shouldPop) {
+      _popDetails();
       return;
     }
-    // Land on shell Wishlist tab (owner bottom-nav removed from store profile).
-    Navigator.of(context).popUntil(
-      (route) =>
-          route.settings.name == Routes.storeListingRoute || route.isFirst,
-    );
-    ShellNav.request(ShellNavTab.wishlist);
+    if (_dismissDy != 0) {
+      setState(() => _dismissDy = 0);
+    }
   }
 
   Future<void> _confirmDeletePhoto(ProductDetailsState state) async {
@@ -478,25 +840,6 @@ class _ProductDetailsRouteState extends State<ProductDetailsRoute> {
           },
         ),
         BlocListener<ProductDetailsBloc, ProductDetailsState>(
-          listenWhen:
-              (prev, curr) =>
-                  curr.showWishlistSnack && !prev.showWishlistSnack,
-          listener: (context, state) {
-            context.read<ProductDetailsBloc>().add(
-              const ProductDetailsClearWishlistSnack(),
-            );
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(
-                content: const Text('Saved to Wishlist'),
-                action: SnackBarAction(
-                  label: 'View',
-                  onPressed: () => _openOwnWishlist(context),
-                ),
-              ),
-            );
-          },
-        ),
-        BlocListener<ProductDetailsBloc, ProductDetailsState>(
           listenWhen: (prev, curr) => curr.shouldOpenEdit && !prev.shouldOpenEdit,
           listener: (context, state) => _openEdit(state),
         ),
@@ -525,7 +868,7 @@ class _ProductDetailsRouteState extends State<ProductDetailsRoute> {
                       prev.initialImageIndex != curr.initialImageIndex),
           listener: (context, state) {
             // Wishlist / single-photo seed → full collection: jump to the
-            // matched liked photo (keeps heart filled, avoids flash to photo 0).
+            // matched liked photo (keeps like filled, avoids flash to photo 0).
             _reseatPager(state.initialImageIndex);
             _restartViewDwell(state);
           },
@@ -583,10 +926,47 @@ class _ProductDetailsRouteState extends State<ProductDetailsRoute> {
             });
           },
         ),
+        // After like/unlike, sync listing likeCount back to store grid (silent).
+        BlocListener<ProductDetailsBloc, ProductDetailsState>(
+          listenWhen:
+              (prev, curr) =>
+                  !curr.isLikeBusy &&
+                  prev.isLikeBusy &&
+                  prev.product.likeCount != curr.product.likeCount,
+          listener: (context, state) {
+            _popResult = <String, Object?>{
+              'updated': true,
+              'silent': true,
+              ...state.product.toMap(),
+              if (state.wishlistedProductIds.isNotEmpty)
+                'wishlistCount': state.wishlistedProductIds.length,
+            };
+          },
+        ),
+        // After wishlist toggle, sync viewer-private wishlistCount on the card.
+        BlocListener<ProductDetailsBloc, ProductDetailsState>(
+          listenWhen:
+              (prev, curr) =>
+                  !curr.isWishlistBusy &&
+                  prev.isWishlistBusy &&
+                  prev.wishlistedProductIds.length !=
+                      curr.wishlistedProductIds.length,
+          listener: (context, state) {
+            final wish = state.wishlistedProductIds.length;
+            _popResult = <String, Object?>{
+              'updated': true,
+              'silent': true,
+              ...state.product.toMap(),
+              'wishlistCount': wish,
+            };
+          },
+        ),
       ],
       child: ScreenWrapper(
         backgroundColor: Colors.black,
         statusBarIconBrightness: Brightness.light,
+        // Full-bleed photo (Telegram flyer lands on contain frame, then chrome).
+        extendBodyBehindBottom: true,
         child: PopScope(
           canPop: false,
           onPopInvokedWithResult: (didPop, result) {
@@ -595,6 +975,57 @@ class _ProductDetailsRouteState extends State<ProductDetailsRoute> {
           },
           child: BlocBuilder<ProductDetailsBloc, ProductDetailsState>(
           builder: (context, state) {
+            if (state.isContentLocked) {
+              return ScreenWrapper(
+                backgroundColor: AppColors.background,
+                child: SafeArea(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Padding(
+                        padding: AppPadding.screen(top: 8, bottom: 0),
+                        child: Align(
+                          alignment: Alignment.centerLeft,
+                          child: AppBackButton(
+                            onPressed: () => Navigator.of(context).maybePop(),
+                          ),
+                        ),
+                      ),
+                      Expanded(
+                        child: Center(
+                          child: Padding(
+                            padding: AppPadding.screenHorizontal,
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(
+                                  Icons.lock_rounded,
+                                  size: 48,
+                                  color: AppColors.textSecondary,
+                                ),
+                                const SizedBox(height: 16),
+                                Text(
+                                  'Locked product',
+                                  style: AppTextStyles.title(fontSize: 20),
+                                  textAlign: TextAlign.center,
+                                ),
+                                const SizedBox(height: 8),
+                                Text(
+                                  'Follow this store and get approved to view locked products.',
+                                  style: AppTextStyles.bodySecondary(),
+                                  textAlign: TextAlign.center,
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              );
+            }
+
             final product = state.product;
             final imagePaths = product.imagePaths;
             final feed = state.galleryFeed;
@@ -604,59 +1035,114 @@ class _ProductDetailsRouteState extends State<ProductDetailsRoute> {
                     ? feed!.length
                     : (imagePaths.isEmpty ? 1 : imagePaths.length);
             final photoIndex = _productImageIndex(state);
+            final importPending =
+                useFeed &&
+                        feed != null &&
+                        _pageIndex >= 0 &&
+                        _pageIndex < feed.length
+                    ? feed[_pageIndex].product.isImportPendingAt(
+                      feed[_pageIndex].imageIndex,
+                    )
+                    : product.isImportPendingAt(photoIndex);
+            final importDeclined =
+                useFeed &&
+                        feed != null &&
+                        _pageIndex >= 0 &&
+                        _pageIndex < feed.length
+                    ? feed[_pageIndex].product.isImportDeclinedAt(
+                      feed[_pageIndex].imageIndex,
+                    )
+                    : product.isImportDeclinedAt(photoIndex);
+            final dismissT = (_dismissDy / 240).clamp(0.0, 1.0);
 
-            return Stack(
-              children: [
-                Positioned.fill(
-                  child: PageView.builder(
-                    controller: _pageController,
-                    physics:
-                        _imageZoomed
-                            ? const NeverScrollableScrollPhysics()
-                            : const BouncingScrollPhysics(
-                              parent: PageScrollPhysics(),
-                            ),
-                    itemCount: pageCount,
-                    onPageChanged: (index) => _onPageChanged(index, state),
-                    itemBuilder: (context, index) {
-                      final path =
-                          useFeed
-                              ? feed![index].path
-                              : (imagePaths.isEmpty
-                                  ? null
-                                  : imagePaths[index]);
-                      final tone =
-                          useFeed
-                              ? feed![index].product.toneIndex
-                              : product.toneIndex;
+            return Listener(
+              behavior: HitTestBehavior.deferToChild,
+              onPointerDown: _onDismissPointerDown,
+              onPointerMove: _onDismissPointerMove,
+              onPointerUp: _onDismissPointerEnd,
+              onPointerCancel: _onDismissPointerEnd,
+              child: Opacity(
+                opacity: 1 - dismissT * 0.35,
+                child: Transform.translate(
+                  offset: Offset(0, _dismissDy),
+                  child: Transform.scale(
+                    scale: 1 - dismissT * 0.08,
+                    child: Stack(
+                      children: [
+                        Positioned.fill(
+                          child: PageView.builder(
+                            controller: _pageController,
+                            allowImplicitScrolling: true,
+                            physics:
+                                _imageZoomed ||
+                                        _multiTouchLockingPage ||
+                                        _dismissArmed
+                                    ? const NeverScrollableScrollPhysics()
+                                    : const BouncingScrollPhysics(
+                                      decelerationRate:
+                                          ScrollDecelerationRate.fast,
+                                      parent: PageScrollPhysics(),
+                                    ),
+                            itemCount: pageCount,
+                            onPageChanged:
+                                (index) => _onPageChanged(index, state),
+                            itemBuilder: (context, index) {
+                              final path =
+                                  useFeed
+                                      ? feed![index].path
+                                      : (imagePaths.isEmpty
+                                          ? null
+                                          : imagePaths[index]);
+                              final tone =
+                                  useFeed
+                                      ? feed![index].product.toneIndex
+                                      : product.toneIndex;
 
-                      if (path == null ||
-                          path.isEmpty ||
-                          !ProductImagePaths.isDisplayable(path)) {
-                        return GestureDetector(
-                          behavior: HitTestBehavior.opaque,
-                          onTap: () => setState(() => _showInfo = !_showInfo),
-                          child: _ImagePlaceholder(tone: tone),
-                        );
-                      }
+                              if (path == null ||
+                                  path.isEmpty ||
+                                  !ProductImagePaths.isDisplayable(path)) {
+                                return GestureDetector(
+                                  behavior: HitTestBehavior.opaque,
+                                  onTap:
+                                      () => setState(
+                                        () => _showInfo = !_showInfo,
+                                      ),
+                                  child: _ImagePlaceholder(tone: tone),
+                                );
+                              }
 
-                      return ProductDetailsZoomablePhoto(
-                        // Key so each page keeps its own transform / zoom state.
-                        key: ValueKey<String>('pd-zoom-$index-$path'),
-                        path: path,
-                        isActive: index == _pageIndex,
-                        onTap: () => setState(() => _showInfo = !_showInfo),
-                        onZoomChanged: (zoomed) {
-                          if (!mounted) return;
-                          // Only the active page drives PageView physics.
-                          if (index != _pageIndex && zoomed) return;
-                          if (_imageZoomed == zoomed) return;
-                          setState(() => _imageZoomed = zoomed);
-                        },
-                      );
-                    },
-                  ),
-                ),
+                              return ProductDetailsZoomablePhoto(
+                                key: ValueKey<String>(
+                                  'pd-zoom-$index-$path',
+                                ),
+                                path: path,
+                                isActive: index == _pageIndex,
+                                onTap:
+                                    () => setState(
+                                      () => _showInfo = !_showInfo,
+                                    ),
+                                onZoomChanged: (zoomed) {
+                                  if (!mounted) return;
+                                  if (index != _pageIndex && zoomed) {
+                                    return;
+                                  }
+                                  if (_imageZoomed == zoomed) return;
+                                  setState(() => _imageZoomed = zoomed);
+                                },
+                                onMultiTouchChanged: (multi) {
+                                  if (!mounted) return;
+                                  if (index != _pageIndex && multi) {
+                                    return;
+                                  }
+                                  if (_multiTouchLockingPage == multi) return;
+                                  setState(
+                                    () => _multiTouchLockingPage = multi,
+                                  );
+                                },
+                              );
+                            },
+                          ),
+                        ),
                 // Tap-to-show chrome: back + title + menu, then store / category.
                 Positioned(
                   top: 0,
@@ -733,7 +1219,6 @@ class _ProductDetailsRouteState extends State<ProductDetailsRoute> {
                                     likeCount: state.likeCountForPhoto(
                                       photoIndex,
                                     ),
-                                    busy: state.isLikeBusy,
                                     onTap: () {
                                       context.read<ProductDetailsBloc>().add(
                                         ProductDetailsLikePressed(
@@ -743,6 +1228,24 @@ class _ProductDetailsRouteState extends State<ProductDetailsRoute> {
                                     },
                                   ),
                                   const SizedBox(width: 4),
+                                  if (!state.isOwnStore) ...[
+                                    _WishlistIconButton(
+                                      wishlisted: state.isPhotoWishlisted(
+                                        photoIndex,
+                                      ),
+                                      busy: state.isWishlistBusy,
+                                      onTap: () {
+                                        context
+                                            .read<ProductDetailsBloc>()
+                                            .add(
+                                              ProductDetailsWishlistPressed(
+                                                imageIndex: photoIndex,
+                                              ),
+                                            );
+                                      },
+                                    ),
+                                    const SizedBox(width: 4),
+                                  ],
                                   PopupMenuButton<_OverflowAction>(
                                     tooltip: 'More',
                                     color: AppColors.surface,
@@ -763,6 +1266,10 @@ class _ProductDetailsRouteState extends State<ProductDetailsRoute> {
                                               .add(
                                                 const ProductDetailsEditPressed(),
                                               );
+                                        case _OverflowAction.availability:
+                                          unawaited(
+                                            _editAvailability(state),
+                                          );
                                         case _OverflowAction.share:
                                           final path = _currentImagePath(state);
                                           context
@@ -810,6 +1317,24 @@ class _ProductDetailsRouteState extends State<ProductDetailsRoute> {
                                                 const SizedBox(width: 12),
                                                 Text(
                                                   'Edit',
+                                                  style: AppTextStyles.body(),
+                                                ),
+                                              ],
+                                            ),
+                                          ),
+                                        if (state.canEdit)
+                                          PopupMenuItem(
+                                            value: _OverflowAction.availability,
+                                            child: Row(
+                                              children: [
+                                                Icon(
+                                                  Icons.inventory_2_outlined,
+                                                  size: 20,
+                                                  color: AppColors.textPrimary,
+                                                ),
+                                                const SizedBox(width: 12),
+                                                Text(
+                                                  'Availability',
                                                   style: AppTextStyles.body(),
                                                 ),
                                               ],
@@ -890,74 +1415,26 @@ class _ProductDetailsRouteState extends State<ProductDetailsRoute> {
                                   ),
                                 ],
                               ),
-                              if (state.storeName.trim().isNotEmpty) ...[
-                                const SizedBox(height: 14),
-                                if (state.showStoreGroupLink &&
-                                    (state.storeId?.trim().isNotEmpty ??
-                                        false))
-                                  GestureDetector(
-                                    onTap: () => _openStoreGroup(state),
-                                    behavior: HitTestBehavior.opaque,
-                                    child: Row(
-                                      mainAxisSize: MainAxisSize.min,
-                                      children: [
-                                        Flexible(
-                                          child: Text(
-                                            state.storeName,
-                                            maxLines: 1,
-                                            overflow: TextOverflow.ellipsis,
-                                            style: AppTextStyles.body(
-                                              fontSize: 14,
-                                              fontWeight: FontWeight.w500,
-                                              color: AppColors.textOnPrimary
-                                                  .withValues(alpha: 0.88),
-                                            ),
-                                          ),
-                                        ),
-                                        const SizedBox(width: 2),
-                                        Icon(
-                                          Icons.chevron_right_rounded,
-                                          size: 20,
-                                          color: AppColors.textOnPrimary
-                                              .withValues(alpha: 0.88),
-                                        ),
-                                      ],
-                                    ),
-                                  )
-                                else
-                                  Text(
-                                    state.storeName,
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                    style: AppTextStyles.body(
-                                      fontSize: 14,
-                                      fontWeight: FontWeight.w500,
-                                      color: AppColors.textOnPrimary.withValues(
-                                        alpha: 0.88,
-                                      ),
-                                    ),
+                              // Store name, store-group link, and category/
+                              // title under the toolbar are omitted (owner +
+                              // visitor). Only exceptional lock / stock /
+                              // pending-import chrome.
+                              if (_previewDetails &&
+                                  ProductDetailsLockStockRow.shouldShow(
+                                    isLocked: product.isLocked,
+                                    stockStatus: product.stockStatus,
+                                    importPending: importPending,
+                                    importDeclined: importDeclined,
+                                  ))
+                                Padding(
+                                  padding: const EdgeInsets.only(top: 14),
+                                  child: ProductDetailsLockStockRow(
+                                    isLocked: product.isLocked,
+                                    stockStatus: product.stockStatus,
+                                    mtoDays: product.mtoDays,
+                                    importPending: importPending,
+                                    importDeclined: importDeclined,
                                   ),
-                              ],
-                              if (_previewDetails)
-                                Builder(
-                                  builder: (context) {
-                                    final category = state
-                                        .categoryLabelForPhoto(photoIndex);
-                                    if (category.isEmpty) {
-                                      return const SizedBox.shrink();
-                                    }
-                                    return Padding(
-                                      padding: EdgeInsets.only(
-                                        top:
-                                            state.storeName.trim().isNotEmpty
-                                                ? 10
-                                                : 14,
-                                      ),
-                                      child: ProductDetailsCategoryPill(
-                                        label: category,
-                                      ),
-                                    );
-                                  },
                                 ),
                             ],
                           ),
@@ -988,7 +1465,11 @@ class _ProductDetailsRouteState extends State<ProductDetailsRoute> {
                           ),
                         ),
                         child: Padding(
-                          padding: AppPadding.screen(top: 56, bottom: 20),
+                          padding: AppPadding.screen(
+                            top: 56,
+                            bottom:
+                                20 + MediaQuery.viewPaddingOf(context).bottom,
+                          ),
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.stretch,
                             mainAxisSize: MainAxisSize.min,
@@ -1014,6 +1495,8 @@ class _ProductDetailsRouteState extends State<ProductDetailsRoute> {
                                   activeIndex: _pageIndex,
                                   controller: _thumbController,
                                   onTapIndex: _goToPage,
+                                  onScrollIndex: _onThumbScrollIndex,
+                                  onScrollEnd: _onThumbScrollEnd,
                                 ),
                               ],
                             ],
@@ -1024,6 +1507,10 @@ class _ProductDetailsRouteState extends State<ProductDetailsRoute> {
                   ),
                 ),
               ],
+            ),
+                  ),
+                ),
+              ),
             );
           },
         ),
@@ -1279,65 +1766,47 @@ class _ViewCountChip extends StatelessWidget {
 class _LikeIconButton extends StatelessWidget {
   const _LikeIconButton({
     required this.liked,
-    required this.busy,
     required this.onTap,
     this.likeCount,
   });
 
   final bool liked;
   final int? likeCount;
-  final bool busy;
   final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
     final showCount = likeCount != null;
-    final child =
-        busy
-            ? Padding(
-              padding: const EdgeInsets.all(9),
-              child: SizedBox(
-                width: 18,
-                height: 18,
-                child: CircularProgressIndicator(
-                  strokeWidth: 2,
-                  color: AppColors.textOnPrimary,
-                ),
-              ),
-            )
-            : Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Icon(
-                  liked
-                      ? Icons.favorite_rounded
-                      : Icons.favorite_border_rounded,
-                  size: 18,
-                  color:
-                      liked ? AppColors.error : AppColors.textOnPrimary,
-                ),
-                if (showCount) ...[
-                  const SizedBox(width: 4),
-                  Text(
-                    _formatCount(likeCount!),
-                    style: AppTextStyles.caption(
-                      fontSize: 12,
-                      fontWeight: FontWeight.w600,
-                      color: AppColors.textOnPrimary,
-                    ),
-                  ),
-                ],
-              ],
-            );
+    final child = Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Icon(
+          liked ? Icons.thumb_up_rounded : Icons.thumb_up_outlined,
+          size: 18,
+          color: liked ? AppColors.accent : AppColors.textOnPrimary,
+        ),
+        if (showCount) ...[
+          const SizedBox(width: 4),
+          Text(
+            _formatCount(likeCount!),
+            style: AppTextStyles.caption(
+              fontSize: 12,
+              fontWeight: FontWeight.w600,
+              color: AppColors.textOnPrimary,
+            ),
+          ),
+        ],
+      ],
+    );
 
     if (!showCount) {
       return Material(
         color: Colors.black.withValues(alpha: 0.35),
         shape: const CircleBorder(),
         child: InkWell(
-          onTap: busy ? null : onTap,
+          onTap: onTap,
           customBorder: const CircleBorder(),
-          child: SizedBox(width: 36, height: 36, child: child),
+          child: SizedBox(width: 36, height: 36, child: Center(child: child)),
         ),
       );
     }
@@ -1346,11 +1815,62 @@ class _LikeIconButton extends StatelessWidget {
       color: Colors.black.withValues(alpha: 0.35),
       borderRadius: BorderRadius.circular(18),
       child: InkWell(
-        onTap: busy ? null : onTap,
+        onTap: onTap,
         borderRadius: BorderRadius.circular(18),
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
           child: SizedBox(height: 20, child: child),
+        ),
+      ),
+    );
+  }
+}
+
+/// Private wishlist (heart) — separate from public like (thumbs up).
+class _WishlistIconButton extends StatelessWidget {
+  const _WishlistIconButton({
+    required this.wishlisted,
+    required this.onTap,
+    this.busy = false,
+  });
+
+  final bool wishlisted;
+  final bool busy;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: Colors.black.withValues(alpha: 0.35),
+      shape: const CircleBorder(),
+      child: InkWell(
+        onTap: busy ? null : onTap,
+        customBorder: const CircleBorder(),
+        child: SizedBox(
+          width: 36,
+          height: 36,
+          child: Center(
+            child:
+                busy
+                    ? SizedBox(
+                      width: 16,
+                      height: 16,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        color: AppColors.textOnPrimary,
+                      ),
+                    )
+                    : Icon(
+                      wishlisted
+                          ? Icons.favorite_rounded
+                          : Icons.favorite_border_rounded,
+                      size: 18,
+                      color:
+                          wishlisted
+                              ? AppColors.error
+                              : AppColors.textOnPrimary,
+                    ),
+          ),
         ),
       ),
     );
@@ -1415,6 +1935,11 @@ class _ImagePlaceholder extends StatelessWidget {
   }
 }
 
-enum _EditChoice { metadataPhotos, refine }
-
-enum _OverflowAction { edit, share, delete, previewAll, previewDetails }
+enum _OverflowAction {
+  edit,
+  availability,
+  share,
+  delete,
+  previewAll,
+  previewDetails,
+}

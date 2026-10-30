@@ -80,7 +80,8 @@ class SearchSuggestionList extends StatelessWidget {
                 [
                   item.storeName,
                   if (item.city.isNotEmpty) item.city,
-                  if (item.netWeight != null) '${item.netWeight} g',
+                  if (item.netWeight != null && item.netWeight! > 0)
+                    '${item.netWeight} g',
                 ].where((e) => e.trim().isNotEmpty).join(' · '),
                 style: AppTextStyles.caption(fontSize: 12),
               ),

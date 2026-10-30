@@ -4,6 +4,9 @@ This file defines what to follow for UI and logic inside `lib/presentation/store
 
 ## Mandatory Update Rule
 - If gallery navigation, image interaction, zoom behavior, transitions, or requirements change, update this file in the same PR.
+- Photos scroll edge-to-edge under a floating back/title chrome (status bar +
+  home indicator) with `CatalogImageEdgeFades` cool washes; no trailing
+  bottom spacer on the last day section.
 
 ## UI Rules
 - Wrap full screen with `ScreenWrapper`.

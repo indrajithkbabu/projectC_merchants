@@ -34,6 +34,8 @@ class CatalogStore extends Equatable {
     this.canViewContent,
     this.followStatusRaw,
     this.notifyUploads,
+    this.defaultWastageMarkup,
+    this.defaultMargin,
     this.autoApprovedFollowers,
     this.images = const [],
     this.imageUrls = const [],
@@ -73,6 +75,12 @@ class CatalogStore extends Equatable {
 
   /// Upload push preference while following (GET store / follow payloads).
   final bool? notifyUploads;
+
+  /// Store default wastage % from GET/PATCH store / wastage-markup.
+  final double? defaultWastageMarkup;
+
+  /// Store default margin when provided by GET store.
+  final double? defaultMargin;
 
   /// From privacy PATCH when switching to public (bulk-approved count).
   final int? autoApprovedFollowers;
@@ -241,6 +249,14 @@ class CatalogStore extends Equatable {
           json['notifyUploads'] as bool? ??
           root['notify_uploads'] as bool? ??
           json['notify_uploads'] as bool?,
+      defaultWastageMarkup:
+          (root['defaultWastageMarkup'] as num?)?.toDouble() ??
+          (json['defaultWastageMarkup'] as num?)?.toDouble() ??
+          (root['wastageMarkup'] as num?)?.toDouble() ??
+          (json['wastageMarkup'] as num?)?.toDouble(),
+      defaultMargin:
+          (root['defaultMargin'] as num?)?.toDouble() ??
+          (json['defaultMargin'] as num?)?.toDouble(),
       autoApprovedFollowers:
           (root['autoApprovedFollowers'] as num?)?.toInt() ??
           (json['autoApprovedFollowers'] as num?)?.toInt(),
@@ -302,6 +318,9 @@ class CatalogStore extends Equatable {
     if (canViewContent != null) 'canViewContent': canViewContent,
     if (followStatusRaw != null) 'followStatus': followStatusRaw,
     if (notifyUploads != null) 'notifyUploads': notifyUploads,
+    if (defaultWastageMarkup != null)
+      'defaultWastageMarkup': defaultWastageMarkup,
+    if (defaultMargin != null) 'defaultMargin': defaultMargin,
     if (autoApprovedFollowers != null)
       'autoApprovedFollowers': autoApprovedFollowers,
     'images':
@@ -379,6 +398,8 @@ class CatalogStore extends Equatable {
     bool? canViewContent,
     String? followStatusRaw,
     bool? notifyUploads,
+    double? defaultWastageMarkup,
+    double? defaultMargin,
     int? autoApprovedFollowers,
     List<CatalogPhoto>? images,
     List<String>? imageUrls,
@@ -415,6 +436,8 @@ class CatalogStore extends Equatable {
               : (followStatusRaw ?? this.followStatusRaw),
       notifyUploads:
           clearNotifyUploads ? null : (notifyUploads ?? this.notifyUploads),
+      defaultWastageMarkup: defaultWastageMarkup ?? this.defaultWastageMarkup,
+      defaultMargin: defaultMargin ?? this.defaultMargin,
       autoApprovedFollowers:
           clearAutoApprovedFollowers
               ? null
@@ -442,6 +465,8 @@ class CatalogStore extends Equatable {
     canViewContent,
     followStatusRaw,
     notifyUploads,
+    defaultWastageMarkup,
+    defaultMargin,
     autoApprovedFollowers,
     images,
     imageUrls,

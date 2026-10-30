@@ -17,16 +17,21 @@ import 'package:project_c/bloc/storeprofile/store_profile_bloc.dart';
 import 'package:project_c/bloc/team/team_bloc.dart';
 import 'package:project_c/data/merchant_store_session.dart';
 import 'package:project_c/models/bulk_upload.dart';
+import 'package:project_c/models/catalog/catalog_product_models.dart';
+import 'package:project_c/models/pending_product_upload.dart';
 import 'package:project_c/models/store_channel.dart';
 import 'package:project_c/models/product_details_feed_item.dart';
 import 'package:project_c/models/store_product.dart';
 import 'package:project_c/navigation/routes.dart';
 import 'package:project_c/navigation/smooth_fade_page_route.dart';
+import 'package:project_c/navigation/telegram_photo_page_route.dart';
+import 'package:project_c/presentation/add_store_product/add_product_compose_route.dart';
 import 'package:project_c/presentation/add_store_product/add_product_form_route.dart';
 import 'package:project_c/presentation/add_store_product/add_product_gallery_route.dart';
 import 'package:project_c/presentation/add_store_product/add_product_group_details_route.dart';
 import 'package:project_c/presentation/add_store_product/add_product_group_preview_route.dart';
 import 'package:project_c/presentation/add_store_product/add_product_group_route.dart';
+import 'package:project_c/presentation/add_store_product/compose_product_draft.dart';
 import 'package:project_c/presentation/add_store_product/edit_product_specs_route.dart';
 import 'package:project_c/presentation/auth/country_picker_route.dart';
 import 'package:project_c/presentation/auth/otp_route.dart';
@@ -96,6 +101,8 @@ PageRoute? onGenerateRoutes(RouteSettings settings) {
       return _storeImportRequestsRoute(settings);
     case Routes.addProductGalleryRoute:
       return _addProductGalleryRoute(settings);
+    case Routes.addProductComposeRoute:
+      return _addProductComposeRoute(settings);
     case Routes.addProductGroupRoute:
       return _addProductGroupRoute(settings);
     case Routes.addProductGroupDetailsRoute:
@@ -573,7 +580,8 @@ PageRoute? _storeChannelRoute(RouteSettings settings) {
     enableFollowChrome: enableFollowChrome,
   );
 
-  return _buildAnimatedRoute(
+  // Expand from Discover header (fade + soft rise) — not a Cupertino slide.
+  return StoreChannelRevealRoute<void>(
     settings: settings,
     builder:
         (context) =>
@@ -677,6 +685,8 @@ PageRoute? _storeImportRequestsRoute(RouteSettings settings) {
       args is Map && args['storeName'] is String
           ? args['storeName'] as String
           : 'Your Store';
+  final initialTab =
+      args is Map && args['initialTab'] == 1 ? 1 : 0;
   return _buildAnimatedRoute(
     settings: settings,
     builder:
@@ -686,7 +696,7 @@ PageRoute? _storeImportRequestsRoute(RouteSettings settings) {
                 storeId: storeId,
                 storeName: storeName,
               ),
-          child: const StoreImportRequestsRoute(),
+          child: StoreImportRequestsRoute(initialTab: initialTab),
         ),
   );
 }
@@ -740,6 +750,83 @@ PageRoute? _addProductGalleryRoute(RouteSettings settings) {
   );
 }
 
+PageRoute? _addProductComposeRoute(RouteSettings settings) {
+  final args = settings.arguments;
+  final imagePaths =
+      args is Map && args['imagePaths'] is List
+          ? (args['imagePaths'] as List)
+              .whereType<String>()
+              .map((e) => e.trim())
+              .where((e) => e.isNotEmpty)
+              .toList(growable: false)
+          : const <String>[];
+  final storeId =
+      args is Map && args['storeId'] is String
+          ? args['storeId'] as String
+          : null;
+  final initialIndex =
+      args is Map && args['initialIndex'] is int
+          ? args['initialIndex'] as int
+          : 0;
+  final initialDrafts =
+      args is Map && args['initialDrafts'] is List
+          ? (args['initialDrafts'] as List)
+              .whereType<ComposePhotoDraft>()
+              .toList(growable: false)
+          : const <ComposePhotoDraft>[];
+  final itemIds =
+      args is Map && args['itemIds'] is List
+          ? (args['itemIds'] as List)
+              .whereType<String>()
+              .map((e) => e.trim())
+              .where((e) => e.isNotEmpty)
+              .toList(growable: false)
+          : const <String>[];
+  final returnResult = args is Map && args['returnResult'] == true;
+  final allowAddDelete =
+      args is Map ? args['allowAddDelete'] != false : true;
+  final importMode = args is Map && args['importMode'] == true;
+  final sourceStoreId =
+      args is Map && args['sourceStoreId'] is String
+          ? (args['sourceStoreId'] as String).trim()
+          : '';
+  final sourceStoreName =
+      args is Map && args['sourceStoreName'] is String
+          ? (args['sourceStoreName'] as String).trim()
+          : '';
+  final sourceProductIds =
+      args is Map && args['sourceProductIds'] is List
+          ? (args['sourceProductIds'] as List)
+              .whereType<String>()
+              .map((e) => e.trim())
+              .toList(growable: false)
+          : const <String>[];
+  final sourceLocked =
+      args is Map && args['sourceLocked'] is List
+          ? (args['sourceLocked'] as List).map((e) => e == true).toList(
+            growable: false,
+          )
+          : const <bool>[];
+  return _buildAnimatedRoute(
+    settings: settings,
+    builder:
+        (context) => AddProductComposeRoute(
+          imagePaths: imagePaths,
+          storeId: storeId,
+          initialIndex: initialIndex,
+          initialDrafts: initialDrafts,
+          itemIds: itemIds,
+          returnResult: returnResult,
+          allowAddDelete: allowAddDelete,
+          importMode: importMode,
+          sourceStoreId: sourceStoreId,
+          sourceStoreName: sourceStoreName,
+          sourceProductIds: sourceProductIds,
+          sourceLocked: sourceLocked,
+        ),
+  );
+}
+
 PageRoute? _addProductGroupRoute(RouteSettings settings) {
   final args = settings.arguments;
   final selectedItems =
@@ -752,13 +839,63 @@ PageRoute? _addProductGroupRoute(RouteSettings settings) {
       args is Map && args['storeId'] is String
           ? args['storeId'] as String
           : null;
+  final initialTitle =
+      args is Map && args['initialTitle'] is String
+          ? (args['initialTitle'] as String).trim()
+          : '';
+  final initialTags =
+      args is Map && args['tags'] is List
+          ? (args['tags'] as List)
+              .whereType<String>()
+              .map((e) => e.trim().toLowerCase())
+              .where((e) => e.isNotEmpty)
+              .toList(growable: false)
+          : const <String>[];
+  final composeOverlay = args is Map && args['composeOverlay'] == true;
+  final ProductSpec? composeSpec =
+      args is Map && args['groupSpec'] is ProductSpec
+          ? args['groupSpec'] as ProductSpec
+          : null;
+  final composeStockStatus =
+      args is Map && args['stockStatus'] is String
+          ? (args['stockStatus'] as String).trim()
+          : '';
+  final composeMtoDays =
+      args is Map && args['mtoDays'] is int
+          ? args['mtoDays'] as int
+          : (args is Map && args['mtoDays'] is num
+              ? (args['mtoDays'] as num).toInt()
+              : null);
+  final composeIsLocked = args is Map && args['isLocked'] == true;
+  final composeApplyToAll = args is Map && args['applyToAll'] != false;
+  final photoDrafts =
+      args is Map && args['photoDrafts'] is List
+          ? (args['photoDrafts'] as List).whereType<ComposePhotoDraft>().toList()
+          : const <ComposePhotoDraft>[];
   return _buildAnimatedRoute(
     settings: settings,
     builder:
         (context) => BlocProvider(
           create:
-              (_) => BulkUploadBloc(images: selectedItems, storeId: storeId),
-          child: const AddProductGroupRoute(),
+              (_) => BulkUploadBloc(
+                images: selectedItems,
+                storeId: storeId,
+                initialTitle: initialTitle.isEmpty ? null : initialTitle,
+                initialTags: initialTags,
+                initialItemSpecs:
+                    photoDrafts.isEmpty
+                        ? null
+                        : [for (final d in photoDrafts) d.spec],
+              ),
+          child: AddProductGroupRoute(
+            composeOverlay: composeOverlay,
+            composeSpec: composeSpec,
+            composeStockStatus: composeStockStatus,
+            composeMtoDays: composeMtoDays,
+            composeIsLocked: composeIsLocked,
+            composeApplyToAll: composeApplyToAll,
+            composeDrafts: photoDrafts,
+          ),
         ),
   );
 }
@@ -792,15 +929,35 @@ PageRoute? _addProductGroupPreviewRoute(RouteSettings settings) {
     debugPrint('add_product_group_preview_route missing BulkUploadBloc');
     return null;
   }
-  final autoOpenEdit =
-      settings.arguments is Map &&
-      (settings.arguments as Map)['autoOpenEdit'] == true;
+  final args = settings.arguments;
+  final autoOpenEdit = args is Map && args['autoOpenEdit'] == true;
+  final stockStatus =
+      args is Map && args['stockStatus'] is String
+          ? (args['stockStatus'] as String).trim()
+          : 'in';
+  final mtoDays =
+      args is Map && args['mtoDays'] is int
+          ? args['mtoDays'] as int
+          : (args is Map && args['mtoDays'] is num
+              ? (args['mtoDays'] as num).toInt()
+              : null);
+  final isLocked = args is Map && args['isLocked'] == true;
+  final photoRows =
+      args is Map && args['photoRows'] is List
+          ? (args['photoRows'] as List).whereType<TitleOnlyPhotoRow>().toList()
+          : const <TitleOnlyPhotoRow>[];
   return _buildAnimatedRoute(
     settings: settings,
     builder:
         (context) => BlocProvider.value(
           value: bloc,
-          child: AddProductGroupPreviewRoute(autoOpenEdit: autoOpenEdit),
+          child: AddProductGroupPreviewRoute(
+            autoOpenEdit: autoOpenEdit,
+            stockStatus: stockStatus.isEmpty ? 'in' : stockStatus,
+            mtoDays: mtoDays,
+            isLocked: isLocked,
+            photoRows: photoRows,
+          ),
         ),
   );
 }
@@ -958,6 +1115,10 @@ PageRoute? _collectionBrowseRoute(RouteSettings settings) {
       args is Map && args['isOwnStore'] is bool
           ? args['isOwnStore'] as bool
           : false;
+  final seedProducts =
+      args is Map && args['seedProducts'] is List<CatalogProduct>
+          ? args['seedProducts'] as List<CatalogProduct>
+          : null;
 
   return _buildAnimatedRoute(
     settings: settings,
@@ -968,6 +1129,7 @@ PageRoute? _collectionBrowseRoute(RouteSettings settings) {
           storeName: storeName,
           storeLink: storeLink,
           isOwnStore: isOwnStore,
+          seedProducts: seedProducts,
         ),
   );
 }
@@ -1025,39 +1187,75 @@ PageRoute? _productDetailsRoute(RouteSettings settings) {
         (args['likedPhotoId'] as String).trim().isNotEmpty)
       (args['likedPhotoId'] as String).trim(),
   };
+  final initialIsWishlisted =
+      args is Map && args['isWishlisted'] == true;
+  final photoSourceRect =
+      args is Map ? rectFromArgs(args['photoSourceRect']) : null;
+  final photoPath =
+      args is Map && args['photoPath'] is String
+          ? (args['photoPath'] as String).trim()
+          : '';
+  final photoThumbhash =
+      args is Map && args['photoThumbhash'] is String
+          ? (args['photoThumbhash'] as String).trim()
+          : null;
+  final photoWidth =
+      args is Map && args['photoWidth'] is num
+          ? (args['photoWidth'] as num).toDouble()
+          : null;
+  final photoHeight =
+      args is Map && args['photoHeight'] is num
+          ? (args['photoHeight'] as num).toDouble()
+          : null;
+  final useTelegramPhoto =
+      photoSourceRect != null && photoPath.isNotEmpty;
 
-  return _buildAnimatedRoute(
-    settings: settings,
-    builder:
-        (context) => Theme(
-          // Opaque black under the route transition (avoids white→black flicker
-          // when opening immersive product details from a light screen).
-          data: Theme.of(context).copyWith(
-            scaffoldBackgroundColor: Colors.black,
-            canvasColor: Colors.black,
-          ),
-          child: ColoredBox(
-            color: Colors.black,
-            child: BlocProvider(
-              create:
-                  (_) => ProductDetailsBloc(
-                    product: product,
-                    storeName: storeName,
-                    storeLink: storeLink,
-                    storeId: storeId,
-                    isOwnStore: isOwnStore,
-                    initialImageIndex: imageIndex,
-                    galleryFeed: galleryFeed,
-                    galleryFeedIndex: galleryFeedIndex,
-                    seedCategory: seedCategory,
-                    showStoreGroupLink: showStoreGroupLink,
-                    initialLikedPhotoIds: likedPhotoIds,
-                  ),
-              child: const ProductDetailsRoute(),
+  Widget page(BuildContext context) => Theme(
+    // Opaque black under the route transition (avoids white→black flicker
+    // when opening immersive product details from a light screen).
+    data: Theme.of(context).copyWith(
+      scaffoldBackgroundColor: Colors.black,
+      canvasColor: Colors.black,
+    ),
+    child: ColoredBox(
+      color: Colors.black,
+      child: BlocProvider(
+        create:
+            (_) => ProductDetailsBloc(
+              product: product,
+              storeName: storeName,
+              storeLink: storeLink,
+              storeId: storeId,
+              isOwnStore: isOwnStore,
+              initialImageIndex: imageIndex,
+              galleryFeed: galleryFeed,
+              galleryFeedIndex: galleryFeedIndex,
+              seedCategory: seedCategory,
+              showStoreGroupLink: showStoreGroupLink,
+              initialLikedPhotoIds: likedPhotoIds,
+              initialIsWishlisted: initialIsWishlisted,
             ),
-          ),
-        ),
+        child: const ProductDetailsRoute(),
+      ),
+    ),
   );
+
+  if (useTelegramPhoto) {
+    return TelegramPhotoPageRoute(
+      settings: settings,
+      sourceRect: photoSourceRect,
+      imagePath: photoPath,
+      thumbhash:
+          (photoThumbhash == null || photoThumbhash.isEmpty)
+              ? null
+              : photoThumbhash,
+      imageWidth: photoWidth,
+      imageHeight: photoHeight,
+      builder: page,
+    );
+  }
+
+  return _buildAnimatedRoute(settings: settings, builder: page);
 }
 
 PageRoute? _globalSearchRoute(RouteSettings settings) {

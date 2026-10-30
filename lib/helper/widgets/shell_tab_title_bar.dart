@@ -7,14 +7,19 @@ import 'package:project_c/helper/widgets/screen_wrapper.dart';
 ///
 /// Keeps title **Y-position and height** identical across tabs so IndexedStack
 /// switches do not jump. Matches the 40px trailing-action row on Stores.
+/// Trailing actions stay **right-aligned** (Expanded title cluster + trailing).
 class ShellTabTitleBar extends StatelessWidget {
   const ShellTabTitleBar({
     super.key,
     required this.title,
+    this.titleBadge,
     this.trailing,
   });
 
   final String title;
+
+  /// Optional pill / count shown immediately after the title (e.g. Wishlist).
+  final Widget? titleBadge;
   final Widget? trailing;
 
   /// Status bar + 8 — same top inset on every shell home tab.
@@ -36,18 +41,32 @@ class ShellTabTitleBar extends StatelessWidget {
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.center,
         children: [
+          // Title + optional count stay flush-left together; trailing stays
+          // right-aligned. Do not put a lone Flexible around the title alone
+          // (that expands and parks the badge mid-row).
           Expanded(
             child: Align(
               alignment: Alignment.centerLeft,
-              child: Text(
-                title,
-                style: AppTextStyles.headline(
-                  fontSize: titleSize,
-                  fontWeight: FontWeight.w700,
-                  height: 1.2,
-                ),
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Flexible(
+                    child: Text(
+                      title,
+                      style: AppTextStyles.headline(
+                        fontSize: titleSize,
+                        fontWeight: FontWeight.w700,
+                        height: 1.2,
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                  if (titleBadge != null) ...[
+                    const SizedBox(width: 8),
+                    titleBadge!,
+                  ],
+                ],
               ),
             ),
           ),

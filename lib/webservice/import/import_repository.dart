@@ -1,6 +1,8 @@
 import 'package:project_c/helper/app_log.dart';
+import 'package:project_c/helper/import_qa.dart';
 import 'package:project_c/models/catalog/catalog_page.dart';
 import 'package:project_c/models/catalog/import_models.dart';
+import 'package:project_c/models/catalog/quick_import_api_models.dart';
 import 'package:project_c/webservice/import/import_request.dart';
 
 abstract class ImportRepository {
@@ -25,6 +27,35 @@ abstract class ImportRepository {
   Future<ImportRequest> decide({
     required String requestId,
     required String decision,
+  });
+
+  Future<QuickImportBatchResult> submitBatchImport({
+    required String destinationStoreId,
+    required String sourceStoreId,
+    required List<Map<String, dynamic>> items,
+    String destinationMode = 'original',
+    String? targetCollectionId,
+    String? newCollectionName,
+  });
+
+  Future<List<ImportRequestBatch>> listImportRequestBatches({
+    required String storeId,
+    String tab = 'received',
+    String? status,
+  });
+
+  Future<ImportRequestBatch> decideBatch({
+    required String storeId,
+    required String requestId,
+    required String decision,
+    List<String> approvedProductIds = const [],
+    List<String> declinedProductIds = const [],
+  });
+
+  /// Cancel a pending Sent import request (requester store).
+  Future<ImportRequestBatch> cancelBatch({
+    required String storeId,
+    required String requestId,
   });
 }
 
@@ -83,5 +114,84 @@ class ImportRepositoryImpl implements ImportRepository {
   }) {
     AppLog.d(_tag, 'decide $decision request=$requestId');
     return _request.decide(requestId: requestId, decision: decision);
+  }
+
+  @override
+  Future<QuickImportBatchResult> submitBatchImport({
+    required String destinationStoreId,
+    required String sourceStoreId,
+    required List<Map<String, dynamic>> items,
+    String destinationMode = 'original',
+    String? targetCollectionId,
+    String? newCollectionName,
+  }) {
+    AppLog.d(
+      _tag,
+      'submitBatchImport dest=$destinationStoreId source=$sourceStoreId '
+      'items=${items.length}',
+    );
+    ImportQa.step(
+      'API submitBatchImport',
+      detail:
+          'dest=$destinationStoreId source=$sourceStoreId '
+          'items=${items.length} mode=$destinationMode',
+    );
+    return _request.submitBatchImport(
+      destinationStoreId: destinationStoreId,
+      sourceStoreId: sourceStoreId,
+      items: items,
+      destinationMode: destinationMode,
+      targetCollectionId: targetCollectionId,
+      newCollectionName: newCollectionName,
+    );
+  }
+
+  @override
+  Future<List<ImportRequestBatch>> listImportRequestBatches({
+    required String storeId,
+    String tab = 'received',
+    String? status,
+  }) {
+    AppLog.d(_tag, 'listImportRequestBatches store=$storeId tab=$tab');
+    return _request.listImportRequestBatches(
+      storeId: storeId,
+      tab: tab,
+      status: status,
+    );
+  }
+
+  @override
+  Future<ImportRequestBatch> decideBatch({
+    required String storeId,
+    required String requestId,
+    required String decision,
+    List<String> approvedProductIds = const [],
+    List<String> declinedProductIds = const [],
+  }) {
+    AppLog.d(
+      _tag,
+      'decideBatch $decision store=$storeId request=$requestId '
+      'approved=${approvedProductIds.length} declined=${declinedProductIds.length}',
+    );
+    return _request.decideBatch(
+      storeId: storeId,
+      requestId: requestId,
+      decision: decision,
+      approvedProductIds: approvedProductIds,
+      declinedProductIds: declinedProductIds,
+    );
+  }
+
+  @override
+  Future<ImportRequestBatch> cancelBatch({
+    required String storeId,
+    required String requestId,
+  }) {
+    AppLog.d(_tag, 'cancelBatch store=$storeId request=$requestId');
+    ImportQa.step(
+      'Cancel → pending request',
+      detail: 'store=$storeId request=$requestId',
+    );
+    return _request.cancelBatch(storeId: storeId, requestId: requestId);
   }
 }

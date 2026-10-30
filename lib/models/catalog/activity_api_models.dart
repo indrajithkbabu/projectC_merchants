@@ -1,4 +1,5 @@
 import 'package:equatable/equatable.dart';
+import 'package:project_c/helper/be_verify.dart';
 
 /// Actor on an activity row (follower / liker).
 class ActivityActor extends Equatable {
@@ -22,7 +23,10 @@ class ActivityActor extends Equatable {
       id: '${json['id'] ?? ''}'.trim(),
       name: '${json['name'] ?? ''}'.trim(),
       phone: '${json['phone'] ?? ''}'.trim(),
-      avatarUrl: '${json['avatarUrl'] ?? json['avatar'] ?? ''}'.trim(),
+      // Docs use `image`; older payloads used avatarUrl / avatar.
+      avatarUrl:
+          '${json['image'] ?? json['avatarUrl'] ?? json['avatar'] ?? ''}'
+              .trim(),
     );
   }
 
@@ -133,6 +137,8 @@ class ActivityItem extends Equatable {
     this.entityId = '',
     this.count = 1,
     this.thumbnails = const [],
+    this.title = '',
+    this.message = '',
   });
 
   final String id;
@@ -145,13 +151,26 @@ class ActivityItem extends Equatable {
   final bool read;
   final DateTime createdAt;
 
+  /// Optional server title/message (e.g. product_liked copy).
+  final String title;
+  final String message;
+
   factory ActivityItem.fromJson(Map<String, dynamic> json) {
     final actorRaw = json['actor'];
     final storeRaw = json['store'];
     final thumbs = json['thumbnails'];
-    return ActivityItem(
+    final dataRaw = json['data'];
+    final data =
+        dataRaw is Map
+            ? Map<String, dynamic>.from(dataRaw)
+            : const <String, dynamic>{};
+    final productId =
+        '${json['entityId'] ?? json['productId'] ?? data['productId'] ?? json['listingId'] ?? ''}'
+            .trim();
+    final type = activityItemTypeFromString(json['type'] as String?);
+    final item = ActivityItem(
       id: '${json['id'] ?? ''}'.trim(),
-      type: activityItemTypeFromString(json['type'] as String?),
+      type: type,
       actor:
           actorRaw is Map
               ? ActivityActor.fromJson(Map<String, dynamic>.from(actorRaw))
@@ -160,7 +179,7 @@ class ActivityItem extends Equatable {
           storeRaw is Map
               ? ActivityStoreRef.fromJson(Map<String, dynamic>.from(storeRaw))
               : null,
-      entityId: '${json['entityId'] ?? json['listingId'] ?? ''}'.trim(),
+      entityId: productId,
       count: (json['count'] as num?)?.toInt() ?? 1,
       thumbnails:
           thumbs is List
@@ -173,7 +192,30 @@ class ActivityItem extends Equatable {
       createdAt:
           DateTime.tryParse('${json['createdAt'] ?? ''}') ??
           DateTime.fromMillisecondsSinceEpoch(0),
+      title: '${json['title'] ?? ''}'.trim(),
+      message: '${json['message'] ?? ''}'.trim(),
     );
+    if (type == ActivityItemType.productLiked) {
+      final actorOk = (item.actor?.id.trim().isNotEmpty ?? false);
+      final entityOk = item.entityId.isNotEmpty;
+      if (actorOk && entityOk) {
+        BeVerify.ok(
+          '4a product_liked',
+          detail:
+              'entity=${BeVerify.shortId(item.entityId)} '
+              'actor=${BeVerify.shortId(item.actor?.id)} '
+              'msg=${item.message.isNotEmpty}',
+        );
+      } else {
+        BeVerify.fail(
+          '4a product_liked incomplete',
+          detail:
+              'entityOk=$entityOk actorOk=$actorOk '
+              'typeRaw=${json['type']}',
+        );
+      }
+    }
+    return item;
   }
 
   ActivityItem copyWith({bool? read}) {
@@ -187,6 +229,8 @@ class ActivityItem extends Equatable {
       thumbnails: thumbnails,
       read: read ?? this.read,
       createdAt: createdAt,
+      title: title,
+      message: message,
     );
   }
 
@@ -201,6 +245,8 @@ class ActivityItem extends Equatable {
     thumbnails,
     read,
     createdAt,
+    title,
+    message,
   ];
 }
 

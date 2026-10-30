@@ -8,6 +8,7 @@ import 'package:project_c/models/store_product.dart';
 /// Sort options — values match API `sort` query param.
 enum SearchSortOption {
   newest('Newest', 'newest'),
+  popular('Most popular', 'popular'),
   mostViewed('Most viewed', 'most_viewed'),
   lightest('Lightest first', 'weight_asc'),
   heaviest('Heaviest first', 'weight_desc');
@@ -21,6 +22,8 @@ enum SearchSortOption {
 enum SearchFilterScope {
   global,
   inStore,
+  /// Client-side wishlist filters (metal / purity / store + sort).
+  wishlist,
 }
 
 class SearchFilterOption extends Equatable {
@@ -138,6 +141,7 @@ class SearchFilterSelection extends Equatable {
     this.wastages = const {},
     this.stores = const {},
     this.locations = const {},
+    this.stockStatuses = const {},
     this.sort = SearchSortOption.newest,
   });
 
@@ -149,6 +153,9 @@ class SearchFilterSelection extends Equatable {
   final Set<String> wastages;
   final Set<String> stores;
   final Set<String> locations;
+
+  /// API `stock_status`: `in` / `out` / `mto`.
+  final Set<String> stockStatuses;
   final SearchSortOption sort;
 
   bool get hasActiveFilters =>
@@ -159,7 +166,8 @@ class SearchFilterSelection extends Equatable {
       sizes.isNotEmpty ||
       wastages.isNotEmpty ||
       stores.isNotEmpty ||
-      locations.isNotEmpty;
+      locations.isNotEmpty ||
+      stockStatuses.isNotEmpty;
 
   int get activeFilterCount =>
       categories.length +
@@ -169,7 +177,8 @@ class SearchFilterSelection extends Equatable {
       sizes.length +
       wastages.length +
       stores.length +
-      locations.length;
+      locations.length +
+      stockStatuses.length;
 
   List<SearchActiveChip> chips(SearchFilterCatalog catalog) {
     return [
@@ -221,6 +230,17 @@ class SearchFilterSelection extends Equatable {
           value: v,
           label: catalog.labelFor('location', v),
         ),
+      for (final v in stockStatuses)
+        SearchActiveChip(
+          group: 'stock',
+          value: v,
+          label: switch (v) {
+            'out' => 'Out of stock',
+            'mto' => 'Made to order',
+            'in' => 'In stock',
+            _ => v,
+          },
+        ),
     ];
   }
 
@@ -233,6 +253,7 @@ class SearchFilterSelection extends Equatable {
     Set<String>? wastages,
     Set<String>? stores,
     Set<String>? locations,
+    Set<String>? stockStatuses,
     SearchSortOption? sort,
   }) {
     return SearchFilterSelection(
@@ -244,6 +265,7 @@ class SearchFilterSelection extends Equatable {
       wastages: wastages ?? this.wastages,
       stores: stores ?? this.stores,
       locations: locations ?? this.locations,
+      stockStatuses: stockStatuses ?? this.stockStatuses,
       sort: sort ?? this.sort,
     );
   }
@@ -270,6 +292,8 @@ class SearchFilterSelection extends Equatable {
         return copyWith(stores: {...stores}..remove(chip.value));
       case 'location':
         return copyWith(locations: {...locations}..remove(chip.value));
+      case 'stock':
+        return copyWith(stockStatuses: {...stockStatuses}..remove(chip.value));
       default:
         return this;
     }
@@ -290,6 +314,7 @@ class SearchFilterSelection extends Equatable {
       wastages: wastages.toList(),
       stores: stores.toList(),
       locations: locations.toList(),
+      stockStatuses: stockStatuses.toList(),
       sort: sort.apiValue,
       limit: limit,
       cursor: cursor,
@@ -306,6 +331,7 @@ class SearchFilterSelection extends Equatable {
         wastages,
         stores,
         locations,
+        stockStatuses,
         sort,
       ];
 }
@@ -330,6 +356,7 @@ class SearchProductResult extends Equatable {
     this.sizeLabel = '',
     this.precisionTag = '',
     this.thumbnailUrl,
+    this.thumbhash,
     this.viewCount,
   });
 
@@ -350,12 +377,19 @@ class SearchProductResult extends Equatable {
   final String sizeLabel;
   final String precisionTag;
   final String? thumbnailUrl;
+  final String? thumbhash;
   final int? viewCount;
 
   List<String> get imagePaths =>
       thumbnailUrl == null || thumbnailUrl!.isEmpty
           ? const []
           : [thumbnailUrl!];
+
+  List<String> get imageThumbhashes {
+    final hash = thumbhash?.trim() ?? '';
+    if (hash.isEmpty || imagePaths.isEmpty) return const [];
+    return [hash];
+  }
 
   int get toneIndex => id.hashCode.abs() % 6;
 
@@ -374,6 +408,8 @@ class SearchProductResult extends Equatable {
   String get weightChip {
     if (netWeight == null) return '';
     final v = netWeight!;
+    // Hide zero weight — card shows nothing (SizedBox) instead of "0 g".
+    if (v <= 0) return '';
     if (v == v.roundToDouble()) return '${v.toInt()} g';
     return '${v.toStringAsFixed(1)} g';
   }
@@ -383,6 +419,8 @@ class SearchProductResult extends Equatable {
   String get wastageChip {
     if (wastage == null) return '';
     final v = wastage!;
+    // Hide zero wastage — card shows nothing instead of "0% wastage".
+    if (v <= 0) return '';
     if (v == v.roundToDouble()) return '${v.toInt()}% wastage';
     return '${v.toStringAsFixed(1)}% wastage';
   }
@@ -409,6 +447,7 @@ class SearchProductResult extends Equatable {
       sizeLabel: details.size,
       precisionTag: details.precisionTag,
       thumbnailUrl: hit.thumbnailUrl,
+      thumbhash: hit.thumbhash,
       viewCount: hit.viewCount,
     );
   }
@@ -427,6 +466,7 @@ class SearchProductResult extends Equatable {
       purity: match.purity ?? '',
       netWeight: match.netWeight,
       thumbnailUrl: match.thumbnailUrl,
+      thumbhash: match.thumbhash,
     );
   }
 
@@ -449,6 +489,7 @@ class SearchProductResult extends Equatable {
         if (weightChip.isNotEmpty) weightChip,
       ],
       imagePaths: imagePaths,
+      imageThumbhashes: imageThumbhashes,
       toneIndex: toneIndex % 4,
       viewCount: viewCount,
     );
@@ -589,5 +630,6 @@ class SearchProductResult extends Equatable {
         precisionTag,
         viewCount,
         thumbnailUrl,
+        thumbhash,
       ];
 }

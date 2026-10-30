@@ -8,6 +8,7 @@ import 'package:project_c/di/service_locator.dart';
 import 'package:project_c/helper/app_log.dart';
 import 'package:project_c/helper/catalog_ui_mapper.dart';
 import 'package:project_c/helper/device_contact_names.dart';
+import 'package:project_c/helper/import_qa.dart';
 import 'package:project_c/helper/product_image.dart';
 import 'package:project_c/models/catalog/collection_models.dart';
 import 'package:project_c/models/catalog/follow_api_models.dart';
@@ -173,7 +174,8 @@ class StoreProfileBloc extends Bloc<StoreProfileEvent, StoreProfileState> {
     if (isOwnStore) {
       add(const StoreProfileLoadCollections());
       add(const StoreProfileLoadMembers());
-      add(const StoreProfileLoadImportRequestCount());
+      // TODO(backend): re-enable when GET …/import-requests is live (404 today).
+      // add(const StoreProfileLoadImportRequestCount());
     } else if (StoreMetaCache.instance.readMemory(
           storeId ?? 'other_store',
         )?.canViewContent ==
@@ -366,6 +368,8 @@ class StoreProfileBloc extends Bloc<StoreProfileEvent, StoreProfileState> {
   }
 
   Future<List<StoreProduct>> _fetchEnrichedProducts(String storeId) async {
+    // Storefront landing: collections grid (not a flat dump of all products).
+    // Tap → collection browse (legacy collection detail until product docs land).
     final page = await _collectionRepository.listCollections(
       storeId: storeId,
       limit: 50,
@@ -426,6 +430,14 @@ class StoreProfileBloc extends Bloc<StoreProfileEvent, StoreProfileState> {
     if (a.length != b.length) return false;
     for (var i = 0; i < a.length; i++) {
       if (a[i].id != b[i].id || a[i].title != b[i].title) return false;
+      // Like/view badges must refresh after wishlist unlike without image churn.
+      if (a[i].likeCount != b[i].likeCount ||
+          a[i].viewCount != b[i].viewCount ||
+          a[i].isLocked != b[i].isLocked ||
+          a[i].stockStatus != b[i].stockStatus ||
+          a[i].mtoDays != b[i].mtoDays) {
+        return false;
+      }
       final ap = a[i].imagePaths;
       final bp = b[i].imagePaths;
       if (ap.length != bp.length) return false;
@@ -441,19 +453,69 @@ class StoreProfileBloc extends Bloc<StoreProfileEvent, StoreProfileState> {
     required CollectionSummary summary,
   }) async {
     final cover = CatalogUiMapper.summaryToProduct(summary);
-    if (summary.photoCount <= 1) return cover;
     try {
+      // Always probe products?collectionId=. Collection list `productCount`
+      // is often live-only (e.g. 1) while pending imports still appear in
+      // /products — skipping when photoCount==1 hid Pending tags + collage.
+      try {
+        final page = await _collectionRepository.listStoreProducts(
+          storeId: storeId,
+          collectionId: summary.id,
+          limit: 100,
+        );
+        if (page.items.isNotEmpty) {
+          return CatalogUiMapper.collectionCardFromProducts(
+            summary: summary,
+            products: page.items,
+          );
+        }
+        // Empty products → cover-only for true singles / empty groups.
+        if (summary.photoCount <= 1) return cover;
+      } catch (e) {
+        AppLog.d(
+          _tag,
+          'products?collectionId enrich miss id=${summary.id} err=$e',
+        );
+        if (summary.photoCount <= 1) return cover;
+      }
+
       final detail = await _collectionRepository.fetchCollection(
         storeId: storeId,
         listingId: summary.id,
       );
       final detailed = CatalogUiMapper.detailToProduct(detail);
       // Keep list-cover URL first so primary tile stays cache-stable.
+      // Rotate all parallel photo arrays together (paths/ids/hashes/quality).
       final coverUrl = cover.primaryImagePath?.trim() ?? '';
-      if (coverUrl.isEmpty) return detailed;
-      final rest =
-          detailed.imagePaths.where((p) => p.trim() != coverUrl).toList();
-      return detailed.copyWith(imagePaths: [coverUrl, ...rest]);
+      final withListCreated = detailed.copyWith(
+        createdAt: summary.createdAt ?? detailed.createdAt,
+        likeCount:
+            detailed.likeCount ??
+            summary.likeCount ??
+            summary.cover.likeCount ??
+            cover.likeCount,
+      );
+      if (coverUrl.isEmpty) return withListCreated;
+      final coverIndex = withListCreated.imagePaths.indexWhere(
+        (p) => p.trim() == coverUrl,
+      );
+      if (coverIndex <= 0) return withListCreated;
+      List<T> coverFirst<T>(List<T> list) {
+        if (coverIndex >= list.length) return list;
+        return [
+          list[coverIndex],
+          ...list.sublist(0, coverIndex),
+          ...list.sublist(coverIndex + 1),
+        ];
+      }
+
+      return withListCreated.copyWith(
+        imagePaths: coverFirst(withListCreated.imagePaths),
+        photoAssetIds: coverFirst(withListCreated.photoAssetIds),
+        imageThumbhashes: coverFirst(withListCreated.imageThumbhashes),
+        imageQualities: coverFirst(withListCreated.imageQualities),
+        createdAt: summary.createdAt ?? withListCreated.createdAt,
+      );
     } catch (e) {
       AppLog.e(_tag, 'Collection detail enrich failed id=${summary.id}', e);
       return cover;
@@ -657,31 +719,32 @@ class StoreProfileBloc extends Bloc<StoreProfileEvent, StoreProfileState> {
     StoreProfileLoadImportRequestCount event,
     Emitter<StoreProfileState> emit,
   ) async {
-    if (!state.isOwnStore) return;
-    final storeId = state.storeId;
-    if (storeId.isEmpty || storeId == 'my_store' || storeId == 'other_store') {
-      return;
-    }
-    try {
-      var pending = 0;
-      String? cursor;
-      do {
-        final page = await _importRepository.listStoreRequests(
-          storeId: storeId,
-          direction: 'incoming',
-          limit: 50,
-          cursor: cursor,
-        );
-        pending += page.items.where((r) => r.isPending).length;
-        cursor = page.nextCursor;
-      } while (cursor != null && cursor.isNotEmpty);
-      if (emit.isDone) return;
-      AppLog.d(_tag, 'Pending incoming import requests=$pending');
-      emit(state.copyWith(pendingImportRequestCount: pending));
-    } catch (e) {
-      // Badge is secondary; do not interrupt the profile with a snackbar.
-      AppLog.e(_tag, 'Import request count failed', e);
-    }
+    // TODO(backend): re-enable when GET …/stores/:id/import-requests is live.
+    // Endpoint currently 404s after store create / home (CatalogApi ERROR noise).
+    // if (!state.isOwnStore) return;
+    // final storeId = state.storeId;
+    // if (storeId.isEmpty || storeId == 'my_store' || storeId == 'other_store') {
+    //   return;
+    // }
+    // try {
+    //   var pending = 0;
+    //   String? cursor;
+    //   do {
+    //     final page = await _importRepository.listStoreRequests(
+    //       storeId: storeId,
+    //       direction: 'incoming',
+    //       limit: 50,
+    //       cursor: cursor,
+    //     );
+    //     pending += page.items.where((r) => r.isPending).length;
+    //     cursor = page.nextCursor;
+    //   } while (cursor != null && cursor.isNotEmpty);
+    //   if (emit.isDone) return;
+    //   AppLog.d(_tag, 'Pending incoming import requests=$pending');
+    //   emit(state.copyWith(pendingImportRequestCount: pending));
+    // } catch (e) {
+    //   AppLog.e(_tag, 'Import request count failed', e);
+    // }
   }
 
   Future<void> _onProbeImportAvailability(
@@ -698,8 +761,26 @@ class StoreProfileBloc extends Bloc<StoreProfileEvent, StoreProfileState> {
       await Future<void>.delayed(const Duration(milliseconds: 450));
       if (emit.isDone) return;
 
+      ImportQa.step(
+        'Source products (visitor)',
+        detail:
+            'store=${state.storeId} follow=${state.followStatus.name} '
+            'cards=${products.length} '
+            '${[
+              for (final p in products)
+                if (p.imageIsLocked.isNotEmpty)
+                  for (var i = 0; i < p.imageIsLocked.length; i++)
+                    '${p.sourceProductIdAt(i)}='
+                    '${p.stockStatusAt(i)?.apiValue ?? 'null'}/'
+                    'L=${p.isLockedAt(i)}'
+                else
+                  '${p.id}=${p.stockStatus?.apiValue ?? 'null'}/L=${p.isLocked}',
+            ].join(' ')}',
+      );
+
       final availability = <String, ListingImportAvailability>{};
       const concurrency = 3;
+      var stub404 = 0;
       for (var i = 0; i < products.length; i += concurrency) {
         if (emit.isDone) return;
         final end =
@@ -711,13 +792,32 @@ class StoreProfileBloc extends Bloc<StoreProfileEvent, StoreProfileState> {
           for (final product in chunk)
             _importRepository
                 .fetchTargets(listingId: product.id, limit: 50)
-                .then((page) => (product.id, page.items)),
+                .then<(String, List<ImportTarget>)>(
+                  (page) => (product.id, page.items),
+                )
+                .catchError((Object e) {
+                  // Legacy /import-targets may 404 — Quick Import does not
+                  // depend on it. Treat as empty so one stub failure does not
+                  // abort the whole probe.
+                  if (e is CatalogApiException &&
+                      (e.statusCode == 404 || e.code == 'NOT_FOUND')) {
+                    stub404++;
+                    return (product.id, const <ImportTarget>[]);
+                  }
+                  throw e;
+                }),
         ]);
         for (final (listingId, targets) in results) {
           availability[listingId] = listingAvailabilityFor(targets);
         }
       }
       if (emit.isDone) return;
+      if (stub404 > 0) {
+        ImportQa.step(
+          'import-targets stub',
+          detail: '404 treated as empty for $stub404 listing(s)',
+        );
+      }
       AppLog.d(
         _tag,
         'Import availability probed for ${availability.length} listings',
@@ -726,6 +826,7 @@ class StoreProfileBloc extends Bloc<StoreProfileEvent, StoreProfileState> {
     } catch (e) {
       // Badges are secondary — never block profile.
       AppLog.e(_tag, 'Import availability probe failed', e);
+      ImportQa.step('import-targets probe failed', detail: '$e');
     }
   }
 
@@ -1150,7 +1251,6 @@ class StoreProfileBloc extends Bloc<StoreProfileEvent, StoreProfileState> {
         state.copyWith(
           products: next,
           productsDetailed: next,
-          infoMessage: 'Product published to store.',
         ),
       );
       return;
@@ -1159,7 +1259,6 @@ class StoreProfileBloc extends Bloc<StoreProfileEvent, StoreProfileState> {
       emit,
       storeId,
       next,
-      infoMessage: 'Product published to store.',
     );
     add(const StoreProfileQuietRefreshCollections());
   }
@@ -1195,7 +1294,7 @@ class StoreProfileBloc extends Bloc<StoreProfileEvent, StoreProfileState> {
         state.copyWith(
           products: next,
           productsDetailed: next,
-          infoMessage: 'Product updated.',
+          infoMessage: event.silent ? null : 'Product updated.',
         ),
       );
       return;
@@ -1204,9 +1303,11 @@ class StoreProfileBloc extends Bloc<StoreProfileEvent, StoreProfileState> {
       emit,
       storeId,
       next,
-      infoMessage: 'Product updated.',
+      infoMessage: event.silent ? null : 'Product updated.',
     );
-    add(const StoreProfileQuietRefreshCollections());
+    if (!event.silent) {
+      add(const StoreProfileQuietRefreshCollections());
+    }
   }
 
   Future<void> _onProductDeleted(
@@ -1380,7 +1481,9 @@ class StoreProfileBloc extends Bloc<StoreProfileEvent, StoreProfileState> {
       return;
     }
     await _commitProducts(emit, storeId, event.products);
-    add(const StoreProfileQuietRefreshCollections());
+    if (!event.silent) {
+      add(const StoreProfileQuietRefreshCollections());
+    }
   }
 
   Future<void> _onProductsImported(
@@ -1497,10 +1600,12 @@ class StoreProfileBloc extends Bloc<StoreProfileEvent, StoreProfileState> {
     final withoutDup =
         state.products.where((p) => p.id != published.id).toList();
     final next = [published, ...withoutDup];
-    final info =
-        (event.partialMessage != null && event.partialMessage!.trim().isNotEmpty)
+    // Success is silent (product appears in grid). Only surface partial
+    // upload failures (e.g. some photos failed).
+    final partial =
+        event.partialMessage?.trim().isNotEmpty == true
             ? event.partialMessage!.trim()
-            : 'Product published to store.';
+            : null;
 
     final storeId = state.storeId;
     if (storeId.isEmpty || storeId == 'my_store' || storeId == 'other_store') {
@@ -1509,7 +1614,7 @@ class StoreProfileBloc extends Bloc<StoreProfileEvent, StoreProfileState> {
           pendingUploads: nextPending,
           products: next,
           productsDetailed: next,
-          infoMessage: info,
+          infoMessage: partial,
         ),
       );
       return;
@@ -1518,7 +1623,7 @@ class StoreProfileBloc extends Bloc<StoreProfileEvent, StoreProfileState> {
       emit,
       storeId,
       next,
-      infoMessage: info,
+      infoMessage: partial,
       pendingUploads: nextPending,
     );
     add(const StoreProfileQuietRefreshCollections());

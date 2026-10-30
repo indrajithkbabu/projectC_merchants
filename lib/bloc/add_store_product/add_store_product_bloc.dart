@@ -6,7 +6,9 @@ import 'package:image_picker/image_picker.dart';
 import 'package:project_c/di/service_locator.dart';
 import 'package:project_c/helper/app_log.dart';
 import 'package:project_c/helper/catalog_ui_mapper.dart';
+import 'package:project_c/helper/catalog_upload_story.dart';
 import 'package:project_c/helper/product_image.dart';
+import 'package:project_c/models/catalog/catalog_upload_models.dart';
 import 'package:project_c/models/catalog/collection_models.dart';
 import 'package:project_c/models/store_product.dart';
 import 'package:project_c/services/catalog_direct_upload_service.dart';
@@ -61,6 +63,8 @@ class AddStoreProductBloc
     on<AddStoreProductImagesAppended>(_onImagesAppended);
     on<AddStoreProductAddMoreImagesPressed>(_onAddMoreImages);
     on<AddStoreProductPublishPressed>(_onPublishPressed);
+    on<AddStoreProductProceedPartialUpload>(_onProceedPartialUpload);
+    on<AddStoreProductRetryFailedUpload>(_onRetryFailedUpload);
     on<AddStoreProductClearPublished>(_onClearPublished);
     on<AddStoreProductClearMessage>(_onClearMessage);
   }
@@ -437,6 +441,12 @@ class AddStoreProductBloc
       ];
       await _assertPhotoSizes(photoFiles);
 
+      CatalogUploadStory.beginPublish(
+        title: state.title.trim().isEmpty ? 'Untitled' : state.title.trim(),
+        photoCount: localFiles.length,
+        storeId: storeId,
+        mode: 'formCreate',
+      );
       final uploadBatch = await _directUpload.prepareAndUpload(
         storeId: storeId,
         localPaths: [for (final item in localFiles) item.filePath!],
@@ -449,67 +459,25 @@ class AddStoreProductBloc
         );
       }
 
-      final created = await _collectionRepository.createCollectionFromUploads(
-        storeId: storeId,
-        name: state.title.trim(),
-        photos: uploadBatch.successful,
-        tag: _apiTag(state.tags),
-        description: state.description.trim(),
-      );
-
-      final revision = created.revision;
-      final failedPhotos = [
-        ...created.failedPhotos,
-        for (final name in uploadBatch.failedNames)
-          FailedPhoto(
-            fileName: name,
-            code: 'S3_UPLOAD_FAILED',
-            message: 'Upload failed',
+      // Scenario 3: let the merchant choose Publish N vs Retry Failed.
+      if (uploadBatch.failedNames.isNotEmpty) {
+        emit(
+          state.copyWith(
+            isPublishing: false,
+            awaitingPartialUploadDecision: true,
+            pendingUploadSuccesses: uploadBatch.successful,
+            pendingUploadFailedPaths: uploadBatch.failedPaths,
+            clearError: true,
           ),
-      ];
-
-      StoreProduct product;
-      try {
-        final detail = await _collectionRepository.fetchCollection(
-          storeId: storeId,
-          listingId: created.id,
         );
-        product = CatalogUiMapper.detailToProduct(detail);
-      } catch (_) {
-        product = StoreProduct(
-          id: created.id,
-          title: created.name,
-          description:
-              created.description.isNotEmpty
-                  ? created.description
-                  : state.description.trim(),
-          tags: [
-            if (created.tag.isNotEmpty) created.tag,
-            ...state.tags.where((t) => t != created.tag),
-          ],
-          imagePaths: localFiles.map((e) => e.filePath!).toList(),
-        );
+        return;
       }
 
-      final partialMessage =
-          failedPhotos.isNotEmpty
-              ? CatalogErrorMapper.failedPhotosSummary(failedPhotos)
-              : null;
-
-      AppLog.d(
-        _tag,
-        'Published collection ${created.id} '
-        'photos=${product.imagePaths.length} failed=${failedPhotos.length}',
-      );
-      emit(
-        state.copyWith(
-          isPublishing: false,
-          isPublished: true,
-          publishedProduct: product,
-          publishedRevision: revision,
-          publishedApiTag: created.tag,
-          errorMessage: partialMessage,
-        ),
+      await _commitCreateFromUploads(
+        emit,
+        storeId: storeId,
+        photos: uploadBatch.successful,
+        extraFailedNames: const [],
       );
     } catch (e) {
       AppLog.e(_tag, 'Publish failed', e);
@@ -520,6 +488,187 @@ class AddStoreProductBloc
         ),
       );
     }
+  }
+
+  Future<void> _onProceedPartialUpload(
+    AddStoreProductProceedPartialUpload event,
+    Emitter<AddStoreProductState> emit,
+  ) async {
+    if (!state.awaitingPartialUploadDecision) return;
+    final storeId = _effectiveStoreId;
+    if (storeId == null || storeId.isEmpty) return;
+    if (state.pendingUploadSuccesses.isEmpty) {
+      emit(
+        state.copyWith(
+          clearPartialUpload: true,
+          errorMessage: 'None of the photos could be uploaded.',
+        ),
+      );
+      return;
+    }
+
+    emit(state.copyWith(isPublishing: true, clearError: true));
+    try {
+      await _commitCreateFromUploads(
+        emit,
+        storeId: storeId,
+        photos: state.pendingUploadSuccesses,
+        extraFailedNames: [
+          for (final path in state.pendingUploadFailedPaths)
+            path.split(RegExp(r'[/\\]')).last,
+        ],
+      );
+    } catch (e) {
+      AppLog.e(_tag, 'Partial publish failed', e);
+      emit(
+        state.copyWith(
+          isPublishing: false,
+          errorMessage: CatalogErrorMapper.toUserMessage(e),
+        ),
+      );
+    }
+  }
+
+  Future<void> _onRetryFailedUpload(
+    AddStoreProductRetryFailedUpload event,
+    Emitter<AddStoreProductState> emit,
+  ) async {
+    if (!state.awaitingPartialUploadDecision) return;
+    final storeId = _effectiveStoreId;
+    if (storeId == null || storeId.isEmpty) return;
+    final failedPaths = state.pendingUploadFailedPaths;
+    if (failedPaths.isEmpty) {
+      add(const AddStoreProductProceedPartialUpload());
+      return;
+    }
+
+    emit(state.copyWith(isPublishing: true, clearError: true));
+    try {
+      final retryBatch = await _directUpload.prepareAndUpload(
+        storeId: storeId,
+        localPaths: failedPaths,
+      );
+      final merged = [
+        ...state.pendingUploadSuccesses,
+        ...retryBatch.successful,
+      ];
+      if (merged.isEmpty) {
+        throw CatalogApiException(
+          statusCode: 400,
+          code: 'NO_VALID_PHOTOS',
+          message: 'None of the photos could be uploaded.',
+        );
+      }
+      if (retryBatch.failedNames.isNotEmpty) {
+        emit(
+          state.copyWith(
+            isPublishing: false,
+            awaitingPartialUploadDecision: true,
+            pendingUploadSuccesses: merged,
+            pendingUploadFailedPaths: retryBatch.failedPaths,
+            clearError: true,
+          ),
+        );
+        return;
+      }
+      await _commitCreateFromUploads(
+        emit,
+        storeId: storeId,
+        photos: merged,
+        extraFailedNames: const [],
+      );
+    } catch (e) {
+      AppLog.e(_tag, 'Retry failed upload', e);
+      emit(
+        state.copyWith(
+          isPublishing: false,
+          errorMessage: CatalogErrorMapper.toUserMessage(e),
+        ),
+      );
+    }
+  }
+
+  Future<void> _commitCreateFromUploads(
+    Emitter<AddStoreProductState> emit, {
+    required String storeId,
+    required List<CatalogUploadedPhoto> photos,
+    required List<String> extraFailedNames,
+  }) async {
+    final thumbYes =
+        photos.where((p) => (p.thumbhash ?? '').trim().isNotEmpty).length;
+    CatalogUploadStory.beginCommit(
+      photoCount: photos.length,
+      thumbhashYes: thumbYes,
+      title: state.title.trim(),
+    );
+    final created = await _collectionRepository.createCollectionFromUploads(
+      storeId: storeId,
+      name: state.title.trim(),
+      photos: photos,
+      tag: _apiTag(state.tags),
+      description: state.description.trim(),
+    );
+    CatalogUploadStory.commitOk(
+      listingId: created.id,
+      photoCount: photos.length,
+    );
+    CatalogUploadStory.done();
+
+    final revision = created.revision;
+    final failedPhotos = [
+      ...created.failedPhotos,
+      for (final name in extraFailedNames)
+        FailedPhoto(
+          fileName: name,
+          code: 'S3_UPLOAD_FAILED',
+          message: 'Upload failed',
+        ),
+    ];
+
+    StoreProduct product;
+    try {
+      final detail = await _collectionRepository.fetchCollection(
+        storeId: storeId,
+        listingId: created.id,
+      );
+      product = CatalogUiMapper.detailToProduct(detail);
+    } catch (_) {
+      product = StoreProduct(
+        id: created.id,
+        title: created.name,
+        description:
+            created.description.isNotEmpty
+                ? created.description
+                : state.description.trim(),
+        tags: [
+          if (created.tag.isNotEmpty) created.tag,
+          ...state.tags.where((t) => t != created.tag),
+        ],
+        imagePaths: [for (final p in photos) p.localPath ?? ''].where((e) => e.isNotEmpty).toList(),
+      );
+    }
+
+    final partialMessage =
+        failedPhotos.isNotEmpty
+            ? CatalogErrorMapper.failedPhotosSummary(failedPhotos)
+            : null;
+
+    AppLog.d(
+      _tag,
+      'Published collection ${created.id} '
+      'photos=${product.imagePaths.length} failed=${failedPhotos.length}',
+    );
+    emit(
+      state.copyWith(
+        isPublishing: false,
+        isPublished: true,
+        publishedProduct: product,
+        publishedRevision: revision,
+        publishedApiTag: created.tag,
+        errorMessage: partialMessage,
+        clearPartialUpload: true,
+      ),
+    );
   }
 
   Future<void> _publishEdit(Emitter<AddStoreProductState> emit) async {
@@ -649,6 +798,12 @@ class AddStoreProductBloc
       if (newLocals.isNotEmpty) {
         final photoFiles = [for (final item in newLocals) File(item.filePath!)];
         await _assertPhotoSizes(photoFiles);
+        CatalogUploadStory.beginPublish(
+          title: state.title.trim().isEmpty ? 'Edit' : state.title.trim(),
+          photoCount: newLocals.length,
+          storeId: storeId,
+          mode: 'formEditAppend',
+        );
         final uploadBatch = await _directUpload.prepareAndUpload(
           storeId: storeId,
           localPaths: [for (final item in newLocals) item.filePath!],

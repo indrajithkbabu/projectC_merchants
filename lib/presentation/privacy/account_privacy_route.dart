@@ -8,7 +8,9 @@ import 'package:project_c/helper/widgets/primary_button.dart';
 import 'package:project_c/helper/widgets/screen_wrapper.dart';
 import 'package:project_c/models/store_privacy_mode.dart';
 import 'package:project_c/services/store_privacy_preferences.dart';
+import 'package:project_c/session/catalog_session.dart';
 import 'package:project_c/webservice/catalog_error_mapper.dart';
+import 'package:project_c/webservice/store/store_repository.dart';
 
 /// Account privacy (walkthrough pages 01–02). Entered from Profile when the
 /// user has an own store. Radios preview the non-follower matrix; applying a
@@ -24,6 +26,8 @@ class _AccountPrivacyRouteState extends State<AccountPrivacyRoute> {
   late final StorePrivacyPreferences _prefs;
   late StorePrivacyMode _preview;
   bool _hydrating = false;
+  final TextEditingController _wastageController = TextEditingController();
+  bool _wastageSaving = false;
 
   @override
   void initState() {
@@ -32,12 +36,63 @@ class _AccountPrivacyRouteState extends State<AccountPrivacyRoute> {
     _preview = _prefs.mode;
     _prefs.addListener(_syncFromPrefs);
     _hydrateFromServer();
+    _hydrateWastage();
   }
 
   @override
   void dispose() {
     _prefs.removeListener(_syncFromPrefs);
+    _wastageController.dispose();
     super.dispose();
+  }
+
+  Future<void> _hydrateWastage() async {
+    final storeId =
+        ServiceLocator.get<CatalogSession>().ownStoreId?.trim() ?? '';
+    if (storeId.isEmpty) return;
+    try {
+      final store = await ServiceLocator.get<StoreRepository>().fetchStore(
+        storeId,
+      );
+      final value = store.defaultWastageMarkup;
+      if (!mounted || value == null) return;
+      _wastageController.text =
+          value == value.roundToDouble()
+              ? '${value.toInt()}'
+              : value.toStringAsFixed(1);
+      setState(() {});
+    } catch (_) {}
+  }
+
+  Future<void> _saveWastage() async {
+    final storeId =
+        ServiceLocator.get<CatalogSession>().ownStoreId?.trim() ?? '';
+    if (storeId.isEmpty || _wastageSaving) return;
+    final parsed = double.tryParse(_wastageController.text.trim());
+    if (parsed == null || parsed < 0) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Enter a valid wastage percent.')),
+      );
+      return;
+    }
+    setState(() => _wastageSaving = true);
+    try {
+      await ServiceLocator.get<StoreRepository>().patchStoreWastageMarkup(
+        storeId: storeId,
+        wastageMarkup: parsed,
+      );
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Default wastage updated.')),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(CatalogErrorMapper.toUserMessage(e))),
+      );
+    } finally {
+      if (mounted) setState(() => _wastageSaving = false);
+    }
   }
 
   void _syncFromPrefs() {
@@ -146,6 +201,57 @@ class _AccountPrivacyRouteState extends State<AccountPrivacyRoute> {
             'Approved followers always see everything. You can remove a '
             'follower at any time from your Followers list.',
             style: AppTextStyles.caption(height: 1.4),
+          ),
+          const SizedBox(height: 28),
+          Text(
+            'STORE DEFAULTS',
+            style: AppTextStyles.label(
+              fontWeight: FontWeight.w600,
+              color: AppColors.textSecondary,
+            ),
+          ),
+          const SizedBox(height: 8),
+          DecoratedBox(
+            decoration: BoxDecoration(
+              color: AppColors.surfaceSecondary,
+              borderRadius: BorderRadius.circular(14),
+            ),
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Text(
+                    'Default wastage %',
+                    style: AppTextStyles.body(fontWeight: FontWeight.w600),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    'Used as a store-wide default for new listings.',
+                    style: AppTextStyles.caption(height: 1.35),
+                  ),
+                  const SizedBox(height: 10),
+                  TextField(
+                    controller: _wastageController,
+                    keyboardType: const TextInputType.numberWithOptions(
+                      decimal: true,
+                    ),
+                    decoration: const InputDecoration(
+                      isDense: true,
+                      hintText: 'e.g. 12',
+                      border: OutlineInputBorder(),
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  PrimaryButton(
+                    label: _wastageSaving ? 'Saving…' : 'Save wastage',
+                    isLoading: _wastageSaving,
+                    onPressed: _wastageSaving ? null : _saveWastage,
+                    height: 44,
+                  ),
+                ],
+              ),
+            ),
           ),
         ],
       ),

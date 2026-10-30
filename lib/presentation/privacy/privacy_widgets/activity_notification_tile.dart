@@ -136,43 +136,58 @@ class ActivityNotificationTile extends StatelessWidget {
   }
 
   static String _titleFor(ActivityItem item) {
+    // Prefer actor/store name for rich layout; fall back to server title.
     switch (item.type) {
       case ActivityItemType.newFollower:
         return item.actor?.name.trim().isNotEmpty == true
             ? item.actor!.name.trim()
-            : 'Someone';
+            : (item.title.isNotEmpty ? item.title : 'Someone');
       case ActivityItemType.productLiked:
         return item.actor?.name.trim().isNotEmpty == true
             ? item.actor!.name.trim()
-            : 'Someone';
+            : (item.title.isNotEmpty ? item.title : 'Someone');
       case ActivityItemType.newUpload:
         return item.store?.name.trim().isNotEmpty == true
             ? item.store!.name.trim()
-            : 'A store';
+            : (item.title.isNotEmpty ? item.title : 'A store');
       case ActivityItemType.requestApproved:
         return item.store?.name.trim().isNotEmpty == true
             ? item.store!.name.trim()
-            : 'A store';
+            : (item.title.isNotEmpty ? item.title : 'A store');
       case ActivityItemType.followRequest:
         return item.actor?.name.trim().isNotEmpty == true
             ? item.actor!.name.trim()
-            : 'Someone';
+            : (item.title.isNotEmpty ? item.title : 'Someone');
       case ActivityItemType.unknown:
-        return item.store?.name.trim().isNotEmpty == true
-            ? item.store!.name.trim()
-            : 'Update';
+        return item.title.isNotEmpty
+            ? item.title
+            : (item.store?.name.trim().isNotEmpty == true
+                ? item.store!.name.trim()
+                : 'Update');
     }
   }
 
   static String _subtitleFor(ActivityItem item) {
+    if (item.message.trim().isNotEmpty) {
+      // Server message often includes actor name; strip leading name when we
+      // already show it as the title.
+      final msg = item.message.trim();
+      final actor = item.actor?.name.trim() ?? '';
+      if (actor.isNotEmpty &&
+          msg.toLowerCase().startsWith(actor.toLowerCase())) {
+        final rest = msg.substring(actor.length).trim();
+        if (rest.isNotEmpty) return rest;
+      }
+      return msg;
+    }
     switch (item.type) {
       case ActivityItemType.newFollower:
         return 'started following you.';
       case ActivityItemType.productLiked:
         final store = item.store?.name.trim() ?? '';
         return store.isEmpty
-            ? 'liked your photo.'
-            : 'liked your photo in $store.';
+            ? 'liked your product.'
+            : 'liked your product in $store.';
       case ActivityItemType.newUpload:
         final n = item.count < 1 ? 1 : item.count;
         return n == 1 ? 'added 1 new product.' : 'added $n new products.';

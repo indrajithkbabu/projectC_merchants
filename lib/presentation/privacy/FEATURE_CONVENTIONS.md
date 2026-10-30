@@ -60,19 +60,46 @@ This file defines what to follow for UI and logic inside `lib/presentation/priva
 - **API** (`WishlistRepository` / `lib/webservice/wishlist/`):
   - `PUT|DELETE /products/:listingId/photos/:photoId/like` (store/collections
     alias when `storeId` known)
-  - `GET /wishlist?limit&cursor&status=all|active|locked`
+  - Public like: `PUT|DELETE /products/:productId/like` (per CatalogProduct id)
+  - Private wishlist: `POST|DELETE /wishlist/products/:productId` (+ aliases)
+  - Bulk multi-select add: `POST /wishlist/batch` `{ productIds }` (max 100;
+    FE `VisitorWishlistBatch` → `addWishlistProductsBatch`; falls back to
+    parallel single POSTs if batch `404`)
+  - Bulk remove: `DELETE /wishlist/batch` `{ productIds }` (repo ready;
+    wishlist screen still removes one row via `DELETE /wishlist/:wishlistId`)
+  - `GET /wishlist?limit&cursor` (no `status` query — API rejects it)
   - `DELETE /wishlist/:wishlistId`
 - **Models:** `lib/models/catalog/wishlist_api_models.dart`
-  (`WishlistItem` active + locked stubs, `PhotoLikeResult`).
-- **Wishlist tab** (`wishlist_route.dart`): 2-column **square** grid; photo with
-  heart top-right; title / meta / store overlaid at bottom. Store filter chips;
-  pull-to-refresh. Active tile → product details with `galleryFeed` of visible
-  active wishlist photos (swipe across items); `likedPhotoId(s)` keep hearts
-  filled. Locked stub: lock UI, Follow/Requested, trash. Remove active via
-  heart → unlike API when ids exist. Privacy footer unchanged.
+  (`WishlistItem`, `WishlistBatchAddResult` / `WishlistBatchRemoveResult`,
+  `PhotoLikeResult`).
+- **Wishlist tab** (`wishlist_route.dart`): title with count pill flush beside
+  it (not mid-row); global-search
+  style search field + `SearchFilterBar` (Sort & Filter / Metal / Purity /
+  Store + sort) built from loaded wishlist API specs (`metalType`, `purity`,
+  store). Client-side filter/sort/search; pull-to-refresh. Scrolling down past
+  the first grid row **collapses** search + filters into right-side title
+  icons (search / tune) with a smooth size+fade (store-search style scroll
+  compensation); scrolling back to the top expands them. Icon dots mark an
+  active query/filters. Trailing close (X) only when the field has text.
+  Shell `refreshSignal` on tab select clears any typed query + unfocuses so
+  leaving and returning Wishlist never keeps leftover search text.
+  Swipe/back IME dismiss clears search focus (armed only after inset > 48 so
+  open flicker cannot dismiss). User scroll also clears stuck focus when the
+  keypad is already gone, so chrome can minimize again. Collapse is blocked
+  while IME open / chrome animating; only user-driven scrolls toggle chrome.
+  Shell `bottomInset` pads the grid / empty / shimmer only (content scrolls
+  under the floating nav — no blank band below the list). Default **2-column
+  square** grid; pinch zoom-in/out changes column density (2–9) like store
+  channel Media / gallery (pointer-tracked pinch, snap on release, scroll +
+  taps locked while pinching, decode-warm on densify). Photo with heart
+  top-right; title / meta / store overlaid at bottom.
+  Active tile → product details with `galleryFeed` of visible active wishlist
+  photos (swipe across items); `likedPhotoId(s)` keep hearts filled. Locked
+  stub: lock UI, Follow/Requested, trash. Remove active via heart → unlike API
+  when ids exist (heart stays visible; no spinner on the heart during the short
+  unlike call). No subtitle / privacy footer copy.
 - **Product details heart:** like/unlike current photo (see product_details
-  FEATURE_CONVENTIONS). Snack “Saved to Wishlist” + **View** pops to shell and
-  selects the Wishlist tab (`ShellNav`), which quiet-refreshes the list.
+  FEATURE_CONVENTIONS). No “Saved to Wishlist” snack.
 - **Activity** opens from Stores home notification icon → `activity_route`
   (not store-profile bottom nav). Main shell (own store) hosts Wishlist + My
   store as bottom tabs (`WishlistRoute` / `StoreMyStoreTab`; IndexedStack

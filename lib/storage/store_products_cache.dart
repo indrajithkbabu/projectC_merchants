@@ -91,6 +91,34 @@ class StoreProductsCache {
     }
   }
 
+  /// After wishlist unlike: nudge listing badge so cache-first paint is not stale
+  /// until quiet enrich lands. [delta] is usually `-1` per photo unlike.
+  Future<void> adjustListingLikeCount({
+    required String storeId,
+    required String listingId,
+    int delta = -1,
+  }) async {
+    final sid = storeId.trim();
+    final lid = listingId.trim();
+    if (sid.isEmpty || lid.isEmpty || delta == 0) return;
+    final current = await read(sid);
+    if (current == null || current.isEmpty) return;
+    var changed = false;
+    final next = <StoreProduct>[];
+    for (final p in current) {
+      if (p.id != lid) {
+        next.add(p);
+        continue;
+      }
+      changed = true;
+      final n = (p.likeCount ?? 0) + delta;
+      next.add(
+        n <= 0 ? p.copyWith(clearLikeCount: true) : p.copyWith(likeCount: n),
+      );
+    }
+    if (changed) await write(sid, next);
+  }
+
   /// Clears memory + disk product caches (logout / delete account).
   Future<void> clearAll() async {
     _memory.clear();

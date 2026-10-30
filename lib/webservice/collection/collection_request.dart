@@ -1,12 +1,15 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:project_c/helper/be_verify.dart';
 import 'package:project_c/models/catalog/catalog_page.dart';
+import 'package:project_c/models/catalog/catalog_product_models.dart';
 import 'package:project_c/models/catalog/catalog_upload_models.dart';
 import 'package:project_c/models/catalog/collection_models.dart';
 import 'package:project_c/models/catalog/collection_specifications.dart';
 import 'package:project_c/resources/endpoints.dart';
 import 'package:project_c/webservice/catalog_api_client.dart';
+import 'package:project_c/webservice/catalog_api_exception.dart';
 
 class CollectionRequest {
   CollectionRequest({required CatalogApiClient apiClient}) : _api = apiClient;
@@ -27,11 +30,17 @@ class CollectionRequest {
       requiresAuth: false,
       allowAnonymousBearer: true,
     );
+    final raw =
+        json?['items'] ?? json?['collections'] ?? json?['data'] ?? const [];
     final items =
-        (json?['items'] as List? ?? const [])
-            .whereType<Map<String, dynamic>>()
-            .map(CollectionSummary.fromJson)
-            .toList();
+        raw is List
+            ? raw
+                .whereType<Map>()
+                .map(
+                  (e) => CollectionSummary.fromJson(Map<String, dynamic>.from(e)),
+                )
+                .toList()
+            : const <CollectionSummary>[];
     return CatalogPage(
       items: items,
       nextCursor: json?['nextCursor'] as String?,
@@ -52,19 +61,287 @@ class CollectionRequest {
   }
 
   /// Phase 1: pre-signed S3 PUT URLs for direct binary upload.
+  ///
+  /// Tries `/uploads/sign`, then `/stores/:id/uploads/sign`, then
+  /// `/stores/:id/uploads/presign` (all return `imageId` per updated docs).
   Future<CatalogPresignResult> presignUploads({
     required String storeId,
     required List<CatalogPresignFile> files,
   }) async {
+    final body = <String, dynamic>{
+      'storeId': storeId,
+      'count': files.length,
+      'files': [for (final f in files) f.toJson()],
+    };
+    final paths = <String>[
+      Endpoints.uploadsSign,
+      Endpoints.storeUploadsSign(storeId),
+      Endpoints.storeUploadsPresign(storeId),
+    ];
+    CatalogApiException? last404;
+    for (var i = 0; i < paths.length; i++) {
+      final path = paths[i];
+      final useFullBody = path == Endpoints.uploadsSign;
+      try {
+        final json = await _api.sendJson(
+          method: HttpMethod.post,
+          path: path,
+          body:
+              useFullBody
+                  ? body
+                  : {
+                    'storeId': storeId,
+                    'count': files.length,
+                    'files': [for (final f in files) f.toJson()],
+                  },
+          requiresAuth: true,
+        );
+        return CatalogPresignResult.fromJson(json ?? const {});
+      } on CatalogApiException catch (e) {
+        final notFound = e.statusCode == 404 || e.code == 'NOT_FOUND';
+        if (!notFound || i == paths.length - 1) rethrow;
+        last404 = e;
+      }
+    }
+    throw last404 ??
+        CatalogApiException(
+          statusCode: 404,
+          code: 'NOT_FOUND',
+          message: 'Upload signing endpoint unavailable.',
+        );
+  }
+
+  /// Jewel-flow transactional product create after direct S3 uploads.
+  Future<CatalogProductBatchResult> createProductsBatch({
+    required String storeId,
+    required List<Map<String, dynamic>> products,
+    String? collectionId,
+    String? collectionName,
+    Map<String, dynamic>? collectionDefaults,
+    String? idempotencyKey,
+  }) async {
+    final requestId =
+        (idempotencyKey != null && idempotencyKey.trim().isNotEmpty)
+            ? idempotencyKey.trim()
+            : 'batch-${DateTime.now().microsecondsSinceEpoch}-${products.length}';
+    final body = <String, dynamic>{
+      'products': products,
+      'batchId': requestId,
+      'idempotencyKey': requestId,
+    };
+    final id = collectionId?.trim() ?? '';
+    final name = collectionName?.trim() ?? '';
+    if (id.isNotEmpty) body['collectionId'] = id;
+    if (name.isNotEmpty) body['collectionName'] = name;
+    if (collectionDefaults != null && collectionDefaults.isNotEmpty) {
+      body['collectionDefaults'] = collectionDefaults;
+    }
     final json = await _api.sendJson(
       method: HttpMethod.post,
-      path: Endpoints.storeUploadsPresign(storeId),
-      body: {
-        'files': [for (final f in files) f.toJson()],
-      },
+      path: Endpoints.storeProductsBatch(storeId),
+      body: body,
+      extraHeaders: {'Idempotency-Key': requestId},
+      requiresAuth: true,
+      timeout: const Duration(minutes: 2),
+    );
+    return CatalogProductBatchResult.fromJson(json ?? const {});
+  }
+
+  Future<CatalogPage<CatalogProduct>> listStoreProducts({
+    required String storeId,
+    int limit = 50,
+    String? cursor,
+    String? collectionId,
+    String? category,
+    String? metal,
+    String? purity,
+    String? stockStatus,
+  }) async {
+    final query = <String, String>{'limit': '$limit'};
+    if (cursor != null && cursor.isNotEmpty) query['cursor'] = cursor;
+    if (collectionId != null && collectionId.isNotEmpty) {
+      query['collectionId'] = collectionId;
+    }
+    if (category != null && category.isNotEmpty) query['category'] = category;
+    if (metal != null && metal.isNotEmpty) query['metal'] = metal;
+    if (purity != null && purity.isNotEmpty) query['purity'] = purity;
+    if (stockStatus != null && stockStatus.isNotEmpty) {
+      query['stock_status'] = stockStatus;
+    }
+    final json = await _api.sendJson(
+      method: HttpMethod.get,
+      path: Endpoints.storeProducts(storeId),
+      query: query,
+      requiresAuth: false,
+      allowAnonymousBearer: true,
+    );
+    final raw =
+        json?['products'] ?? json?['items'] ?? json?['data'] ?? const [];
+    final items =
+        raw is List
+            ? raw
+                .whereType<Map>()
+                .map((e) => CatalogProduct.fromJson(Map<String, dynamic>.from(e)))
+                .toList()
+            : const <CatalogProduct>[];
+    return CatalogPage(
+      items: items,
+      nextCursor: json?['nextCursor'] as String?,
+    );
+  }
+
+  Future<CatalogPage<CatalogProduct>> listStoreFeed({
+    required String storeId,
+    int limit = 50,
+    String? cursor,
+  }) async {
+    final query = <String, String>{'limit': '$limit'};
+    if (cursor != null && cursor.isNotEmpty) query['cursor'] = cursor;
+    final json = await _api.sendJson(
+      method: HttpMethod.get,
+      path: Endpoints.storeFeed(storeId),
+      query: query,
+      requiresAuth: false,
+      allowAnonymousBearer: true,
+    );
+    final raw =
+        json?['products'] ?? json?['items'] ?? json?['data'] ?? const [];
+    final items =
+        raw is List
+            ? raw
+                .whereType<Map>()
+                .map((e) => CatalogProduct.fromJson(Map<String, dynamic>.from(e)))
+                .toList()
+            : const <CatalogProduct>[];
+    return CatalogPage(
+      items: items,
+      nextCursor: json?['nextCursor'] as String?,
+    );
+  }
+
+  Future<CatalogProduct> fetchProduct({required String productId}) async {
+    // Prefer Bearer when present so `liked` / `wishlisted` hydrate for viewers.
+    BeVerify.step(
+      '1 GET /products/:id',
+      detail: 'id=${BeVerify.shortId(productId)}',
+    );
+    try {
+      final json = await _api.sendJson(
+        method: HttpMethod.get,
+        path: Endpoints.productById(productId),
+        requiresAuth: false,
+        allowAnonymousBearer: true,
+      );
+      final product = CatalogProduct.fromJson(json ?? const {});
+      final map = json ?? const <String, dynamic>{};
+      final likedKey = map.containsKey('liked');
+      final wishKey =
+          map.containsKey('wishlisted') || map.containsKey('isWishlisted');
+      final thumbs =
+          (map['images'] as List?) ??
+          (map['photos'] as List?) ??
+          const [];
+      var thumbYes = 0;
+      var thumbNull = 0;
+      for (final raw in thumbs) {
+        if (raw is! Map) continue;
+        final h =
+            '${raw['thumbhash'] ?? raw['thumbHash'] ?? ''}'.trim();
+        if (h.isEmpty) {
+          thumbNull++;
+        } else {
+          thumbYes++;
+        }
+      }
+      if (likedKey && wishKey) {
+        BeVerify.ok(
+          'liked+wishlisted present',
+          detail:
+              '${BeVerify.flag('liked', product.liked)} '
+              '${BeVerify.flag('wishlisted', product.wishlisted)}',
+        );
+      } else {
+        BeVerify.fail(
+          'liked+wishlisted missing on authed GET',
+          detail:
+              'likedKey=$likedKey wishKey=$wishKey '
+              '${BeVerify.flag('liked', product.liked)} '
+              '${BeVerify.flag('wishlisted', product.wishlisted)}',
+        );
+      }
+      if (thumbs.isNotEmpty) {
+        if (thumbNull == 0) {
+          BeVerify.ok(
+            'product images thumbhash',
+            detail: 'YES=$thumbYes NULL=0',
+          );
+        } else {
+          BeVerify.fail(
+            'product images thumbhash',
+            detail: 'YES=$thumbYes NULL=$thumbNull GAP_THUMBHASH_NULL',
+          );
+        }
+      }
+      final wastage = map['wastage_pct'] ?? map['wastagePct'];
+      BeVerify.info(
+        'wastage_pct',
+        detail: wastage == null ? 'null (Fine→Gross)' : '$wastage',
+      );
+      return product;
+    } on CatalogApiException catch (e) {
+      BeVerify.info(
+        'GET product miss',
+        detail:
+            'code=${e.code} status=${e.statusCode} '
+            '(FE falls back to collection if PRODUCT_NOT_FOUND)',
+      );
+      rethrow;
+    }
+  }
+
+  /// `PATCH /products/:productId` — stock / lock / specs (sub-collection sync).
+  Future<CatalogProduct> updateProduct({
+    required String productId,
+    required Map<String, dynamic> body,
+  }) async {
+    BeVerify.step(
+      '3 PATCH /products/:id availability',
+      detail:
+          'id=${BeVerify.shortId(productId)} '
+          'stock=${body['stock_status']} locked=${body['is_locked']}',
+    );
+    try {
+      final json = await _api.sendJson(
+        method: HttpMethod.patch,
+        path: Endpoints.productPatch(productId),
+        body: body,
+        requiresAuth: true,
+      );
+      final product = CatalogProduct.fromJson(json ?? const {});
+      BeVerify.ok(
+        'availability PATCH',
+        detail:
+            'id=${BeVerify.shortId(product.id)} '
+            'stock=${product.stockStatus?.apiValue} '
+            'locked=${product.isLocked}',
+      );
+      return product;
+    } on CatalogApiException catch (e) {
+      BeVerify.fail(
+        'availability PATCH',
+        detail: 'code=${e.code} status=${e.statusCode} ${e.message}',
+      );
+      rethrow;
+    }
+  }
+
+  /// `DELETE /products/:productId` — soft-delete first-class product.
+  Future<void> deleteProduct({required String productId}) async {
+    await _api.sendJson(
+      method: HttpMethod.delete,
+      path: Endpoints.productById(productId),
       requiresAuth: true,
     );
-    return CatalogPresignResult.fromJson(json ?? const {});
   }
 
   /// Phase 2 JSON commit after direct S3 uploads (no multipart file parts).

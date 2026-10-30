@@ -3,13 +3,18 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:project_c/bloc/import_requests/import_requests_bloc.dart';
 import 'package:project_c/helper/app_padding.dart';
 import 'package:project_c/helper/colors.dart';
+import 'package:project_c/helper/product_image.dart';
 import 'package:project_c/helper/text_styles.dart';
 import 'package:project_c/helper/widgets/app_back_button.dart';
 import 'package:project_c/helper/widgets/screen_wrapper.dart';
+import 'package:project_c/models/catalog/quick_import_api_models.dart';
 import 'package:project_c/presentation/store_import/store_import_widgets/import_requests_list_shimmer.dart';
 
 class StoreImportRequestsRoute extends StatefulWidget {
-  const StoreImportRequestsRoute({super.key});
+  const StoreImportRequestsRoute({super.key, this.initialTab = 0});
+
+  /// 0 Received, 1 Sent.
+  final int initialTab;
 
   @override
   State<StoreImportRequestsRoute> createState() =>
@@ -17,7 +22,13 @@ class StoreImportRequestsRoute extends StatefulWidget {
 }
 
 class _StoreImportRequestsRouteState extends State<StoreImportRequestsRoute> {
-  int _tabIndex = 0;
+  late int _tabIndex;
+
+  @override
+  void initState() {
+    super.initState();
+    _tabIndex = widget.initialTab == 1 ? 1 : 0;
+  }
 
   Future<void> _pullToRefresh() async {
     final bloc = context.read<ImportRequestsBloc>();
@@ -90,10 +101,15 @@ class _StoreImportRequestsRouteState extends State<StoreImportRequestsRoute> {
                   ),
                   const SizedBox(height: 8),
                   Text('Import requests', style: AppTextStyles.title()),
-                  const SizedBox(height: 6),
-                  Text(
-                    'Review requests to use products from your store, or check the status of requests you sent.',
-                    style: AppTextStyles.bodySecondary(fontSize: 14),
+                  const SizedBox(height: 4),
+                  BlocBuilder<ImportRequestsBloc, ImportRequestsState>(
+                    buildWhen: (p, c) => p.storeName != c.storeName,
+                    builder: (context, state) {
+                      return Text(
+                        state.storeName,
+                        style: AppTextStyles.bodySecondary(fontSize: 14),
+                      );
+                    },
                   ),
                   const SizedBox(height: 14),
                   BlocBuilder<ImportRequestsBloc, ImportRequestsState>(
@@ -122,20 +138,15 @@ class _StoreImportRequestsRouteState extends State<StoreImportRequestsRoute> {
                 sizing: StackFit.expand,
                 children: [
                   KeyedSubtree(
-                    key: const ValueKey('import_requests_incoming'),
+                    key: const ValueKey('import_requests_received'),
                     child: BlocBuilder<ImportRequestsBloc, ImportRequestsState>(
-                      buildWhen:
-                          (prev, curr) =>
-                              prev.isLoading != curr.isLoading ||
-                              prev.incomingItems != curr.incomingItems ||
-                              prev.actingRequestId != curr.actingRequestId ||
-                              prev.items != curr.items,
                       builder: (context, state) {
-                        return _RequestsListPane(
+                        return _BatchListPane(
                           items: state.incomingItems,
                           isLoading: state.isLoading,
-                          emptyMessage: 'No incoming requests yet',
+                          emptyMessage: 'No received requests yet',
                           onRefresh: _pullToRefresh,
+                          received: true,
                         );
                       },
                     ),
@@ -143,18 +154,13 @@ class _StoreImportRequestsRouteState extends State<StoreImportRequestsRoute> {
                   KeyedSubtree(
                     key: const ValueKey('import_requests_sent'),
                     child: BlocBuilder<ImportRequestsBloc, ImportRequestsState>(
-                      buildWhen:
-                          (prev, curr) =>
-                              prev.isLoading != curr.isLoading ||
-                              prev.outgoingItems != curr.outgoingItems ||
-                              prev.actingRequestId != curr.actingRequestId ||
-                              prev.items != curr.items,
                       builder: (context, state) {
-                        return _RequestsListPane(
+                        return _BatchListPane(
                           items: state.outgoingItems,
                           isLoading: state.isLoading,
                           emptyMessage: 'No sent requests yet',
                           onRefresh: _pullToRefresh,
+                          received: false,
                         );
                       },
                     ),
@@ -194,8 +200,7 @@ class _SegmentedTabs extends StatelessWidget {
         children: [
           Expanded(
             child: _SegmentTab(
-              label: 'Incoming',
-              icon: Icons.move_to_inbox_rounded,
+              label: 'Received',
               count: incomingPending,
               selected: selectedIndex == 0,
               onTap: () => onChanged(0),
@@ -204,7 +209,6 @@ class _SegmentedTabs extends StatelessWidget {
           Expanded(
             child: _SegmentTab(
               label: 'Sent',
-              icon: Icons.outbox_rounded,
               count: sentPending,
               selected: selectedIndex == 1,
               onTap: () => onChanged(1),
@@ -219,24 +223,20 @@ class _SegmentedTabs extends StatelessWidget {
 class _SegmentTab extends StatelessWidget {
   const _SegmentTab({
     required this.label,
-    required this.icon,
     required this.count,
     required this.selected,
     required this.onTap,
   });
 
   final String label;
-  final IconData icon;
   final int count;
   final bool selected;
   final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
-    final color = selected ? AppColors.primary : AppColors.textSecondary;
     final labelColor =
         selected ? AppColors.textPrimary : AppColors.textSecondary;
-
     return Material(
       color: selected ? AppColors.surface : Colors.transparent,
       borderRadius: BorderRadius.circular(11),
@@ -250,8 +250,6 @@ class _SegmentTab extends StatelessWidget {
           child: Row(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              Icon(icon, size: 18, color: color),
-              const SizedBox(width: 6),
               Flexible(
                 child: Text(
                   label,
@@ -298,18 +296,20 @@ class _SegmentTab extends StatelessWidget {
   }
 }
 
-class _RequestsListPane extends StatelessWidget {
-  const _RequestsListPane({
+class _BatchListPane extends StatelessWidget {
+  const _BatchListPane({
     required this.items,
     required this.isLoading,
     required this.emptyMessage,
     required this.onRefresh,
+    required this.received,
   });
 
-  final List<ImportRequestItem> items;
+  final List<ImportRequestListItem> items;
   final bool isLoading;
   final String emptyMessage;
   final Future<void> Function() onRefresh;
+  final bool received;
 
   @override
   Widget build(BuildContext context) {
@@ -334,46 +334,73 @@ class _RequestsListPane extends StatelessWidget {
               )
               : ListView.separated(
                 physics: const AlwaysScrollableScrollPhysics(),
-                padding: AppPadding.screen(top: 8, bottom: 24),
+                padding: AppPadding.screen(top: 12, bottom: 24),
                 itemCount: items.length,
-                separatorBuilder:
-                    (_, __) => Divider(height: 1, color: AppColors.border),
+                separatorBuilder: (_, __) => const SizedBox(height: 12),
                 itemBuilder: (context, index) {
-                  return _ImportRequestTile(item: items[index]);
+                  final item = items[index];
+                  if (received) {
+                    return _ReceivedCard(item: item);
+                  }
+                  return _SentRow(item: item);
                 },
               ),
     );
   }
 }
 
-class _ImportRequestTile extends StatelessWidget {
-  const _ImportRequestTile({required this.item});
+/// One Sent card = one product (batch may still hold siblings).
+/// Cancel remains batch-level and shows once on the first pending row.
+class _SentRow extends StatelessWidget {
+  const _SentRow({required this.item});
 
-  final ImportRequestItem item;
+  final ImportRequestListItem item;
 
   @override
   Widget build(BuildContext context) {
-    final pending = item.request.isPending;
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 12),
+    final batch = item.batch;
+    final product =
+        item.focusProduct ??
+        (batch.products.isEmpty ? null : batch.products.first);
+    final store =
+        batch.sourceStore.name.trim().isEmpty
+            ? 'Source store'
+            : batch.sourceStore.name.trim();
+    final when = _ago(batch.createdAt);
+    final title =
+        (product?.title.trim().isNotEmpty == true)
+            ? product!.title.trim()
+            : batch.primaryTitle;
+    final imageUrl =
+        (product?.imageUrl.trim().isNotEmpty == true)
+            ? product!.imageUrl.trim()
+            : batch.primaryImageUrl;
+    final status = _sentStatusLabel(batch: batch, product: product);
+    final showCancel = _showSentCancel(item: item, product: product);
+    return Container(
+      decoration: BoxDecoration(
+        color: AppColors.surface,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: AppColors.border.withValues(alpha: 0.7)),
+      ),
+      padding: const EdgeInsets.fromLTRB(12, 12, 12, 12),
       child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Row(
             children: [
-              Container(
-                width: 40,
-                height: 40,
-                decoration: BoxDecoration(
-                  color: AppColors.surfaceSecondary,
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: Icon(
-                  item.isIncoming
-                      ? Icons.move_to_inbox_rounded
-                      : Icons.outbox_rounded,
-                  color: AppColors.primary,
-                  size: 20,
+              ClipRRect(
+                borderRadius: BorderRadius.circular(10),
+                child: SizedBox(
+                  width: 52,
+                  height: 52,
+                  child:
+                      imageUrl.isEmpty
+                          ? ColoredBox(color: AppColors.surfaceSecondary)
+                          : ProductMediaImage(
+                            path: imageUrl,
+                            fit: BoxFit.cover,
+                          ),
                 ),
               ),
               const SizedBox(width: 12),
@@ -382,142 +409,341 @@ class _ImportRequestTile extends StatelessWidget {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      item.title,
-                      style: AppTextStyles.body(
-                        fontSize: 16,
-                        fontWeight: FontWeight.w700,
-                      ),
+                      title,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: AppTextStyles.body(fontWeight: FontWeight.w700),
                     ),
                     const SizedBox(height: 2),
                     Text(
-                      item.subtitle,
-                      style: AppTextStyles.caption(fontSize: 13),
+                      '$store · $when',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: AppTextStyles.caption(),
                     ),
                   ],
                 ),
               ),
-              _StatusChip(status: item.request.status),
+              const SizedBox(width: 8),
+              _StatusPill(status: status),
             ],
           ),
-          if (pending) ...[
+          if (showCancel) ...[
             const SizedBox(height: 12),
-            if (item.isIncoming)
-              Row(
-                children: [
-                  Expanded(
-                    child: OutlinedButton(
-                      onPressed:
-                          item.isActing
-                              ? null
-                              : () => context.read<ImportRequestsBloc>().add(
-                                ImportRequestsRejectPressed(item.request.id),
-                              ),
-                      style: OutlinedButton.styleFrom(
-                        foregroundColor: AppColors.error,
-                        side: BorderSide(color: AppColors.error),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(12),
-                        ),
+            OutlinedButton(
+              onPressed:
+                  item.isActing
+                      ? null
+                      : () => context.read<ImportRequestsBloc>().add(
+                        ImportRequestsCancelPressed(requestId: batch.id),
                       ),
-                      child: Text(
-                        'Reject',
-                        style: AppTextStyles.label(
-                          fontWeight: FontWeight.w600,
-                          color: AppColors.error,
-                        ),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: ElevatedButton(
-                      onPressed:
-                          item.isActing
-                              ? null
-                              : () => context.read<ImportRequestsBloc>().add(
-                                ImportRequestsAcceptPressed(item.request.id),
-                              ),
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: AppColors.primary,
-                        foregroundColor: AppColors.textOnPrimary,
-                        elevation: 0,
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(12),
-                        ),
-                      ),
-                      child:
-                          item.isActing
-                              ? SizedBox(
-                                width: 18,
-                                height: 18,
-                                child: CircularProgressIndicator(
-                                  strokeWidth: 2,
-                                  color: AppColors.textOnPrimary,
-                                ),
-                              )
-                              : Text(
-                                'Accept',
-                                style: AppTextStyles.label(
-                                  fontWeight: FontWeight.w600,
-                                  color: AppColors.textOnPrimary,
-                                ),
-                              ),
-                    ),
-                  ),
-                ],
-              )
-            else
-              Text(
-                'You’ll be notified here when they respond.',
-                style: AppTextStyles.caption(fontSize: 13),
+              style: OutlinedButton.styleFrom(
+                foregroundColor: AppColors.textPrimary,
+                minimumSize: const Size.fromHeight(40),
+                side: BorderSide(color: AppColors.border),
               ),
+              child: Text(
+                item.isActing ? '…' : 'Cancel request',
+                style: AppTextStyles.button(color: AppColors.textPrimary),
+              ),
+            ),
           ],
         ],
       ),
     );
   }
+
+  static String _sentStatusLabel({
+    required ImportRequestBatch batch,
+    required ImportRequestProductRow? product,
+  }) {
+    if (batch.isCancelled) return batch.status;
+    final itemStatus = product?.importStatus.trim() ?? '';
+    if (itemStatus.isNotEmpty) return itemStatus;
+    return batch.status;
+  }
+
+  /// Batch cancel once: first pending product row (or whole card if empty).
+  static bool _showSentCancel({
+    required ImportRequestListItem item,
+    required ImportRequestProductRow? product,
+  }) {
+    final batch = item.batch;
+    if (!batch.canCancel) return false;
+    if (batch.products.isEmpty) return true;
+    if (product == null || !product.isItemPending) return false;
+    final firstPending = batch.products.indexWhere((p) => p.isItemPending);
+    return item.productIndex == firstPending;
+  }
 }
 
-class _StatusChip extends StatelessWidget {
-  const _StatusChip({required this.status});
+/// One Received card = one product (batch may still hold siblings).
+class _ReceivedCard extends StatelessWidget {
+  const _ReceivedCard({required this.item});
+
+  final ImportRequestListItem item;
+
+  @override
+  Widget build(BuildContext context) {
+    final batch = item.batch;
+    final store = batch.requesterStore;
+    final phone =
+        batch.requesterPhone.trim().isNotEmpty
+            ? batch.requesterPhone.trim()
+            : store.phone.trim();
+    final initials = _initials(store.name);
+    final product =
+        item.focusProduct ??
+        (batch.products.isEmpty ? null : batch.products.first);
+    final productId = product?.decisionProductId ?? '';
+    final itemPending = product?.isItemPending ?? batch.hasActionablePending;
+    final actingThis =
+        item.isActing &&
+        (item.actingProductId.isEmpty ||
+            item.actingProductId == productId ||
+            item.actingProductId == product?.sourceProductId ||
+            item.actingProductId == product?.createdProductId);
+
+    return Container(
+      decoration: BoxDecoration(
+        color: AppColors.surface,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: AppColors.border.withValues(alpha: 0.7)),
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(12, 12, 12, 8),
+            child: Row(
+              children: [
+                CircleAvatar(
+                  radius: 20,
+                  backgroundColor: AppColors.surfaceSecondary,
+                  backgroundImage:
+                      store.logo.isEmpty ? null : NetworkImage(store.logo),
+                  child:
+                      store.logo.isEmpty
+                          ? Text(
+                            initials,
+                            style: AppTextStyles.label(
+                              fontWeight: FontWeight.w700,
+                            ),
+                          )
+                          : null,
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        store.name.trim().isEmpty
+                            ? 'Store'
+                            : store.name.trim(),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: AppTextStyles.body(fontWeight: FontWeight.w700),
+                      ),
+                      if (phone.isNotEmpty)
+                        Text(phone, style: AppTextStyles.caption()),
+                    ],
+                  ),
+                ),
+                _StatusPill(
+                  status:
+                      product?.importStatus.isNotEmpty == true
+                          ? product!.importStatus
+                          : batch.status,
+                ),
+              ],
+            ),
+          ),
+          AspectRatio(
+            aspectRatio: 4 / 5,
+            child: _ProductPhoto(product: product),
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(12, 12, 12, 12),
+            child:
+                itemPending && productId.isNotEmpty
+                    ? Row(
+                      children: [
+                        Expanded(
+                          child: FilledButton(
+                            onPressed:
+                                item.isActing
+                                    ? null
+                                    : () => context
+                                        .read<ImportRequestsBloc>()
+                                        .add(
+                                          ImportRequestsAcceptPressed(
+                                            requestId: batch.id,
+                                            productId: productId,
+                                          ),
+                                        ),
+                            style: FilledButton.styleFrom(
+                              backgroundColor: AppColors.textPrimary,
+                              foregroundColor: AppColors.background,
+                              minimumSize: const Size.fromHeight(44),
+                            ),
+                            child: Text(
+                              actingThis ? '…' : 'Approve',
+                              style: AppTextStyles.button(
+                                color: AppColors.background,
+                              ),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: OutlinedButton(
+                            onPressed:
+                                item.isActing
+                                    ? null
+                                    : () => context
+                                        .read<ImportRequestsBloc>()
+                                        .add(
+                                          ImportRequestsRejectPressed(
+                                            requestId: batch.id,
+                                            productId: productId,
+                                          ),
+                                        ),
+                            style: OutlinedButton.styleFrom(
+                              foregroundColor: AppColors.textPrimary,
+                              minimumSize: const Size.fromHeight(44),
+                              side: BorderSide(color: AppColors.border),
+                            ),
+                            child: Text(
+                              actingThis ? '…' : 'Decline',
+                              style: AppTextStyles.button(
+                                color: AppColors.textPrimary,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
+                    )
+                    : Align(
+                      alignment: Alignment.centerLeft,
+                      child: _StatusPill(
+                        status:
+                            product?.importStatus.isNotEmpty == true
+                                ? product!.importStatus
+                                : batch.status,
+                      ),
+                    ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  static String _initials(String name) {
+    final parts =
+        name
+            .trim()
+            .split(RegExp(r'\s+'))
+            .where((p) => p.isNotEmpty)
+            .toList();
+    if (parts.isEmpty) return '?';
+    if (parts.length == 1) {
+      final s = parts.first;
+      return s.length >= 2 ? s.substring(0, 2).toUpperCase() : s.toUpperCase();
+    }
+    return (parts[0][0] + parts[1][0]).toUpperCase();
+  }
+}
+
+class _ProductPhoto extends StatelessWidget {
+  const _ProductPhoto({required this.product});
+
+  final ImportRequestProductRow? product;
+
+  @override
+  Widget build(BuildContext context) {
+    final url = product?.imageUrl ?? '';
+    Widget image;
+    if (url.isEmpty) {
+      image = ColoredBox(color: AppColors.surfaceSecondary);
+    } else {
+      image = ProductMediaImage(path: url, fit: BoxFit.cover);
+    }
+    final row = product;
+    if (row == null || row.isItemPending) return image;
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        image,
+        Positioned(
+          top: 10,
+          left: 10,
+          child: _StatusPill(status: row.importStatus),
+        ),
+      ],
+    );
+  }
+}
+
+class _StatusPill extends StatelessWidget {
+  const _StatusPill({required this.status});
 
   final String status;
 
   @override
   Widget build(BuildContext context) {
-    final (label, color, bg) = switch (status) {
-      'pending' => ('Pending', AppColors.warning, AppColors.warningSoft),
-      'approved' => (
-        'Accepted',
+    final key = status.trim().toLowerCase();
+    final (label, bg, fg) = switch (key) {
+      'approved' || 'live' => (
+        key == 'live' ? 'Live' : 'Approved',
+        AppColors.success.withValues(alpha: 0.16),
         AppColors.success,
-        AppColors.success.withValues(alpha: 0.12),
       ),
-      'rejected' => (
-        'Rejected',
+      'declined' || 'rejected' => (
+        'Declined',
+        AppColors.error.withValues(alpha: 0.14),
         AppColors.error,
-        AppColors.error.withValues(alpha: 0.12),
       ),
-      'cancelled' => (
+      'partially_approved' => (
+        'Partial',
+        AppColors.warning.withValues(alpha: 0.16),
+        AppColors.warning,
+      ),
+      'cancelled' || 'deleted' => (
         'Cancelled',
-        AppColors.textSecondary,
         AppColors.surfaceSecondary,
+        AppColors.textSecondary,
       ),
-      _ => (status, AppColors.textSecondary, AppColors.surfaceSecondary),
+      _ => (
+        'Pending',
+        AppColors.surfaceSecondary,
+        AppColors.textSecondary,
+      ),
     };
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
       decoration: BoxDecoration(
         color: bg,
-        borderRadius: BorderRadius.circular(8),
+        borderRadius: BorderRadius.circular(999),
       ),
       child: Text(
         label,
         style: AppTextStyles.caption(
           fontSize: 11,
           fontWeight: FontWeight.w700,
-          color: color,
+          color: fg,
         ),
       ),
     );
   }
+}
+
+String _ago(DateTime? time) {
+  if (time == null) return '';
+  final delta = DateTime.now().difference(time);
+  if (delta.inMinutes < 1) return 'now';
+  if (delta.inMinutes < 60) return '${delta.inMinutes}m';
+  if (delta.inHours < 24) return '${delta.inHours}h';
+  return '${delta.inDays}d';
 }

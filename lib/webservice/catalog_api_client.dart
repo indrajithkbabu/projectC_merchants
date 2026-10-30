@@ -5,6 +5,8 @@ import 'dart:io';
 import 'package:http/http.dart' as http;
 import 'package:project_c/flavor/flavor_variables.dart';
 import 'package:project_c/helper/app_log.dart';
+import 'package:project_c/helper/catalog_media_debug.dart';
+import 'package:project_c/helper/catalog_upload_story.dart';
 import 'package:project_c/models/catalog/catalog_tokens.dart';
 import 'package:project_c/models/catalog/collection_models.dart';
 import 'package:project_c/resources/endpoints.dart';
@@ -285,11 +287,28 @@ class CatalogApiClient {
       _tag,
       'requestBody={fields: $fields, files: ${files.map((f) => f.filename).toList()}}',
     );
+    if (CatalogMediaDebug.isMediaApiPath(path)) {
+      CatalogMediaDebug.api(
+        'REQUEST $methodLabel $path multipart '
+        'files=${files.map((f) => f.filename).toList()}',
+      );
+    }
+    if (CatalogUploadStory.isUploadApiPath(path, method: methodLabel)) {
+      CatalogUploadStory.note(
+        'Legacy multipart $methodLabel $path (prefer Direct-to-S3). '
+        'files=${files.length}',
+      );
+    }
 
     try {
       final streamed = await _http.send(request).timeout(timeout);
       final response = await http.Response.fromStream(streamed);
-      _logResponse(fullUrl: fullUrl, response: response);
+      _logResponse(
+        fullUrl: fullUrl,
+        response: response,
+        path: path,
+        method: methodLabel,
+      );
       return response;
     } on TimeoutException {
       AppLog.e(_tag, 'Timeout on $fullUrl');
@@ -342,6 +361,17 @@ class CatalogApiClient {
       _tag,
       'requestBody=${body == null ? '(none)' : _sanitizeForLog(body)}',
     );
+    if (CatalogMediaDebug.isMediaApiPath(path)) {
+      CatalogMediaDebug.api(
+        'REQUEST $methodLabel $path '
+        'body=${CatalogMediaDebug.requestBodyHint(body)}',
+      );
+    }
+    CatalogUploadStory.apiRequest(
+      method: methodLabel,
+      path: path,
+      body: body,
+    );
 
     try {
       final encoded = body == null ? null : jsonEncode(body);
@@ -369,7 +399,12 @@ class CatalogApiClient {
               .timeout(effectiveTimeout);
       }
 
-      _logResponse(fullUrl: fullUrl, response: response);
+      _logResponse(
+        fullUrl: fullUrl,
+        response: response,
+        path: path,
+        method: methodLabel,
+      );
       return response;
     } on TimeoutException {
       AppLog.e(_tag, 'Timeout on $fullUrl');
@@ -391,6 +426,8 @@ class CatalogApiClient {
   void _logResponse({
     required String fullUrl,
     required http.Response response,
+    String path = '',
+    String method = '',
   }) {
     AppLog.d(_tag, '──────── RESPONSE ────────');
     AppLog.d(_tag, 'url=$fullUrl');
@@ -398,6 +435,11 @@ class CatalogApiClient {
     final body = response.body;
     if (body.isEmpty) {
       AppLog.d(_tag, 'responseBody=(empty)');
+      if (CatalogMediaDebug.isMediaApiPath(path)) {
+        CatalogMediaDebug.api(
+          'RESPONSE ${response.statusCode} $path body=(empty)',
+        );
+      }
       return;
     }
     try {
@@ -407,8 +449,31 @@ class CatalogApiClient {
       } else {
         AppLog.full(_tag, 'responseBody', decoded);
       }
+      if (CatalogMediaDebug.isMediaApiPath(path)) {
+        CatalogMediaDebug.api(
+          'RESPONSE ${response.statusCode} $path '
+          '${CatalogMediaDebug.summarizeMediaJson(decoded)}',
+        );
+        final summary = CatalogMediaDebug.summarizeMediaJson(decoded);
+        if (summary.contains('GAP_THUMBHASH_NULL')) {
+          CatalogMediaDebug.gap(
+            'API thumbhash missing in $path status=${response.statusCode}',
+          );
+        }
+      }
+      CatalogUploadStory.apiResponse(
+        method: method,
+        path: path,
+        statusCode: response.statusCode,
+        decoded: decoded,
+      );
     } catch (_) {
       AppLog.full(_tag, 'responseBody', body);
+      if (CatalogMediaDebug.isMediaApiPath(path)) {
+        CatalogMediaDebug.api(
+          'RESPONSE ${response.statusCode} $path body=(non-json len=${body.length})',
+        );
+      }
     }
   }
 

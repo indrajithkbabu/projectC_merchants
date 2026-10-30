@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
@@ -7,23 +9,42 @@ import 'package:project_c/data/merchant_store_session.dart';
 import 'package:project_c/di/service_locator.dart';
 import 'package:project_c/helper/app_padding.dart';
 import 'package:project_c/helper/colors.dart';
+import 'package:project_c/helper/jewel_upload_qa.dart';
 import 'package:project_c/helper/text_styles.dart';
 import 'package:project_c/helper/widgets/app_back_button.dart';
 import 'package:project_c/helper/widgets/primary_button.dart';
 import 'package:project_c/helper/widgets/screen_wrapper.dart';
 import 'package:project_c/models/bulk_upload.dart';
+import 'package:project_c/models/catalog/catalog_product_models.dart';
 import 'package:project_c/models/pending_product_upload.dart';
 import 'package:project_c/navigation/routes.dart';
 import 'package:project_c/presentation/add_store_product/add_store_product_widgets/bulk_item_tile.dart';
+import 'package:project_c/presentation/add_store_product/compose_product_draft.dart';
+import 'package:project_c/presentation/add_store_product/leave_create_product_flow.dart';
 import 'package:project_c/services/product_upload_coordinator.dart';
 import 'package:project_c/session/catalog_session.dart';
 
 class AddProductGroupPreviewRoute extends StatefulWidget {
-  const AddProductGroupPreviewRoute({super.key, this.autoOpenEdit = false});
+  const AddProductGroupPreviewRoute({
+    super.key,
+    this.autoOpenEdit = false,
+    this.stockStatus = 'in',
+    this.mtoDays,
+    this.isLocked = false,
+    this.photoRows = const [],
+  });
 
-  /// When true (e.g. browse Select → Edit), open the single/multi details form
-  /// once for the pre-selected items after the first frame.
+  /// When true (e.g. browse Select → Edit), open compose for the pre-selected
+  /// items after the first frame.
   final bool autoOpenEdit;
+
+  /// Compose stock/lock (UI); persisted on local product until upload docs land.
+  final String stockStatus;
+  final int? mtoDays;
+  final bool isLocked;
+
+  /// Per-photo stock/mto/lock from compose (aligned with bulk items at open).
+  final List<TitleOnlyPhotoRow> photoRows;
 
   @override
   State<AddProductGroupPreviewRoute> createState() =>
@@ -39,12 +60,72 @@ class _AddProductGroupPreviewRouteState
   int _crossAxisCount = 5;
   double _pinchStartColumns = 5;
 
+  /// Mutable copy so preview refine (compose return) can update stock/lock.
+  late List<TitleOnlyPhotoRow> _photoRows;
+
   @override
   void initState() {
     super.initState();
+    _photoRows = List<TitleOnlyPhotoRow>.from(widget.photoRows);
     if (widget.autoOpenEdit) {
       WidgetsBinding.instance.addPostFrameCallback((_) => _tryAutoOpenEdit());
     }
+  }
+
+  CatalogStockStatus get _fallbackStock =>
+      CatalogStockStatus.tryParse(widget.stockStatus) ??
+      CatalogStockStatus.inStock;
+
+  TitleOnlyPhotoRow _rowForDraft(ComposePhotoDraft d) {
+    return TitleOnlyPhotoRow(
+      spec: d.spec,
+      tags: d.tags,
+      stockStatus: d.stockStatus.catalog,
+      mtoDays: d.mtoDays,
+      isLocked: d.isLocked,
+    );
+  }
+
+  ComposeStockStatus _composeStockForIndex(int itemIndex) {
+    if (itemIndex >= 0 && itemIndex < _photoRows.length) {
+      return composeStockStatusFromName(_photoRows[itemIndex].stockStatus.apiValue);
+    }
+    return composeStockStatusFromName(widget.stockStatus);
+  }
+
+  int? _mtoForIndex(int itemIndex) {
+    if (itemIndex >= 0 && itemIndex < _photoRows.length) {
+      return _photoRows[itemIndex].mtoDays ?? widget.mtoDays;
+    }
+    return widget.mtoDays;
+  }
+
+  bool _lockedForIndex(int itemIndex) {
+    if (itemIndex >= 0 && itemIndex < _photoRows.length) {
+      return _photoRows[itemIndex].isLocked;
+    }
+    return widget.isLocked;
+  }
+
+  /// Align stored rows to current [items] order (handles deletes / replaces).
+  List<TitleOnlyPhotoRow> _photoRowsAlignedTo(List<BulkUploadItem> items) {
+    if (_photoRows.isEmpty) return const [];
+    if (_photoRows.length == items.length) {
+      return List<TitleOnlyPhotoRow>.from(_photoRows);
+    }
+    // Index-based pad/truncate when item count changed without a full remap.
+    return [
+      for (var i = 0; i < items.length; i++)
+        if (i < _photoRows.length)
+          _photoRows[i]
+        else
+          TitleOnlyPhotoRow(
+            spec: items[i].spec,
+            stockStatus: _fallbackStock,
+            mtoDays: widget.mtoDays,
+            isLocked: widget.isLocked,
+          ),
+    ];
   }
 
   void _tryAutoOpenEdit() {
@@ -254,13 +335,12 @@ class _AddProductGroupPreviewRouteState
                               );
                               return;
                             }
-                            Navigator.of(context).pushNamed(
-                              Routes.addProductGroupDetailsRoute,
-                              arguments: <String, Object?>{
-                                'bloc': bloc,
-                                'scope': BulkSpecScope.single,
-                                'itemId': item.id,
-                              },
+                            unawaited(
+                              _openComposeEdit(
+                                context,
+                                state,
+                                items: [item],
+                              ),
                             );
                           },
                         );
@@ -329,65 +409,210 @@ class _AddProductGroupPreviewRouteState
       return;
     }
 
+    final stock = _fallbackStock;
+    final items = List<BulkUploadItem>.from(state.items);
+    final photoRows = _photoRowsAlignedTo(items);
+    JewelUploadQa.step(
+      'UI publish → startWithSpecs',
+      detail:
+          'store=$storeId photos=${items.length} '
+          'photoRows=${photoRows.length} '
+          'stock=${stock.apiValue} locked=${widget.isLocked} '
+          '${[
+            for (var i = 0; i < photoRows.length; i++)
+              '[$i]=${photoRows[i].stockStatus.apiValue}/'
+              'L=${photoRows[i].isLocked}',
+          ].join(' ')}',
+    );
     ServiceLocator.get<ProductUploadCoordinator>().startWithSpecs(
       SpecsUploadRequest(
         storeId: storeId,
         title: state.groupTitle.trim(),
-        items: List<BulkUploadItem>.from(state.items),
+        items: items,
         groupSpec: state.groupSpec,
         tags: state.tags,
         description: state.description,
         knownSubGroups: List<BulkKnownSubGroup>.from(state.knownSubGroups),
+        photoRows: photoRows,
+        stockStatus: stock,
+        mtoDays: widget.mtoDays,
+        isLocked: widget.isLocked,
       ),
     );
-    // Leave immediately — store profile shows uploading shimmer.
-    Navigator.of(context).popUntil((route) {
-      final name = route.settings.name;
-      return name == Routes.storeProfileRoute || route.isFirst;
-    });
+    // Pop preview only — group calls [leaveCreateProductFlow] so compose-overlay
+    // cleanup cannot pop the store profile that leave just revealed.
+    Navigator.of(context).pop(kCreateProductBackgroundUpload);
   }
 
   void _popPublishedResult(BuildContext context, BulkUploadState state) {
     final product = state.publishedProduct;
     if (product != null) {
       MerchantStoreSession.instance.addProduct(product);
+      Navigator.of(context).pop(<String, Object?>{
+        ...product.toMap(),
+        if (state.publishedRevision != null)
+          'revision': state.publishedRevision,
+        if (state.publishedApiTag != null) 'apiTag': state.publishedApiTag,
+      });
+      return;
     }
-
-    // Pop group + preview (and any details above) straight back to store profile.
-    // Store profile refreshes collections when the pushNamed future completes.
-    Navigator.of(context).popUntil((route) {
-      final name = route.settings.name;
-      return name == Routes.storeProfileRoute || route.isFirst;
-    });
+    Navigator.of(context).pop('close_flow');
   }
 
   void _openEdit(BuildContext context, BulkUploadState state) {
     if (state.selectedCount == 0) return;
-    final bloc = context.read<BulkUploadBloc>();
+    final ids = state.selectedItemIds.toSet();
+    final items = [
+      for (final item in state.items)
+        if (ids.contains(item.id)) item,
+    ];
+    if (items.isEmpty) return;
     AppLog.d(
       _logTag,
-      'OpenEdit count=${state.selectedCount} '
-      'ids=${state.selectedItemIds.join(',')} '
-      'scope=${state.selectedCount == 1 ? 'single' : 'multi'}',
+      'OpenEdit → compose count=${items.length} '
+      'ids=${items.map((e) => e.id).join(',')}',
     );
-    if (state.selectedCount == 1) {
-      Navigator.of(context).pushNamed(
-        Routes.addProductGroupDetailsRoute,
-        arguments: <String, Object?>{
-          'bloc': bloc,
-          'scope': BulkSpecScope.single,
-          'itemId': state.selectedItemIds.first,
-        },
-      );
-      return;
-    }
-    Navigator.of(context).pushNamed(
-      Routes.addProductGroupDetailsRoute,
+    unawaited(_openComposeEdit(context, state, items: items));
+  }
+
+  Future<void> _openComposeEdit(
+    BuildContext context,
+    BulkUploadState state, {
+    required List<BulkUploadItem> items,
+  }) async {
+    if (items.isEmpty) return;
+    final full = state.items;
+    final drafts = [
+      for (final item in items)
+        () {
+          final idx = full.indexWhere((e) => e.id == item.id);
+          return ComposePhotoDraft(
+            // Prefer hydrated item specs; fall back to compose defaults so the
+            // rail is never blank when refining title-only / incomplete items.
+            spec:
+                item.spec.metalType.isNotEmpty || item.spec.isValid
+                    ? item.spec
+                    : ComposePhotoDraft.defaults().spec,
+            tags: state.tags,
+            stockStatus: _composeStockForIndex(idx),
+            mtoDays: _mtoForIndex(idx) ?? 7,
+            isLocked: _lockedForIndex(idx),
+          );
+        }(),
+    ];
+    final result = await Navigator.of(context).pushNamed(
+      Routes.addProductComposeRoute,
       arguments: <String, Object?>{
-        'bloc': bloc,
-        'scope': BulkSpecScope.multi,
+        'imagePaths': [for (final i in items) i.imagePath],
+        'itemIds': [for (final i in items) i.id],
+        'initialDrafts': drafts,
+        'storeId': state.storeId,
+        'initialIndex': 0,
+        'returnResult': true,
+        // Edit-refine: no add/delete here (preview / metadata edit own that).
+        'allowAddDelete': !state.isEditMode,
       },
     );
+    if (!context.mounted || result is! Map) return;
+    final map = Map<String, Object?>.from(result);
+    if (map['returnResult'] != true) return;
+    _applyComposeResult(context, state, items: items, result: map);
+  }
+
+  void _applyComposeResult(
+    BuildContext context,
+    BulkUploadState state, {
+    required List<BulkUploadItem> items,
+    required Map<String, Object?> result,
+  }) {
+    final bloc = context.read<BulkUploadBloc>();
+    final drafts =
+        (result['photoDrafts'] is List)
+            ? (result['photoDrafts'] as List)
+                .whereType<ComposePhotoDraft>()
+                .toList()
+            : const <ComposePhotoDraft>[];
+    final paths =
+        (result['imagePaths'] is List)
+            ? (result['imagePaths'] as List)
+                .whereType<String>()
+                .map((e) => e.trim())
+                .where((e) => e.isNotEmpty)
+                .toList()
+            : const <String>[];
+    final applyToAll = result['applyToAll'] != false;
+    final full = bloc.state.items;
+
+    // Keep per-photo stock/lock in sync even when only lock/stock changed.
+    if (drafts.isNotEmpty) {
+      setState(() {
+        var next = _photoRowsAlignedTo(full);
+        if (next.isEmpty) {
+          next = [
+            for (final item in full)
+              TitleOnlyPhotoRow(
+                spec: item.spec,
+                stockStatus: _fallbackStock,
+                mtoDays: widget.mtoDays,
+                isLocked: widget.isLocked,
+              ),
+          ];
+        }
+        if (applyToAll && drafts.isNotEmpty) {
+          final row = _rowForDraft(drafts.first);
+          for (final item in items) {
+            final idx = full.indexWhere((e) => e.id == item.id);
+            if (idx >= 0 && idx < next.length) next[idx] = row;
+          }
+        } else {
+          for (var i = 0; i < items.length && i < drafts.length; i++) {
+            final idx = full.indexWhere((e) => e.id == items[i].id);
+            if (idx >= 0 && idx < next.length) {
+              next[idx] = _rowForDraft(drafts[i]);
+            }
+          }
+        }
+        _photoRows = next;
+      });
+    }
+
+    var applied = 0;
+    for (var i = 0; i < items.length; i++) {
+      final item = items[i];
+      if (i < paths.length && paths[i] != item.imagePath.trim()) {
+        bloc.add(
+          BulkUploadItemImageReplaced(itemId: item.id, imagePath: paths[i]),
+        );
+      }
+      if (i >= drafts.length) continue;
+      final spec = drafts[i].spec;
+      if (!spec.isValid) continue;
+      if (applyToAll && items.length > 1) {
+        // Apply once below.
+        continue;
+      }
+      bloc.add(BulkUploadApplyItemSpec(itemId: item.id, spec: spec));
+      applied++;
+    }
+    if (applyToAll && items.length > 1 && drafts.isNotEmpty) {
+      final spec = drafts.first.spec;
+      if (spec.isValid) {
+        bloc.add(
+          BulkUploadSelectionSet([for (final i in items) i.id]),
+        );
+        bloc.add(BulkUploadApplyMultiSpec(spec));
+        applied = items.length;
+      }
+    }
+    if (applied == 0 && drafts.isNotEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Fill complete specs (metal, purity, wastage, weight, size) to apply.',
+          ),
+        ),
+      );
+    }
   }
 
   Future<void> _confirmDelete(BuildContext context) async {

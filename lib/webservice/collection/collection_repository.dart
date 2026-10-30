@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:project_c/helper/app_log.dart';
 import 'package:project_c/models/catalog/catalog_page.dart';
+import 'package:project_c/models/catalog/catalog_product_models.dart';
 import 'package:project_c/models/catalog/catalog_upload_models.dart';
 import 'package:project_c/models/catalog/collection_models.dart';
 import 'package:project_c/models/catalog/collection_specifications.dart';
@@ -23,6 +24,41 @@ abstract class CollectionRepository {
     required String storeId,
     required List<CatalogPresignFile> files,
   });
+
+  Future<CatalogProductBatchResult> createProductsBatch({
+    required String storeId,
+    required List<Map<String, dynamic>> products,
+    String? collectionId,
+    String? collectionName,
+    Map<String, dynamic>? collectionDefaults,
+    String? idempotencyKey,
+  });
+
+  Future<CatalogPage<CatalogProduct>> listStoreProducts({
+    required String storeId,
+    int limit = 50,
+    String? cursor,
+    String? collectionId,
+    String? category,
+    String? metal,
+    String? purity,
+    String? stockStatus,
+  });
+
+  Future<CatalogPage<CatalogProduct>> listStoreFeed({
+    required String storeId,
+    int limit = 50,
+    String? cursor,
+  });
+
+  Future<CatalogProduct> fetchProduct({required String productId});
+
+  Future<CatalogProduct> updateProduct({
+    required String productId,
+    required Map<String, dynamic> body,
+  });
+
+  Future<void> deleteProduct({required String productId});
 
   Future<CollectionCreateResult> createCollectionFromUploads({
     required String storeId,
@@ -158,6 +194,88 @@ class CollectionRepositoryImpl implements CollectionRepository {
   }) {
     AppLog.d(_tag, 'presignUploads store=$storeId count=${files.length}');
     return _request.presignUploads(storeId: storeId, files: files);
+  }
+
+  @override
+  Future<CatalogProductBatchResult> createProductsBatch({
+    required String storeId,
+    required List<Map<String, dynamic>> products,
+    String? collectionId,
+    String? collectionName,
+    Map<String, dynamic>? collectionDefaults,
+    String? idempotencyKey,
+  }) {
+    AppLog.d(
+      _tag,
+      'createProductsBatch store=$storeId count=${products.length} '
+      'collection=${collectionName ?? collectionId ?? ''}',
+    );
+    return _request.createProductsBatch(
+      storeId: storeId,
+      products: products,
+      collectionId: collectionId,
+      collectionName: collectionName,
+      collectionDefaults: collectionDefaults,
+      idempotencyKey: idempotencyKey,
+    );
+  }
+
+  @override
+  Future<CatalogPage<CatalogProduct>> listStoreProducts({
+    required String storeId,
+    int limit = 50,
+    String? cursor,
+    String? collectionId,
+    String? category,
+    String? metal,
+    String? purity,
+    String? stockStatus,
+  }) {
+    AppLog.d(_tag, 'listStoreProducts store=$storeId');
+    return _request.listStoreProducts(
+      storeId: storeId,
+      limit: limit,
+      cursor: cursor,
+      collectionId: collectionId,
+      category: category,
+      metal: metal,
+      purity: purity,
+      stockStatus: stockStatus,
+    );
+  }
+
+  @override
+  Future<CatalogPage<CatalogProduct>> listStoreFeed({
+    required String storeId,
+    int limit = 50,
+    String? cursor,
+  }) {
+    AppLog.d(_tag, 'listStoreFeed store=$storeId');
+    return _request.listStoreFeed(
+      storeId: storeId,
+      limit: limit,
+      cursor: cursor,
+    );
+  }
+
+  @override
+  Future<CatalogProduct> fetchProduct({required String productId}) {
+    return _request.fetchProduct(productId: productId);
+  }
+
+  @override
+  Future<CatalogProduct> updateProduct({
+    required String productId,
+    required Map<String, dynamic> body,
+  }) {
+    AppLog.d(_tag, 'updateProduct id=$productId');
+    return _request.updateProduct(productId: productId, body: body);
+  }
+
+  @override
+  Future<void> deleteProduct({required String productId}) {
+    AppLog.d(_tag, 'deleteProduct id=$productId');
+    return _request.deleteProduct(productId: productId);
   }
 
   @override

@@ -41,5 +41,8 @@ Catalog “collections” map to UI “products”:
 
 ## Other
 - List/get/delete under `/stores/:storeId/collections`
+- List/detail should include `createdAt` (ISO or epoch) for upload day.
+  Current prod omits it; UI falls back to Mongo ObjectId time from `id`.
+  Backend handoff: `COLLECTION_CREATED_AT_BACKEND.md` (frontend already ready)
 - `REVISION_CONFLICT` when revision is stale
 - Imported listings are read-only for edits

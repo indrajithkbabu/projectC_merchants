@@ -80,6 +80,8 @@ class CollectionSubGroup extends Equatable {
     this.precisionTag = '',
     this.photos = const [],
     this.viewCount,
+    this.createdAt,
+    this.updatedAt,
   });
 
   final String id;
@@ -92,6 +94,8 @@ class CollectionSubGroup extends Equatable {
   final String precisionTag;
   final List<CatalogPhoto> photos;
   final int? viewCount;
+  final DateTime? createdAt;
+  final DateTime? updatedAt;
 
   factory CollectionSubGroup.fromJson(Map<String, dynamic> json) {
     final rawPhotos = json['photos'];
@@ -116,6 +120,12 @@ class CollectionSubGroup extends Equatable {
                   .toList()
               : const [],
       viewCount: (json['viewCount'] as num?)?.toInt(),
+      createdAt: parseCatalogDateTime(
+        json['createdAt'] ?? json['created_at'] ?? json['uploadedAt'],
+      ),
+      updatedAt: parseCatalogDateTime(
+        json['updatedAt'] ?? json['updated_at'],
+      ),
     );
   }
 
@@ -131,5 +141,7 @@ class CollectionSubGroup extends Equatable {
     precisionTag,
     photos,
     viewCount,
+    createdAt,
+    updatedAt,
   ];
 }

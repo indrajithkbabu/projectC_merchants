@@ -380,7 +380,6 @@ class _StoreListingRouteState extends State<StoreListingRoute> {
                     ],
                   ),
                 ),
-                Divider(height: 1, color: AppColors.border),
                 Expanded(
                   child: RefreshIndicator(
                     color: AppColors.primary,
@@ -415,7 +414,7 @@ class _StoreListingRouteState extends State<StoreListingRoute> {
                                     ),
                                   ],
                                 ))
-                            : ListView.separated(
+                            : ListView.builder(
                               controller: _scrollController,
                               physics: const AlwaysScrollableScrollPhysics(),
                               padding: AppPadding.screen(
@@ -423,12 +422,6 @@ class _StoreListingRouteState extends State<StoreListingRoute> {
                                 bottom: bottomPad,
                               ),
                               itemCount: stores.length,
-                              separatorBuilder:
-                                  (_, __) => Divider(
-                                    height: 1,
-                                    indent: 68,
-                                    color: AppColors.border,
-                                  ),
                               itemBuilder: (context, index) {
                                 final store = stores[index];
                                 return StoreListingTile(

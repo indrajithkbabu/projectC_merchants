@@ -67,14 +67,33 @@ class ProductDetailsApplyEditedProduct extends ProductDetailsEvent {
     required this.product,
     required this.revision,
     this.apiTag = '',
+    this.specifications,
+    this.productSpecsById,
+    this.precisionTag,
+    this.subGroups,
   });
 
   final StoreProduct product;
   final int revision;
   final String apiTag;
 
+  /// When set (e.g. after edit save + collection re-fetch), refreshes weight
+  /// chrome so details / store reopen don't keep stale productSpecsById.
+  final ProductSpec? specifications;
+  final Map<String, ProductSpec>? productSpecsById;
+  final String? precisionTag;
+  final List<CollectionSubGroup>? subGroups;
+
   @override
-  List<Object?> get props => [product, revision, apiTag];
+  List<Object?> get props => [
+    product,
+    revision,
+    apiTag,
+    specifications,
+    productSpecsById,
+    precisionTag,
+    subGroups,
+  ];
 }
 
 class ProductDetailsClearDeleted extends ProductDetailsEvent {
@@ -89,9 +108,19 @@ class ProductDetailsClearMessage extends ProductDetailsEvent {
   const ProductDetailsClearMessage();
 }
 
-/// Toggle like on the photo at [imageIndex] (wishlist entry).
+/// Toggle public like on the photo / product at [imageIndex].
 class ProductDetailsLikePressed extends ProductDetailsEvent {
   const ProductDetailsLikePressed({required this.imageIndex});
+
+  final int imageIndex;
+
+  @override
+  List<Object?> get props => [imageIndex];
+}
+
+/// Toggle private wishlist for the CatalogProduct at [imageIndex].
+class ProductDetailsWishlistPressed extends ProductDetailsEvent {
+  const ProductDetailsWishlistPressed({required this.imageIndex});
 
   final int imageIndex;
 

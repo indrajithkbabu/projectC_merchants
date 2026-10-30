@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:project_c/bloc/account_profile/account_profile_bloc.dart';
 import 'package:project_c/bloc/auth/auth_bloc.dart';
@@ -36,6 +37,8 @@ class _MainShellRouteState extends State<MainShellRoute> {
   /// Always 0..3 for the visible tab set (IndexedStack index).
   int _index = 0;
   int _wishlistRefreshSignal = 0;
+  final GlobalKey<MyStoreTabState> _myStoreKey = GlobalKey<MyStoreTabState>();
+  DateTime? _lastExitBackAt;
 
   @override
   void initState() {
@@ -74,6 +77,7 @@ class _MainShellRouteState extends State<MainShellRoute> {
     final sameTab = value == _index;
     // Re-selecting Wishlist still quiet-refreshes so new likes appear.
     if (sameTab && !(hasStore && value == 2)) return;
+    _lastExitBackAt = null;
     setState(() {
       _index = value;
       if (hasStore && value == 2) {
@@ -91,6 +95,34 @@ class _MainShellRouteState extends State<MainShellRoute> {
       final bloc = context.read<StoreProfileBloc>();
       bloc.add(const StoreProfileLoadFollowRequestPreviews());
     }
+  }
+
+  /// Shell is root: other tabs → Stores; two backs on Stores exits the app.
+  /// Nested routes above the shell still pop normally.
+  void _handleShellBack({required bool hasStore}) {
+    if (hasStore &&
+        (_myStoreKey.currentState?.consumeSystemBack() ?? false)) {
+      return;
+    }
+    if (_index != 0) {
+      _onTabChanged(context, 0, hasStore: hasStore);
+      return;
+    }
+    final now = DateTime.now();
+    if (_lastExitBackAt != null &&
+        now.difference(_lastExitBackAt!) < const Duration(seconds: 2)) {
+      SystemNavigator.pop();
+      return;
+    }
+    _lastExitBackAt = now;
+    final messenger = ScaffoldMessenger.maybeOf(context);
+    messenger?.hideCurrentSnackBar();
+    messenger?.showSnackBar(
+      const SnackBar(
+        content: Text('Press back again to exit'),
+        duration: Duration(seconds: 2),
+      ),
+    );
   }
 
   List<FloatingNavItem> _navItems({
@@ -254,7 +286,10 @@ class _MainShellRouteState extends State<MainShellRoute> {
                         WishlistTab(refreshSignal: _wishlistRefreshSignal)
                       else
                         const SettingsTab(),
-                      if (hasStore) const MyStoreTab() else const ProfileTab(),
+                      if (hasStore)
+                        MyStoreTab(key: _myStoreKey)
+                      else
+                        const ProfileTab(),
                     ],
                   ),
                 ),
@@ -303,6 +338,15 @@ class _MainShellRouteState extends State<MainShellRoute> {
                 ),
               ],
             ),
+          );
+
+          body = PopScope(
+            canPop: false,
+            onPopInvokedWithResult: (didPop, _) {
+              if (didPop) return;
+              _handleShellBack(hasStore: hasStore);
+            },
+            child: body,
           );
 
           if (!hasStore || storeId.isEmpty) return body;

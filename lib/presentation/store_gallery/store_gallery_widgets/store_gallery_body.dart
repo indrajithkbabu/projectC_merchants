@@ -3,6 +3,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:project_c/bloc/store_gallery/store_gallery_bloc.dart';
 import 'package:project_c/helper/app_padding.dart';
+import 'package:project_c/helper/catalog_media_debug.dart';
+import 'package:project_c/helper/catalog_responsive_image.dart';
 import 'package:project_c/helper/colors.dart';
 import 'package:project_c/helper/product_image.dart';
 import 'package:project_c/helper/text_styles.dart';
@@ -13,10 +15,14 @@ class StoreGalleryBody extends StatefulWidget {
     super.key,
     required this.onImageTap,
     this.focusProductId,
+    this.topInset = 0,
   });
 
   final void Function(StoreProduct product, int imageIndex) onImageTap;
   final String? focusProductId;
+
+  /// Clears overlay chrome (back + title) before the first image row.
+  final double topInset;
 
   @override
   State<StoreGalleryBody> createState() => _StoreGalleryBodyState();
@@ -31,6 +37,7 @@ class _StoreGalleryBodyState extends State<StoreGalleryBody> {
   int _lastDecodeKey = -1;
   DateTime? _lastDecodeAt;
   List<String> _flatUrls = const [];
+  CatalogImageRole _warmRole = CatalogImageRole.grid;
 
   @override
   void dispose() {
@@ -38,22 +45,42 @@ class _StoreGalleryBodyState extends State<StoreGalleryBody> {
     super.dispose();
   }
 
-  List<String> _collectUrls(StoreGalleryState state) {
+  List<String> _collectUrls(
+    StoreGalleryState state, {
+    required CatalogImageRole role,
+  }) {
     return [
       for (final day in state.sections)
         for (final section in day.products)
-          ...ProductImagePaths.displayable(section.imagePaths),
+          for (var i = 0; i < section.imagePaths.length; i++)
+            if (ProductImagePaths.isDisplayable(section.imagePaths[i]))
+              section.product.urlForRole(i, role),
     ];
   }
 
   void _warmDisk(StoreGalleryState state) {
-    final urls = _collectUrls(state);
+    final role = CatalogResponsiveImage.roleForMediaColumns(
+      state.crossAxisCount,
+    );
+    final urls = _collectUrls(state, role: role);
+    final roleChanged = _warmRole != role;
+    final countChanged = _lastDiskWarmCount != urls.length;
     _flatUrls = urls;
-    if (_lastDiskWarmCount == urls.length) return;
+    _warmRole = role;
     _lastDiskWarmCount = urls.length;
     // Disk only — decode is viewport-scoped via scroll.
     // ignore: unawaited_futures
     CatalogImageCache.precacheUrls(urls);
+    // Also disk-warm thumbs so zoom-out is instant.
+    if (role != CatalogImageRole.grid) {
+      // ignore: unawaited_futures
+      CatalogImageCache.precacheUrls(
+        _collectUrls(state, role: CatalogImageRole.grid),
+      );
+    }
+    if (roleChanged || countChanged) {
+      _lastDecodeKey = -1;
+    }
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       _warmDecodeWindow();
@@ -64,10 +91,12 @@ class _StoreGalleryBodyState extends State<StoreGalleryBody> {
     if (_flatUrls.isEmpty) return;
     final now = DateTime.now();
     final lastAt = _lastDecodeAt;
-    final m = metrics ??
+    final m =
+        metrics ??
         (_scrollController.hasClients ? _scrollController.position : null);
     final pixels = m?.pixels.round() ?? 0;
-    final key = pixels ~/ 120;
+    final cacheWidth = CatalogImageCache.cacheWidthForRole(_warmRole);
+    final key = (pixels ~/ 120) ^ (_warmRole.index * 10007) ^ cacheWidth;
     if (key == _lastDecodeKey &&
         lastAt != null &&
         now.difference(lastAt).inMilliseconds < 80) {
@@ -81,7 +110,7 @@ class _StoreGalleryBodyState extends State<StoreGalleryBody> {
         urls: _flatUrls,
         firstIndex: 0,
         lastIndex: CatalogImageCache.defaultMaxDecode - 1,
-        cacheWidth: CatalogImageCache.gridCacheWidth(),
+        cacheWidth: cacheWidth,
       );
       return;
     }
@@ -89,7 +118,7 @@ class _StoreGalleryBodyState extends State<StoreGalleryBody> {
     CatalogImageCache.warmAroundScroll(
       urls: _flatUrls,
       metrics: m,
-      cacheWidth: CatalogImageCache.gridCacheWidth(),
+      cacheWidth: cacheWidth,
     );
   }
 
@@ -105,13 +134,9 @@ class _StoreGalleryBodyState extends State<StoreGalleryBody> {
   void _onScaleUpdate(ScaleUpdateDetails details) {
     if (details.pointerCount < 2) return;
     // Pinch in (scale < 1) zooms out → more columns. Pinch out zooms in → fewer.
-    final width = MediaQuery.sizeOf(context).width;
-    final maxColumns = (width / 20).floor();
     final next = (_pinchStartColumns / details.scale).round().clamp(
       StoreGalleryState.minColumns,
-      maxColumns < StoreGalleryState.minColumns
-          ? StoreGalleryState.minColumns
-          : maxColumns,
+      StoreGalleryState.maxColumns,
     );
     final bloc = context.read<StoreGalleryBloc>();
     if (next != bloc.state.crossAxisCount) {
@@ -152,6 +177,9 @@ class _StoreGalleryBodyState extends State<StoreGalleryBody> {
 
         _warmDisk(state);
         _scheduleScrollToFocus();
+        final paintRole = CatalogResponsiveImage.roleForMediaColumns(
+          state.crossAxisCount,
+        );
 
         return RawGestureDetector(
           gestures: {
@@ -191,15 +219,21 @@ class _StoreGalleryBodyState extends State<StoreGalleryBody> {
             },
             child: CustomScrollView(
               controller: _scrollController,
-              physics: const BouncingScrollPhysics(),
+              physics: const BouncingScrollPhysics(
+                parent: AlwaysScrollableScrollPhysics(),
+              ),
               slivers: [
+                if (widget.topInset > 0)
+                  SliverToBoxAdapter(child: SizedBox(height: widget.topInset)),
                 for (var dayIndex = 0;
                     dayIndex < state.sections.length;
                     dayIndex++)
                   ..._daySlivers(
                     state.sections[dayIndex],
                     state.crossAxisCount,
+                    paintRole: paintRole,
                     isLastDay: dayIndex == state.sections.length - 1,
+                    logQuality: dayIndex == 0,
                   ),
               ],
             ),
@@ -212,13 +246,17 @@ class _StoreGalleryBodyState extends State<StoreGalleryBody> {
   List<Widget> _daySlivers(
     StoreGalleryDaySection day,
     int columns, {
+    required CatalogImageRole paintRole,
     required bool isLastDay,
+    required bool logQuality,
   }) {
     final focusId = widget.focusProductId?.trim() ?? '';
+    final decodeWidth = CatalogImageCache.cacheWidthForRole(paintRole);
+    final spacing = columns >= 6 ? 1.0 : 1.5;
     final slivers = <Widget>[
       SliverToBoxAdapter(
         child: Padding(
-          padding: AppPadding.screen(top: 14, bottom: 8),
+          padding: AppPadding.screen(top: 10, bottom: 8),
           child: Text(
             day.isSingleProduct
                 ? '${day.label}  |  ${day.products.first.product.title}'
@@ -276,18 +314,31 @@ class _StoreGalleryBodyState extends State<StoreGalleryBody> {
                 padding: EdgeInsets.zero,
                 gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
                   crossAxisCount: columns,
-                  mainAxisSpacing: 1.5,
-                  crossAxisSpacing: 1.5,
+                  mainAxisSpacing: spacing,
+                  crossAxisSpacing: spacing,
                 ),
                 itemCount: section.tileCount,
                 itemBuilder: (context, index) {
                   final path =
                       section.imagePaths.isEmpty
                           ? null
-                          : section.imagePaths[index];
+                          : section.product.urlForRole(
+                            index,
+                            paintRole,
+                            log: logQuality && i == 0 && index == 0,
+                          );
+                  if (logQuality && i == 0 && index == 0 && path != null) {
+                    CatalogMediaDebug.qualityMediaPaint(
+                      columns: columns,
+                      role: paintRole,
+                      sampleUrl: path,
+                    );
+                  }
                   return _GalleryTile(
                     path: path,
                     tone: section.product.toneIndex,
+                    thumbhash: section.product.thumbhashAt(index),
+                    decodeCacheWidth: decodeWidth,
                     onTap: () => widget.onImageTap(section.product, index),
                   );
                 },
@@ -300,9 +351,8 @@ class _StoreGalleryBodyState extends State<StoreGalleryBody> {
 
     if (!isLastDay) {
       slivers.add(const SliverToBoxAdapter(child: SizedBox(height: 8)));
-    } else {
-      slivers.add(const SliverToBoxAdapter(child: SizedBox(height: 24)));
     }
+    // Last day: no trailing bottom pad — images flush with the viewport edge.
 
     return slivers;
   }
@@ -313,10 +363,14 @@ class _GalleryTile extends StatelessWidget {
     required this.path,
     required this.tone,
     required this.onTap,
+    this.thumbhash,
+    this.decodeCacheWidth,
   });
 
   final String? path;
   final int tone;
+  final String? thumbhash;
+  final int? decodeCacheWidth;
   final VoidCallback onTap;
 
   @override
@@ -341,6 +395,11 @@ class _GalleryTile extends StatelessWidget {
         ),
       );
     }
-    return ProductMediaImage(path: value, fit: BoxFit.cover);
+    return ProductMediaImage(
+      path: value,
+      fit: BoxFit.cover,
+      thumbhash: thumbhash,
+      decodeCacheWidth: decodeCacheWidth,
+    );
   }
 }

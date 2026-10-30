@@ -14,6 +14,7 @@ class ProductDetailsState extends Equatable {
     this.revision = 1,
     this.apiTag = '',
     this.specifications,
+    this.productSpecsById = const {},
     this.precisionTag = '',
     this.subGroups = const [],
     this.seedCategory = '',
@@ -29,6 +30,11 @@ class ProductDetailsState extends Equatable {
     this.photoViewCounts = const {},
     this.isLikeBusy = false,
     this.showWishlistSnack = false,
+    this.usesProductLike = false,
+    this.isWishlisted = false,
+    this.wishlistedProductIds = const {},
+    this.isWishlistBusy = false,
+    this.isContentLocked = false,
   });
 
   final StoreProduct product;
@@ -46,6 +52,9 @@ class ProductDetailsState extends Equatable {
   final int revision;
   final String apiTag;
   final ProductSpec? specifications;
+
+  /// Per product / photo id specs from collection `products` (jewel batch).
+  final Map<String, ProductSpec> productSpecsById;
   final String precisionTag;
   final List<CollectionSubGroup> subGroups;
 
@@ -73,6 +82,19 @@ class ProductDetailsState extends Equatable {
 
   /// One-shot: show "Saved to Wishlist" snack after a successful like.
   final bool showWishlistSnack;
+
+  /// Heart uses `PUT/DELETE /products/:id/like` (not photo-like).
+  final bool usesProductLike;
+
+  /// Private wishlist via `/wishlist/products/:id` (listing-level fallback).
+  final bool isWishlisted;
+
+  /// Per embedded CatalogProduct id wishlisted (multi-photo collections).
+  final Set<String> wishlistedProductIds;
+  final bool isWishlistBusy;
+
+  /// `403 LOCKED_PRODUCT` — viewer cannot see this product.
+  final bool isContentLocked;
 
   bool get hasGalleryFeed =>
       galleryFeed != null && galleryFeed!.isNotEmpty;
@@ -122,6 +144,8 @@ class ProductDetailsState extends Equatable {
             : '';
 
     if (photoId.isNotEmpty) {
+      final fromProduct = productSpecsById[photoId]?.category.trim() ?? '';
+      if (fromProduct.isNotEmpty) return fromProduct;
       for (final sub in subGroups) {
         final inSub = sub.photos.any((p) => (p.id?.trim() ?? '') == photoId);
         if (!inSub) continue;
@@ -154,6 +178,9 @@ class ProductDetailsState extends Equatable {
             : '';
 
     if (photoId.isNotEmpty) {
+      final fromEmbedded = _chromeFromSpec(productSpecsById[photoId]);
+      if (fromEmbedded != null) return fromEmbedded;
+
       for (final sub in subGroups) {
         final inSub = sub.photos.any((p) => (p.id?.trim() ?? '') == photoId);
         if (!inSub) continue;
@@ -366,6 +393,7 @@ class ProductDetailsState extends Equatable {
     String? apiTag,
     ProductSpec? specifications,
     bool clearSpecifications = false,
+    Map<String, ProductSpec>? productSpecsById,
     String? precisionTag,
     List<CollectionSubGroup>? subGroups,
     String? seedCategory,
@@ -385,6 +413,11 @@ class ProductDetailsState extends Equatable {
     bool? isLikeBusy,
     bool? showWishlistSnack,
     bool clearWishlistSnack = false,
+    bool? usesProductLike,
+    bool? isWishlisted,
+    Set<String>? wishlistedProductIds,
+    bool? isWishlistBusy,
+    bool? isContentLocked,
   }) {
     return ProductDetailsState(
       product: product ?? this.product,
@@ -402,6 +435,7 @@ class ProductDetailsState extends Equatable {
           clearSpecifications
               ? null
               : (specifications ?? this.specifications),
+      productSpecsById: productSpecsById ?? this.productSpecsById,
       precisionTag: precisionTag ?? this.precisionTag,
       subGroups: subGroups ?? this.subGroups,
       seedCategory: seedCategory ?? this.seedCategory,
@@ -423,17 +457,81 @@ class ProductDetailsState extends Equatable {
           clearWishlistSnack
               ? false
               : (showWishlistSnack ?? this.showWishlistSnack),
+      usesProductLike: usesProductLike ?? this.usesProductLike,
+      isWishlisted: isWishlisted ?? this.isWishlisted,
+      wishlistedProductIds:
+          wishlistedProductIds ?? this.wishlistedProductIds,
+      isWishlistBusy: isWishlistBusy ?? this.isWishlistBusy,
+      isContentLocked: isContentLocked ?? this.isContentLocked,
     );
   }
 
+  /// True when this listing is a multi-product collection (batch) embed.
+  bool get hasEmbeddedProducts => productSpecsById.isNotEmpty;
+
+  /// CatalogProduct id to like/wishlist for the photo at [imageIndex].
+  ///
+  /// Prefer embedded `products[]._id` (photo asset id on jewel collections).
+  /// Never returns the collection listing id when a distinct product id exists.
+  String catalogProductIdForPhoto(int imageIndex) {
+    final listingId = product.id.trim();
+    final photoId = photoIdAt(imageIndex);
+
+    if (hasEmbeddedProducts) {
+      // Jewel batch: CatalogPhoto.id is the product _id.
+      if (photoId.isNotEmpty && !photoId.startsWith('img_')) {
+        return photoId;
+      }
+      final spec = photoId.isNotEmpty ? productSpecsById[photoId] : null;
+      if (spec != null) {
+        for (final entry in productSpecsById.entries) {
+          if (entry.key.startsWith('img_')) continue;
+          if (entry.key == listingId) continue;
+          if (entry.value == spec) return entry.key;
+        }
+      }
+    }
+
+    if (listingId.isNotEmpty) return listingId;
+    return photoId;
+  }
+
   bool isPhotoLiked(int imageIndex) {
+    final target = catalogProductIdForPhoto(imageIndex);
+    if (target.isNotEmpty &&
+        likedPhotoIds.contains('product:$target')) {
+      return true;
+    }
     final id = photoIdAt(imageIndex);
     return id.isNotEmpty && likedPhotoIds.contains(id);
   }
 
+  bool isPhotoWishlisted(int imageIndex) {
+    final target = catalogProductIdForPhoto(imageIndex);
+    if (target.isNotEmpty && wishlistedProductIds.contains(target)) {
+      return true;
+    }
+    // Legacy listing-level flag only when target is the listing itself.
+    if (isWishlisted &&
+        (target.isEmpty || target == product.id.trim())) {
+      return true;
+    }
+    return false;
+  }
+
   int? likeCountForPhoto(int imageIndex) {
+    final target = catalogProductIdForPhoto(imageIndex);
+    if (target.isNotEmpty && photoLikeCounts.containsKey(target)) {
+      return photoLikeCounts[target];
+    }
     final id = photoIdAt(imageIndex);
-    if (id.isEmpty) return null;
+    if (id.isNotEmpty && photoLikeCounts.containsKey(id)) {
+      return photoLikeCounts[id];
+    }
+    // Single-product multi-photo: shared product likeCount.
+    if (usesProductLike && !hasEmbeddedProducts) {
+      return product.likeCount;
+    }
     return photoLikeCounts[id];
   }
 
@@ -478,6 +576,7 @@ class ProductDetailsState extends Equatable {
     revision,
     apiTag,
     specifications,
+    productSpecsById,
     precisionTag,
     subGroups,
     seedCategory,
@@ -493,6 +592,11 @@ class ProductDetailsState extends Equatable {
     photoViewCounts,
     isLikeBusy,
     showWishlistSnack,
+    usesProductLike,
+    isWishlisted,
+    wishlistedProductIds,
+    isWishlistBusy,
+    isContentLocked,
   ];
 }
 

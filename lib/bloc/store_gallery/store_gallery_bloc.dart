@@ -1,5 +1,6 @@
 import 'package:bloc/bloc.dart';
 import 'package:equatable/equatable.dart';
+import 'package:project_c/models/catalog/collection_models.dart';
 import 'package:project_c/models/product_details_feed_item.dart';
 import 'package:project_c/models/store_product.dart';
 
@@ -32,10 +33,10 @@ class StoreGalleryBloc extends Bloc<StoreGalleryEvent, StoreGalleryState> {
     StoreGalleryColumnsChanged event,
     Emitter<StoreGalleryState> emit,
   ) {
-    final columns =
-        event.columns < StoreGalleryState.minColumns
-            ? StoreGalleryState.minColumns
-            : event.columns;
+    final columns = event.columns.clamp(
+      StoreGalleryState.minColumns,
+      StoreGalleryState.maxColumns,
+    );
     emit(state.copyWith(crossAxisCount: columns));
   }
 

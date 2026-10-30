@@ -60,6 +60,19 @@ class WishlistPrefetcher {
     _warm = page;
   }
 
+  /// Best-effort: product/collection id is in the warm wishlist page.
+  bool containsTargetId(String targetId) {
+    final id = targetId.trim();
+    if (id.isEmpty) return false;
+    final page = _warm;
+    if (page == null) return false;
+    for (final item in page.items) {
+      if (item.listingId.trim() == id) return true;
+      if (item.id.trim() == id) return true;
+    }
+    return false;
+  }
+
   Future<WishlistPage> _start({required int limit}) {
     final future = _load(limit: limit);
     _inFlight = future;
@@ -84,7 +97,6 @@ class WishlistPrefetcher {
     AppLog.d(_tag, 'fetchWishlist limit=$limit');
     final page = await ServiceLocator.get<WishlistRepository>().fetchWishlist(
       limit: limit,
-      status: 'all',
     );
     final urls = <String>[
       for (final item in page.items)

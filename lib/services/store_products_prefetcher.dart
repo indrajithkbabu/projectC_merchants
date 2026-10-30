@@ -91,14 +91,16 @@ class StoreProductsPrefetcher {
   Future<List<StoreProduct>> _refreshNetwork(String storeId) async {
     try {
       final repo = ServiceLocator.get<CollectionRepository>();
-      final page = await repo.listCollections(storeId: storeId, limit: 50);
       final hidden = ServiceLocator.get<ProductUploadCoordinator>()
           .inFlightListingIdsForStore(storeId);
+
+      // Storefront landing: collections grid (not a flat dump of all products).
+      final page = await repo.listCollections(storeId: storeId, limit: 50);
       final summaries = [
         for (final summary in page.items)
           if (!hidden.contains(summary.id)) summary,
       ];
-      // Cap parallel detail GETs — same budget as StoreProfileBloc.
+      // Cap parallel enrichment — same budget as StoreProfileBloc.
       const concurrency = 4;
       final products = <StoreProduct>[];
       for (var i = 0; i < summaries.length; i += concurrency) {
@@ -124,7 +126,7 @@ class StoreProductsPrefetcher {
         for (final p in products) ...p.imagePaths.take(4),
       ]);
       await StoreProductsCache.instance.write(storeId, products);
-      AppLog.d(_tag, 'Prefetched store=$storeId products=${products.length}');
+      AppLog.d(_tag, 'Prefetched store=$storeId collections=${products.length}');
       return products;
     } catch (e) {
       AppLog.e(_tag, 'Prefetch failed store=$storeId', e);
@@ -140,6 +142,7 @@ class StoreProductsPrefetcher {
   }) async {
     final cover = CatalogUiMapper.summaryToProduct(summary);
     if (summary.photoCount <= 1) return cover;
+    // TODO(backend): optional products?collectionId= collage enrich later.
     try {
       final detail = await repo.fetchCollection(
         storeId: storeId,

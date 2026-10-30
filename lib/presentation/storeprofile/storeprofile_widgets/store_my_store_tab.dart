@@ -1,11 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:project_c/bloc/storeprofile/store_profile_bloc.dart';
+import 'package:project_c/helper/catalog_responsive_image.dart';
 import 'package:project_c/helper/colors.dart';
 import 'package:project_c/helper/product_image.dart';
 import 'package:project_c/helper/text_styles.dart';
 import 'package:project_c/helper/widgets/app_back_button.dart';
 import 'package:project_c/models/store_product.dart';
 import 'package:project_c/presentation/privacy/privacy_widgets/follow_requests_banner.dart';
+import 'package:project_c/presentation/store_import/quick_import_flow.dart';
 import 'package:project_c/presentation/storeprofile/storeprofile_widgets/store_profile_header_card.dart';
 import 'package:project_c/presentation/storeprofile/storeprofile_widgets/store_visitor_follow_bar.dart';
 import 'package:share_plus/share_plus.dart';
@@ -67,7 +69,7 @@ class StoreMyStoreTab extends StatelessWidget {
     final showBanner =
         state.showFollowRequestsBanner && onOpenFollowRequests != null;
     final products = state.products;
-    final pendingImports = state.pendingImportRequestCount;
+    final serverPending = state.pendingImportRequestCount;
 
     return CustomScrollView(
       physics: const BouncingScrollPhysics(),
@@ -122,12 +124,24 @@ class StoreMyStoreTab extends StatelessWidget {
               Row(
                 children: [
                   Expanded(
-                    child: _GreyActionButton(
-                      label:
-                          pendingImports > 0
-                              ? 'Import requests ($pendingImports)'
-                              : 'Import requests',
-                      onTap: onOpenImportRequests,
+                    child: ValueListenableBuilder<List<QuickImportRecord>>(
+                      valueListenable: QuickImportSession.instance.items,
+                      builder: (context, records, _) {
+                        final pending =
+                            serverPending +
+                            records
+                                .where(
+                                  (r) => r.status == QuickImportStatus.pending,
+                                )
+                                .length;
+                        return _GreyActionButton(
+                          label:
+                              pending > 0
+                                  ? 'Import requests ($pending)'
+                                  : 'Import requests',
+                          onTap: onOpenImportRequests,
+                        );
+                      },
                     ),
                   ),
                   const SizedBox(width: 10),
@@ -319,7 +333,11 @@ class _MyStoreProductTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final url = product.primaryImagePath?.trim() ?? '';
+    final master = product.primaryImagePath?.trim() ?? '';
+    final url =
+        master.isEmpty
+            ? ''
+            : product.urlForRole(0, CatalogImageRole.grid);
     return Material(
       color: AppColors.surfaceSecondary,
       child: InkWell(
@@ -336,6 +354,7 @@ class _MyStoreProductTile extends StatelessWidget {
                 )
                 : ProductMediaImage(
                   path: url,
+                  thumbhash: product.thumbhashAt(0),
                   fit: BoxFit.cover,
                   error: Center(
                     child: Icon(

@@ -13,32 +13,38 @@ class ImportRequestsState extends Equatable {
 
   final String storeId;
   final String storeName;
-  final List<ImportRequestItem> items;
+  final List<ImportRequestListItem> items;
   final bool isLoading;
   final String? actingRequestId;
   final String? infoMessage;
   final String? errorMessage;
 
-  List<ImportRequestItem> get pendingIncoming =>
-      items
-          .where((i) => i.isIncoming && i.request.isPending)
-          .toList(growable: false);
+  List<ImportRequestListItem> get pendingIncoming =>
+      items.where((i) {
+        if (!i.isIncoming) return false;
+        final focus = i.focusProduct;
+        if (focus != null) return focus.isItemPending;
+        return i.batch.hasActionablePending;
+      }).toList(growable: false);
 
-  List<ImportRequestItem> get pendingOutgoing =>
-      items
-          .where((i) => i.isOutgoing && i.request.isPending)
-          .toList(growable: false);
+  List<ImportRequestListItem> get pendingOutgoing =>
+      items.where((i) {
+        if (!i.isOutgoing) return false;
+        final focus = i.focusProduct;
+        if (focus != null) return focus.isItemPending;
+        return i.batch.hasActionablePending;
+      }).toList(growable: false);
 
-  List<ImportRequestItem> get incomingItems =>
+  List<ImportRequestListItem> get incomingItems =>
       items.where((i) => i.isIncoming).toList(growable: false);
 
-  List<ImportRequestItem> get outgoingItems =>
+  List<ImportRequestListItem> get outgoingItems =>
       items.where((i) => i.isOutgoing).toList(growable: false);
 
   ImportRequestsState copyWith({
     String? storeId,
     String? storeName,
-    List<ImportRequestItem>? items,
+    List<ImportRequestListItem>? items,
     bool? isLoading,
     String? actingRequestId,
     String? infoMessage,

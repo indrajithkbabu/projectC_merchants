@@ -23,6 +23,9 @@ class BulkUploadBloc extends Bloc<BulkUploadEvent, BulkUploadState> {
   BulkUploadBloc({
     required List<GalleryImageItem> images,
     String? storeId,
+    String? initialTitle,
+    List<String>? initialTags,
+    List<ProductSpec>? initialItemSpecs,
     CollectionRepository? collectionRepository,
     CatalogDirectUploadService? directUploadService,
     CatalogSession? session,
@@ -35,25 +38,43 @@ class BulkUploadBloc extends Bloc<BulkUploadEvent, BulkUploadState> {
            ServiceLocator.get<CatalogDirectUploadService>(),
        _session = session ?? ServiceLocator.get<CatalogSession>(),
        super(
-         BulkUploadState(
-           storeId: storeId,
-           images: _usableImages(images),
-           items: [
-             for (final image in _usableImages(images))
-               BulkUploadItem(
-                 id: image.id,
-                 imagePath: image.filePath!,
-               ),
-           ],
-         ),
+         () {
+           final usable = _usableImages(images);
+           final specs = initialItemSpecs ?? const <ProductSpec>[];
+           return BulkUploadState(
+             storeId: storeId,
+             groupTitle: initialTitle?.trim() ?? '',
+             tags: [
+               for (final t in initialTags ?? const <String>[])
+                 if (t.trim().isNotEmpty) t.trim().toLowerCase(),
+             ],
+             images: usable,
+             items: [
+               for (var i = 0; i < usable.length; i++)
+                 BulkUploadItem(
+                   id: usable[i].id,
+                   imagePath: usable[i].filePath!,
+                   spec: i < specs.length ? specs[i] : const ProductSpec(),
+                 ),
+             ],
+             groupSpec:
+                 (specs.isNotEmpty && specs.first.isValid)
+                     ? specs.first
+                     : const ProductSpec(),
+           );
+         }(),
        ) {
     _registerHandlers();
   }
 
   /// Hydrate refine/edit preview from an existing collection detail.
+  ///
+  /// [initiallySelectedIds] applies selection synchronously (e.g. browse Edit →
+  /// auto-open compose) so the first frame sees `selectedCount > 0`.
   BulkUploadBloc.fromCollectionDetail({
     required CollectionDetail detail,
     required String storeId,
+    List<String> initiallySelectedIds = const [],
     CollectionRepository? collectionRepository,
     CatalogDirectUploadService? directUploadService,
     CatalogSession? session,
@@ -65,7 +86,13 @@ class BulkUploadBloc extends Bloc<BulkUploadEvent, BulkUploadState> {
            directUploadService ??
            ServiceLocator.get<CatalogDirectUploadService>(),
        _session = session ?? ServiceLocator.get<CatalogSession>(),
-       super(_stateFromDetail(detail: detail, storeId: storeId)) {
+       super(
+         _stateFromDetail(
+           detail: detail,
+           storeId: storeId,
+           initiallySelectedIds: initiallySelectedIds,
+         ),
+       ) {
     _registerHandlers();
   }
 
@@ -134,6 +161,7 @@ class BulkUploadBloc extends Bloc<BulkUploadEvent, BulkUploadState> {
     on<BulkUploadAddDetailsPressed>(_onAddDetailsPressed);
     on<BulkUploadClearOpenGroupDetails>(_onClearOpenGroupDetails);
     on<BulkUploadApplyGroupSpec>(_onApplyGroupSpec);
+    on<BulkUploadSeedComposeItems>(_onSeedComposeItems);
     on<BulkUploadClearOpenPreview>(_onClearOpenPreview);
     on<BulkUploadSelectModeToggled>(_onSelectModeToggled);
     on<BulkUploadSelectionSet>(_onSelectionSet);
@@ -158,10 +186,15 @@ class BulkUploadBloc extends Bloc<BulkUploadEvent, BulkUploadState> {
   static BulkUploadState _stateFromDetail({
     required CollectionDetail detail,
     required String storeId,
+    List<String> initiallySelectedIds = const [],
   }) {
-    final groupSpec = ProductSpec.fromApiJson(
+    final nestedGroup = ProductSpec.fromApiJson(
       detail.specifications?.toJson(),
     );
+    final groupSpec =
+        (nestedGroup.grossMin != null || nestedGroup.metalType.isNotEmpty)
+            ? nestedGroup
+            : (detail.defaultsSpec ?? nestedGroup);
     final items = <BulkUploadItem>[];
     final images = <GalleryImageItem>[];
 
@@ -178,12 +211,13 @@ class BulkUploadBloc extends Bloc<BulkUploadEvent, BulkUploadState> {
       final id = (photo.id?.trim().isNotEmpty == true)
           ? photo.id!.trim()
           : 'main_${url.hashCode}';
+      final fromProduct = detail.productSpecsById[id];
       items.add(
         BulkUploadItem(
           id: id,
           imagePath: url,
           tag: BulkItemTag.group,
-          spec: groupSpec,
+          spec: fromProduct ?? groupSpec,
         ),
       );
       images.add(
@@ -206,6 +240,7 @@ class BulkUploadBloc extends Bloc<BulkUploadEvent, BulkUploadState> {
         final id = (photo.id?.trim().isNotEmpty == true)
             ? photo.id!.trim()
             : 'sub_${sub.id}_${url.hashCode}';
+        final fromProduct = detail.productSpecsById[id];
         items.add(
           BulkUploadItem(
             id: id,
@@ -214,7 +249,7 @@ class BulkUploadBloc extends Bloc<BulkUploadEvent, BulkUploadState> {
                 isStandalone
                     ? BulkItemTag.standalone
                     : BulkItemTag.precise,
-            spec: effectiveSpec,
+            spec: fromProduct ?? effectiveSpec,
             customTitle: sub.name.trim(),
             subGroupId: sub.id.trim().isEmpty ? null : sub.id.trim(),
           ),
@@ -242,6 +277,11 @@ class BulkUploadBloc extends Bloc<BulkUploadEvent, BulkUploadState> {
     }
 
     final apiTag = detail.tag.trim();
+    final knownIds = {for (final item in items) item.id};
+    final selected = [
+      for (final id in initiallySelectedIds)
+        if (knownIds.contains(id)) id,
+    ];
     return BulkUploadState(
       storeId: storeId,
       images: images,
@@ -271,6 +311,8 @@ class BulkUploadBloc extends Bloc<BulkUploadEvent, BulkUploadState> {
               ),
             ),
       ],
+      isSelectMode: selected.isNotEmpty,
+      selectedItemIds: selected,
       isEditMode: true,
       listingId: detail.id,
       revision: detail.revision,
@@ -403,6 +445,40 @@ class BulkUploadBloc extends Bloc<BulkUploadEvent, BulkUploadState> {
     _logSnapshot(_tag, 'after_apply_group_spec');
   }
 
+  void _onSeedComposeItems(
+    BulkUploadSeedComposeItems event,
+    Emitter<BulkUploadState> emit,
+  ) {
+    if (!event.groupSpec.isValid) {
+      AppLog.d(_tag, 'SeedComposeItems REJECT invalid_group_spec');
+      return;
+    }
+    final specs = event.itemSpecs;
+    emit(
+      state.copyWith(
+        groupSpec: event.groupSpec,
+        items: [
+          for (var i = 0; i < state.items.length; i++)
+            state.items[i].copyWith(
+              spec: i < specs.length ? specs[i] : event.groupSpec,
+              tag:
+                  (i < specs.length &&
+                          specs[i].isValid &&
+                          specs[i] != event.groupSpec)
+                      ? BulkItemTag.precise
+                      : BulkItemTag.group,
+            ),
+        ],
+        isSelectMode: false,
+        selectedItemIds: const [],
+        shouldOpenPreview: true,
+        isPublished: false,
+        clearError: true,
+      ),
+    );
+    _logSnapshot(_tag, 'after_seed_compose_items');
+  }
+
   void _onClearOpenPreview(
     BulkUploadClearOpenPreview event,
     Emitter<BulkUploadState> emit,
@@ -483,8 +559,12 @@ class BulkUploadBloc extends Bloc<BulkUploadEvent, BulkUploadState> {
       'ApplyItemSpec item=${event.itemId} → precise '
       'cat=${event.spec.category} valid=${event.spec.isValid}',
     );
+    // Single-item listing: keep groupSpec aligned so legacy collection PATCH
+    // (and jewel product PATCH sources) use the edited weight/purity.
+    final syncGroup = state.items.length == 1;
     emit(
       state.copyWith(
+        groupSpec: syncGroup ? event.spec : null,
         items: [
           for (final item in state.items)
             item.id == event.itemId
@@ -515,8 +595,14 @@ class BulkUploadBloc extends Bloc<BulkUploadEvent, BulkUploadState> {
       'ApplyMultiSpec count=${ids.length} → precise '
       'ids=${ids.join(',')} cat=${event.spec.category}',
     );
+    // When every item receives the same compose spec, sync groupSpec so
+    // updateCollection (legacy) does not write a stale collection payload.
+    final syncGroup =
+        state.items.isNotEmpty &&
+        state.items.every((item) => ids.contains(item.id));
     emit(
       state.copyWith(
+        groupSpec: syncGroup ? event.spec : null,
         items: [
           for (final item in state.items)
             ids.contains(item.id)
@@ -1280,213 +1366,237 @@ class BulkUploadBloc extends Bloc<BulkUploadEvent, BulkUploadState> {
       );
       _setPublishProgress(emit, 0.08);
 
+      // Jewel listings embed CatalogProducts — weight/purity live on each
+      // product, not only collection/subgroup `specifications`. Detect early so
+      // we don't overwrite collection specs with a stale groupSpec and skip
+      // Precise-subgroup moves that treat product ids as photo asset ids.
+      var detail = await _collectionRepository.fetchCollection(
+        storeId: storeId,
+        listingId: listingId,
+      );
+      revision = detail.revision;
+      final isJewelListing = detail.productSpecsById.isNotEmpty;
+
       final updated = await _collectionRepository.updateCollection(
         storeId: storeId,
         listingId: listingId,
         revision: revision,
         name: groupTitle.isNotEmpty ? groupTitle : null,
+        // Jewel: product PATCH below owns weight/purity. Legacy photo
+        // collections still persist collection-level specifications here.
         specifications:
-            state.groupSpec.isValid ? state.groupSpec.toApiJson() : null,
-        usePrecisionTag: state.groupSpec.isValid ? true : null,
+            !isJewelListing && state.groupSpec.isValid
+                ? state.groupSpec.toApiJson()
+                : null,
+        usePrecisionTag:
+            !isJewelListing && state.groupSpec.isValid ? true : null,
       );
       revision = updated.revision;
 
-      var detail = await _collectionRepository.fetchCollection(
+      detail = await _collectionRepository.fetchCollection(
         storeId: storeId,
         listingId: listingId,
       );
       revision = detail.revision;
       _setPublishProgress(emit, 0.15);
 
-      final mainIds =
-          detail.mainGroupPhotos
-              .map((p) => p.id?.trim() ?? '')
-              .where((id) => id.isNotEmpty)
-              .toSet();
-
-      // Create subgroups for Precise/Standalone items still sitting in main.
-      final createCandidates =
-          state.items
-              .where(
-                (item) =>
-                    (item.tag == BulkItemTag.precise ||
-                        item.tag == BulkItemTag.standalone) &&
-                    mainIds.contains(item.id),
-              )
-              .toList();
-
-      // PATCH existing Precise/Standalone subgroups when their items were edited.
-      final updateCandidates =
-          state.items
-              .where((item) {
-                final subId = item.subGroupId?.trim() ?? '';
-                return (item.tag == BulkItemTag.precise ||
-                        item.tag == BulkItemTag.standalone) &&
-                    subId.isNotEmpty &&
-                    !mainIds.contains(item.id);
-              })
-              .toList();
-
-      AppLog.d(
-        _editTag,
-        'saveEdit mainIds=${mainIds.length} '
-        'createCandidates=${createCandidates.length} '
-        'updateCandidates=${updateCandidates.length}',
-      );
-      for (final item in createCandidates) {
-        AppLog.d(_editTag, '  create ${_itemBrief(item)}');
-      }
-      for (final item in updateCandidates) {
-        AppLog.d(_editTag, '  update ${_itemBrief(item)}');
-      }
-
-      final createClusters = <String, List<BulkUploadItem>>{};
-      for (final item in createCandidates) {
-        createClusters
-            .putIfAbsent(_precisionClusterKey(item), () => [])
-            .add(item);
-      }
-
-      final updateClusters = <String, List<BulkUploadItem>>{};
-      for (final item in updateCandidates) {
-        final subId = item.subGroupId!.trim();
-        updateClusters.putIfAbsent(subId, () => []).add(item);
-      }
-
-      AppLog.d(_editTag, 'saveEdit createClusters=${createClusters.length}');
-      AppLog.d(_editTag, 'saveEdit updateClusters=${updateClusters.length}');
-
-      final editOps = createClusters.length + updateClusters.length;
-      var editDone = 0;
-      void bumpEditProgress() {
-        editDone++;
-        if (editOps <= 0) return;
-        _setPublishProgress(emit, 0.15 + 0.8 * (editDone / editOps));
-      }
-
-      var subIndex = 1;
-      for (final entry in createClusters.entries) {
-        final photoIds =
-            entry.value
-                .map((item) => item.id.trim())
-                .where((id) => id.isNotEmpty && mainIds.contains(id))
-                .toList();
-        if (photoIds.isEmpty) continue;
-        final clusterSpec = entry.value.first.spec;
-        if (!clusterSpec.isValid) {
-          AppLog.d(
-            _editTag,
-            'SKIP create ${entry.key} invalid_spec photos=${photoIds.length}',
-          );
-          bumpEditProgress();
-          continue;
-        }
-
-        final label = _clusterDisplayName(
-          items: entry.value,
-          groupTitle: groupTitle,
-          subIndex: subIndex,
-          isStandalone: entry.value.every(
-            (item) => item.tag == BulkItemTag.standalone,
-          ),
+      if (isJewelListing) {
+        await _patchJewelProductSpecs(
+          emit,
+          detail: detail,
+          items: state.items,
         );
+      } else {
+        final mainIds =
+            detail.mainGroupPhotos
+                .map((p) => p.id?.trim() ?? '')
+                .where((id) => id.isNotEmpty)
+                .toSet();
 
-        try {
-          AppLog.d(
-            _editTag,
-            'createSubGroup name=$label photos=${photoIds.length} '
-            'ids=${photoIds.join(',')}',
-          );
-          await _collectionRepository.createSubGroup(
-            storeId: storeId,
-            listingId: listingId,
-            name: label,
-            tag: clusterSpec.category,
-            photoIds: photoIds,
-            revision: revision,
-            specifications: clusterSpec.toApiJson(),
-            usePrecisionTag: true,
-          );
-          detail = await _collectionRepository.fetchCollection(
-            storeId: storeId,
-            listingId: listingId,
-          );
-          revision = detail.revision;
-          mainIds
-            ..clear()
-            ..addAll(
-              detail.mainGroupPhotos
-                  .map((p) => p.id?.trim() ?? '')
-                  .where((id) => id.isNotEmpty),
+        // Create subgroups for Precise/Standalone items still sitting in main.
+        final createCandidates =
+            state.items
+                .where(
+                  (item) =>
+                      (item.tag == BulkItemTag.precise ||
+                          item.tag == BulkItemTag.standalone) &&
+                      mainIds.contains(item.id),
+                )
+                .toList();
+
+        // PATCH existing Precise/Standalone subgroups when their items were edited.
+        final updateCandidates =
+            state.items
+                .where((item) {
+                  final subId = item.subGroupId?.trim() ?? '';
+                  return (item.tag == BulkItemTag.precise ||
+                          item.tag == BulkItemTag.standalone) &&
+                      subId.isNotEmpty &&
+                      !mainIds.contains(item.id);
+                })
+                .toList();
+
+        AppLog.d(
+          _editTag,
+          'saveEdit mainIds=${mainIds.length} '
+          'createCandidates=${createCandidates.length} '
+          'updateCandidates=${updateCandidates.length}',
+        );
+        for (final item in createCandidates) {
+          AppLog.d(_editTag, '  create ${_itemBrief(item)}');
+        }
+        for (final item in updateCandidates) {
+          AppLog.d(_editTag, '  update ${_itemBrief(item)}');
+        }
+
+        final createClusters = <String, List<BulkUploadItem>>{};
+        for (final item in createCandidates) {
+          createClusters
+              .putIfAbsent(_precisionClusterKey(item), () => [])
+              .add(item);
+        }
+
+        final updateClusters = <String, List<BulkUploadItem>>{};
+        for (final item in updateCandidates) {
+          final subId = item.subGroupId!.trim();
+          updateClusters.putIfAbsent(subId, () => []).add(item);
+        }
+
+        AppLog.d(_editTag, 'saveEdit createClusters=${createClusters.length}');
+        AppLog.d(_editTag, 'saveEdit updateClusters=${updateClusters.length}');
+
+        final editOps = createClusters.length + updateClusters.length;
+        var editDone = 0;
+        void bumpEditProgress() {
+          editDone++;
+          if (editOps <= 0) return;
+          _setPublishProgress(emit, 0.15 + 0.8 * (editDone / editOps));
+        }
+
+        var subIndex = 1;
+        for (final entry in createClusters.entries) {
+          final photoIds =
+              entry.value
+                  .map((item) => item.id.trim())
+                  .where((id) => id.isNotEmpty && mainIds.contains(id))
+                  .toList();
+          if (photoIds.isEmpty) continue;
+          final clusterSpec = entry.value.first.spec;
+          if (!clusterSpec.isValid) {
+            AppLog.d(
+              _editTag,
+              'SKIP create ${entry.key} invalid_spec photos=${photoIds.length}',
             );
-          AppLog.d(
-            _editTag,
-            'createSubGroup OK name=$label revision=$revision '
-            'mainLeft=${mainIds.length}',
-          );
-        } catch (e) {
-          AppLog.e(_editTag, 'edit createSubGroup failed for $label', e);
-        }
-        bumpEditProgress();
-        subIndex++;
-      }
+            bumpEditProgress();
+            continue;
+          }
 
-      for (final entry in updateClusters.entries) {
-        final subGroupId = entry.key;
-        final clusterSpec = entry.value.first.spec;
-        if (!clusterSpec.isValid) {
-          AppLog.d(
-            _editTag,
-            'SKIP update $subGroupId invalid_spec '
-            'photos=${entry.value.length}',
+          final label = _clusterDisplayName(
+            items: entry.value,
+            groupTitle: groupTitle,
+            subIndex: subIndex,
+            isStandalone: entry.value.every(
+              (item) => item.tag == BulkItemTag.standalone,
+            ),
           );
+
+          try {
+            AppLog.d(
+              _editTag,
+              'createSubGroup name=$label photos=${photoIds.length} '
+              'ids=${photoIds.join(',')}',
+            );
+            await _collectionRepository.createSubGroup(
+              storeId: storeId,
+              listingId: listingId,
+              name: label,
+              tag: clusterSpec.category,
+              photoIds: photoIds,
+              revision: revision,
+              specifications: clusterSpec.toApiJson(),
+              usePrecisionTag: true,
+            );
+            detail = await _collectionRepository.fetchCollection(
+              storeId: storeId,
+              listingId: listingId,
+            );
+            revision = detail.revision;
+            mainIds
+              ..clear()
+              ..addAll(
+                detail.mainGroupPhotos
+                    .map((p) => p.id?.trim() ?? '')
+                    .where((id) => id.isNotEmpty),
+              );
+            AppLog.d(
+              _editTag,
+              'createSubGroup OK name=$label revision=$revision '
+              'mainLeft=${mainIds.length}',
+            );
+          } catch (e) {
+            AppLog.e(_editTag, 'edit createSubGroup failed for $label', e);
+          }
           bumpEditProgress();
-          continue;
+          subIndex++;
         }
 
-        final knownName =
-            state.knownSubGroups
-                .where((s) => s.id.trim() == subGroupId)
-                .map((s) => s.name.trim())
-                .firstWhere((n) => n.isNotEmpty, orElse: () => '');
-        final customName =
-            entry.value
-                .map((item) => item.customTitle.trim())
-                .firstWhere((t) => t.isNotEmpty, orElse: () => '');
-        final label =
-            customName.isNotEmpty
-                ? customName
-                : (knownName.isNotEmpty ? knownName : 'Precise');
+        for (final entry in updateClusters.entries) {
+          final subGroupId = entry.key;
+          final clusterSpec = entry.value.first.spec;
+          if (!clusterSpec.isValid) {
+            AppLog.d(
+              _editTag,
+              'SKIP update $subGroupId invalid_spec '
+              'photos=${entry.value.length}',
+            );
+            bumpEditProgress();
+            continue;
+          }
 
-        try {
-          AppLog.d(
-            _editTag,
-            'updateSubGroup id=$subGroupId name=$label '
-            'photos=${entry.value.length}',
-          );
-          await _collectionRepository.updateSubGroup(
-            storeId: storeId,
-            listingId: listingId,
-            subGroupId: subGroupId,
-            revision: revision,
-            name: label,
-            tag: clusterSpec.category,
-            specifications: clusterSpec.toApiJson(),
-            usePrecisionTag: true,
-          );
-          detail = await _collectionRepository.fetchCollection(
-            storeId: storeId,
-            listingId: listingId,
-          );
-          revision = detail.revision;
-          AppLog.d(
-            _editTag,
-            'updateSubGroup OK id=$subGroupId revision=$revision',
-          );
-        } catch (e) {
-          AppLog.e(_editTag, 'edit updateSubGroup failed for $subGroupId', e);
+          final knownName =
+              state.knownSubGroups
+                  .where((s) => s.id.trim() == subGroupId)
+                  .map((s) => s.name.trim())
+                  .firstWhere((n) => n.isNotEmpty, orElse: () => '');
+          final customName =
+              entry.value
+                  .map((item) => item.customTitle.trim())
+                  .firstWhere((t) => t.isNotEmpty, orElse: () => '');
+          final label =
+              customName.isNotEmpty
+                  ? customName
+                  : (knownName.isNotEmpty ? knownName : 'Precise');
+
+          try {
+            AppLog.d(
+              _editTag,
+              'updateSubGroup id=$subGroupId name=$label '
+              'photos=${entry.value.length}',
+            );
+            await _collectionRepository.updateSubGroup(
+              storeId: storeId,
+              listingId: listingId,
+              subGroupId: subGroupId,
+              revision: revision,
+              name: label,
+              tag: clusterSpec.category,
+              specifications: clusterSpec.toApiJson(),
+              usePrecisionTag: true,
+            );
+            detail = await _collectionRepository.fetchCollection(
+              storeId: storeId,
+              listingId: listingId,
+            );
+            revision = detail.revision;
+            AppLog.d(
+              _editTag,
+              'updateSubGroup OK id=$subGroupId revision=$revision',
+            );
+          } catch (e) {
+            AppLog.e(_editTag, 'edit updateSubGroup failed for $subGroupId', e);
+          }
+          bumpEditProgress();
         }
-        bumpEditProgress();
       }
 
       _setPublishProgress(emit, 1);
@@ -1524,6 +1634,82 @@ class BulkUploadBloc extends Bloc<BulkUploadEvent, BulkUploadState> {
           errorMessage: CatalogErrorMapper.toUserMessage(e),
         ),
       );
+    }
+  }
+
+  /// Jewel edit: persist weight/purity/size on each embedded CatalogProduct.
+  ///
+  /// Details chrome reads [CollectionDetail.productSpecsById] (products[]), so
+  /// collection/subgroup specification PATCHes alone never show up after save.
+  Future<void> _patchJewelProductSpecs(
+    Emitter<BulkUploadState> emit, {
+    required CollectionDetail detail,
+    required List<BulkUploadItem> items,
+  }) async {
+    // productSpecsById is keyed by product _id and sometimes primary imageId.
+    // Prefer a non-img_ sibling key when the item id is an image id.
+    String? productIdFor(String rawId) {
+      if (rawId.isEmpty) return null;
+      if (!detail.productSpecsById.containsKey(rawId)) return null;
+      if (!rawId.startsWith('img_')) return rawId;
+      final target = detail.productSpecsById[rawId];
+      if (target == null) return null;
+      for (final entry in detail.productSpecsById.entries) {
+        final key = entry.key.trim();
+        if (key.isEmpty || key.startsWith('img_')) continue;
+        if (entry.value == target) return key;
+      }
+      return null;
+    }
+
+    final toPatch = <String, ProductSpec>{};
+    for (final item in items) {
+      if (!item.spec.isValid) continue;
+      final productId = productIdFor(item.id.trim());
+      if (productId == null) continue;
+      toPatch[productId] = item.spec;
+    }
+
+    if (toPatch.isEmpty) {
+      AppLog.d(_editTag, 'jewel product PATCH skip — no valid product specs');
+      return;
+    }
+
+    AppLog.d(
+      _editTag,
+      'jewel product PATCH count=${toPatch.length} '
+      'ids=${toPatch.keys.join(',')}',
+    );
+
+    final total = toPatch.length;
+    var done = 0;
+    for (final entry in toPatch.entries) {
+      final productId = entry.key;
+      final patchBody =
+          entry.value.toBatchProductJson(
+              stockStatus: 'in',
+              isLocked: false,
+              tags: const [],
+            )
+            ..remove('stock_status')
+            ..remove('is_locked')
+            ..remove('tags')
+            ..remove('mto_days');
+      try {
+        await _collectionRepository.updateProduct(
+          productId: productId,
+          body: patchBody,
+        );
+        AppLog.d(_editTag, 'jewel product PATCH OK id=$productId');
+      } catch (e) {
+        // Don't fail the whole save if one product id was stale — log and
+        // continue so remaining products still update.
+        AppLog.e(_editTag, 'jewel product PATCH failed id=$productId', e);
+      }
+      done++;
+      if (total > 0) {
+        _setPublishProgress(emit, 0.15 + 0.8 * (done / total));
+      }
     }
   }
 

@@ -1,0 +1,100 @@
+## [0.7.7] - 27/08/2026
+
+* Silence `cacheExtent` deprecation warnings introduced by Flutter 3.41, restoring the full pub.dev static analysis score. No functional changes.
+
+## [0.7.6] - 16/02/2026
+
+* Fix back button popping the route instead of cancelling selection when the grid is created with a non-empty controller ([#34](https://github.com/hcbpassos/drag_select_grid_view/pull/34)).
+* Fix grid not updating when selection is changed programmatically via controller ([#34](https://github.com/hcbpassos/drag_select_grid_view/pull/34)).
+
+## [0.7.5] - 16/02/2026
+
+* Fix auto-scroll stopping when dragging beyond the grid's area ([#5](https://github.com/hcbpassos/drag_select_grid_view/issues/5)).
+* Fix drag selection not reaching first items when pointer is above the grid.
+
+## [0.7.4] - 16/02/2026
+
+* Support `ScrollView.scrollDirection` with axis-aware auto-scroll hotspots ([#4](https://github.com/hcbpassos/drag_select_grid_view/issues/4)).
+
+## [0.7.3] - 16/02/2026
+
+* Select last item when dragging to trailing empty space in partial last row ([#1](https://github.com/hcbpassos/drag_select_grid_view/issues/1)).
+
+## [0.7.2] - 16/02/2026
+
+* Fix memory leak when no `ScrollController` is provided.
+* Fix auto-scroll hotspot bounds going stale on widget resize.
+* Add null safety check for `findRenderObject()`.
+* Improve auto-scroll architecture (post-frame callback instead of build side effect).
+* Remove incorrect `@immutable` annotation from `AutoScroll`.
+* Improve element lookup performance during gestures.
+
+## [0.7.1] - 16/02/2026
+
+* Fix README images not displaying on pub.dev.
+
+## [0.7.0] - 16/02/2026
+
+* **Breaking change**. Drop support for Dart < 3.0.0.
+* Bump dependencies (`collection` ^1.18.0, `flutter_lints` ^6.0.0).
+* Adopt Dart 3 language features (super parameters, remove unnecessary library directive).
+* Add pub.dev topics for discoverability.
+* Forward missing `GridView.builder` parameters: `findChildIndexCallback` and `hitTestBehavior`.
+
+## [0.6.2] - 29/08/2023
+
+* Bump Dart SDK constraints.
+* Support `LocalHistoryEntry.impliesAppBarDismissal` ([#31](https://github.com/hcbpassos/drag_select_grid_view/issues/31)).
+* Fix lack of local history update on controller changes ([#31](https://github.com/hcbpassos/drag_select_grid_view/issues/31)).
+
+## [0.6.1] - 24/07/2022
+
+* Fix format.
+
+## [0.6.0] - 11/06/2022
+
+* **Breaking change**. Drop support for flutter < 3.0.0.
+* Fix null aware operator warning ([#28](https://github.com/hcbpassos/drag_select_grid_view/issues/28)).
+* Use `flutter_lints`.
+
+## [0.5.1] - 03/05/2021
+
+* Fix pointer ignoring when grid is in selection mode.
+
+## [0.5.0] - 02/05/2021
+
+* Support selection trigger on tap instead of on long-press.
+* Add missing `GridView` fields.
+* Replace `WillPopScope` widget by adding entry on local-history. This fixes iOS route navigation (swipe left to pop). 
+* **Breaking change**. Remove `DragSelectiGridView.unselectOnWillPop`: turn this behavior mandatory. 
+
+## [0.4.0] - 21/03/2021
+
+* Migrate to null safety.
+
+## [0.3.1] - 10/08/2020
+
+* Fix format.
+
+## [0.3.0] - 08/08/2020
+
+* **Breaking change**. Fix the constructor of `Selection`, which now creates a copy of the received `Set`. Consequently, the constructor is no longer constant. To keep `Selection.empty` constant, another constructor has been created: `Selection.empty()`. 
+* **Breaking change**. Make `DragSelectGridViewController` extend `ValueNotifier` instead of `ChangeNotifier`. The getter and setter `selection` are now `ValueNotifier`'s default: `value`.
+* Support initial selection ([#14](https://github.com/hcbpassos/drag_select_grid_view/issues/14)).
+
+## [0.2.1] - 28/07/2020
+
+*  Fix `DragSelectGridViewController` dispose ([#13](https://github.com/hcbpassos/drag_select_grid_view/issues/13)).
+
+## [0.2.0] - 05/04/2020
+
+* Improve code safety with `assert`s.
+* Remove author section from `pubspec.yaml`.
+
+## [0.1.1] - 26/10/2019
+
+* Update authors.
+
+## [0.1.0] - 06/10/2019
+
+* Initial release.

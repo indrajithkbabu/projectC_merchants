@@ -1,33 +1,54 @@
 import 'package:flutter/material.dart';
 import 'package:project_c/bloc/store_gallery/store_gallery_bloc.dart';
+import 'package:project_c/helper/catalog_media_debug.dart';
+import 'package:project_c/helper/catalog_responsive_image.dart';
 import 'package:project_c/helper/colors.dart';
 import 'package:project_c/helper/product_image.dart';
 import 'package:project_c/helper/text_styles.dart';
 import 'package:project_c/models/store_product.dart';
 import 'package:project_c/presentation/storeprofile/storeprofile_widgets/store_product_grid_shimmer.dart';
+import 'package:project_c/presentation/storeprofile/storeprofile_widgets/visitor_photo_selection_chrome.dart';
 
-/// Light-theme gallery mosaic embedded in store profile (view-mode: gallery).
+/// Light-theme gallery mosaic (store profile Gallery + channel Gallery tab).
+///
+/// Pinch columns (2…9) via [GalleryPinchHost] / parent; quality follows the
+/// same ladder as channel Media (`roleForMediaColumns`).
 class StoreProductGallerySliver extends StatelessWidget {
   const StoreProductGallerySliver({
     super.key,
     required this.products,
     required this.onImageTap,
     this.onProductLongPress,
+    this.onImageLongPress,
     this.selectionMode = false,
+    this.photoSelectionMode = false,
     this.selectedIds = const {},
+    this.selectedPhotoKeys = const {},
     this.isLoading = false,
-    this.crossAxisCount = 4,
+    this.columns = 4,
+    this.pinching = false,
     this.focusProductId,
     this.focusKey,
   });
 
   final List<StoreProduct> products;
-  final void Function(StoreProduct product, int imageIndex) onImageTap;
+  final void Function(
+    StoreProduct product,
+    int imageIndex, {
+    Rect? sourceRect,
+  })
+  onImageTap;
   final ValueChanged<StoreProduct>? onProductLongPress;
+  final void Function(StoreProduct product, int imageIndex)? onImageLongPress;
   final bool selectionMode;
+  final bool photoSelectionMode;
   final Set<String> selectedIds;
+  final Set<String> selectedPhotoKeys;
   final bool isLoading;
-  final int crossAxisCount;
+
+  /// Continuous 2…9; painted as [columns.round] (Media-style).
+  final double columns;
+  final bool pinching;
   final String? focusProductId;
   final GlobalKey? focusKey;
 
@@ -47,6 +68,12 @@ class StoreProductGallerySliver extends StatelessWidget {
         ),
       );
     }
+
+    final crossAxisCount = columns.round().clamp(2, 9);
+    final paintRole =
+        CatalogResponsiveImage.roleForMediaColumns(crossAxisCount);
+    final decodeWidth = CatalogImageCache.cacheWidthForRole(paintRole);
+    final spacing = crossAxisCount >= 6 ? 1.0 : 2.0;
 
     final focusId = focusProductId?.trim() ?? '';
     final sections = StoreGalleryState.buildSections(products);
@@ -132,25 +159,139 @@ class StoreProductGallerySliver extends StatelessWidget {
                   padding: EdgeInsets.zero,
                   gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
                     crossAxisCount: crossAxisCount,
-                    mainAxisSpacing: 2,
-                    crossAxisSpacing: 2,
+                    mainAxisSpacing: spacing,
+                    crossAxisSpacing: spacing,
                   ),
                   itemCount: section.tileCount,
                   itemBuilder: (context, index) {
                     final path =
                         section.imagePaths.isEmpty
                             ? null
-                            : section.imagePaths[index];
-                    return GestureDetector(
-                      onTap: () => onImageTap(product, index),
-                      onLongPress:
-                          onProductLongPress == null
-                              ? null
-                              : () => onProductLongPress!(product),
-                      child: ColoredBox(
-                        color: AppColors.surfaceSecondary,
-                        child: _tileImage(path, product.toneIndex),
-                      ),
+                            : product.urlForRole(
+                              index,
+                              paintRole,
+                              log: index == 0 && dayIndex == 0,
+                            );
+                    if (index == 0 &&
+                        dayIndex == 0 &&
+                        path != null &&
+                        path.isNotEmpty) {
+                      CatalogMediaDebug.qualityMediaPaint(
+                        columns: crossAxisCount,
+                        role: paintRole,
+                        sampleUrl: path,
+                      );
+                    }
+                    return Builder(
+                      builder: (tileContext) {
+                        final photoKey = '${product.id}|$index';
+                        final photoSelected =
+                            selectedPhotoKeys.contains(photoKey);
+                        return GestureDetector(
+                          onTap:
+                              pinching
+                                  ? null
+                                  : () {
+                                    Rect? sourceRect;
+                                    final box = tileContext.findRenderObject();
+                                    if (box is RenderBox && box.hasSize) {
+                                      sourceRect =
+                                          box.localToGlobal(Offset.zero) &
+                                          box.size;
+                                    }
+                                    onImageTap(
+                                      product,
+                                      index,
+                                      sourceRect: sourceRect,
+                                    );
+                                  },
+                          onLongPress:
+                              pinching
+                                  ? null
+                                  : onImageLongPress != null
+                                  ? () => onImageLongPress!(product, index)
+                                  : onProductLongPress == null
+                                  ? null
+                                  : () => onProductLongPress!(product),
+                          child: ColoredBox(
+                            color: AppColors.surfaceSecondary,
+                            child: Stack(
+                              fit: StackFit.expand,
+                              children: [
+                                _tileImage(
+                                  path,
+                                  product.toneIndex,
+                                  product.thumbhashAt(index),
+                                  decodeWidth,
+                                ),
+                                if (product.isImportDeclinedAt(index) ||
+                                    product.isImportPendingAt(index))
+                                  Positioned(
+                                    top: 5,
+                                    left: 5,
+                                    child: Container(
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: 6,
+                                        vertical: 3,
+                                      ),
+                                      decoration: BoxDecoration(
+                                        color:
+                                            product.isImportDeclinedAt(index)
+                                                ? AppColors.error.withValues(
+                                                  alpha: 0.92,
+                                                )
+                                                : AppColors.warning.withValues(
+                                                  alpha: 0.92,
+                                                ),
+                                        borderRadius: BorderRadius.circular(8),
+                                      ),
+                                      child: Text(
+                                        product.isImportDeclinedAt(index)
+                                            ? 'Declined'
+                                            : 'Pending',
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: AppTextStyles.caption(
+                                          fontSize: 10,
+                                          fontWeight: FontWeight.w700,
+                                          color: Colors.white,
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                if (photoSelectionMode)
+                                  Positioned(
+                                    top: 5,
+                                    right: 5,
+                                    child: TelegramPhotoSelectBadge(
+                                      selected: photoSelected,
+                                    ),
+                                  ),
+                                if (photoSelectionMode)
+                                  Positioned(
+                                    top:
+                                        product.isImportDeclinedAt(index) ||
+                                                product.isImportPendingAt(
+                                                  index,
+                                                )
+                                            ? 28
+                                            : 5,
+                                    left: 5,
+                                    right: 28,
+                                    child: VisitorImportStatusMarks(
+                                      locked: product.isLockedAt(index),
+                                      stock: product.stockStatusAt(index),
+                                      alreadyImported:
+                                          product.isAlreadyImported,
+                                      selectionBlocked:
+                                          product.importSelectionBlocked,
+                                    ),
+                                  ),
+                              ],
+                            ),
+                          ),
+                        );
+                      },
                     );
                   },
                 ),
@@ -165,11 +306,16 @@ class StoreProductGallerySliver extends StatelessWidget {
       }
     }
 
-    slivers.add(const SliverToBoxAdapter(child: SizedBox(height: 16)));
+    // No trailing bottom spacer — images sit flush with the viewport edge.
     return SliverMainAxisGroup(slivers: slivers);
   }
 
-  Widget _tileImage(String? path, int tone) {
+  Widget _tileImage(
+    String? path,
+    int tone,
+    String? thumbhash,
+    int decodeWidth,
+  ) {
     if (path == null ||
         path.isEmpty ||
         !ProductImagePaths.isDisplayable(path)) {
@@ -193,7 +339,11 @@ class StoreProductGallerySliver extends StatelessWidget {
         ),
       );
     }
-    return ProductMediaImage(path: path);
+    return ProductMediaImage(
+      path: path,
+      thumbhash: thumbhash,
+      decodeCacheWidth: decodeWidth,
+    );
   }
 }
 

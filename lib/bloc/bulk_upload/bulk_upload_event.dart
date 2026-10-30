@@ -83,6 +83,20 @@ class BulkUploadApplyGroupSpec extends BulkUploadEvent {
   List<Object?> get props => [spec];
 }
 
+/// Compose This-photo: open preview with per-item specs preserved.
+class BulkUploadSeedComposeItems extends BulkUploadEvent {
+  const BulkUploadSeedComposeItems({
+    required this.groupSpec,
+    required this.itemSpecs,
+  });
+
+  final ProductSpec groupSpec;
+  final List<ProductSpec> itemSpecs;
+
+  @override
+  List<Object?> get props => [groupSpec, itemSpecs];
+}
+
 class BulkUploadClearOpenPreview extends BulkUploadEvent {
   const BulkUploadClearOpenPreview();
 }

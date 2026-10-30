@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:project_c/helper/app_padding.dart';
 import 'package:project_c/helper/app_shimmer.dart';
-import 'package:project_c/helper/colors.dart';
 
 /// Skeleton list matching [StoreListingTile] row layout (avatar + title lines).
 class StoreListingShimmer extends StatefulWidget {
@@ -43,16 +42,10 @@ class _StoreListingShimmerState extends State<StoreListingShimmer>
       animation: _controller,
       builder: (context, _) {
         final t = _controller.value;
-        return ListView.separated(
+        return ListView.builder(
           physics: const AlwaysScrollableScrollPhysics(),
           padding: widget.padding ?? AppPadding.screen(top: 8, bottom: 24),
           itemCount: widget.itemCount,
-          separatorBuilder:
-              (_, __) => Divider(
-                height: 1,
-                indent: 68,
-                color: AppColors.border,
-              ),
           itemBuilder: (context, index) {
             return Padding(
               padding: const EdgeInsets.symmetric(vertical: 10),
