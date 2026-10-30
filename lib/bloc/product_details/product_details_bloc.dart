@@ -2,6 +2,8 @@ import 'package:bloc/bloc.dart';
 import 'package:equatable/equatable.dart';
 import 'package:project_c/di/service_locator.dart';
 import 'package:project_c/helper/app_log.dart';
+import 'package:project_c/helper/be_verify.dart';
+import 'package:project_c/helper/catalog_media_debug.dart';
 import 'package:project_c/helper/catalog_subgroup_name.dart';
 import 'package:project_c/helper/catalog_ui_mapper.dart';
 import 'package:project_c/helper/product_image.dart';
@@ -13,6 +15,7 @@ import 'package:project_c/models/product_details_feed_item.dart';
 import 'package:project_c/models/store_product.dart';
 import 'package:project_c/webservice/catalog_api_exception.dart';
 import 'package:project_c/webservice/catalog_error_mapper.dart';
+import 'package:project_c/services/wishlist_prefetcher.dart';
 import 'package:project_c/webservice/collection/collection_repository.dart';
 import 'package:project_c/webservice/wishlist/wishlist_repository.dart';
 
@@ -33,6 +36,7 @@ class ProductDetailsBloc
     String seedCategory = '',
     bool showStoreGroupLink = false,
     Set<String> initialLikedPhotoIds = const {},
+    bool initialIsWishlisted = false,
     CollectionRepository? collectionRepository,
     WishlistRepository? wishlistRepository,
   }) : _collectionRepository =
@@ -63,6 +67,11 @@ class ProductDetailsBloc
            ),
            canDelete: product.canDelete || isOwnStore,
            likedPhotoIds: initialLikedPhotoIds,
+           isWishlisted: initialIsWishlisted,
+           wishlistedProductIds:
+               initialIsWishlisted && product.id.trim().isNotEmpty
+                   ? {product.id.trim()}
+                   : const {},
          ),
        ) {
     on<ProductDetailsLoadPhotos>(_onLoadPhotos);
@@ -76,6 +85,7 @@ class ProductDetailsBloc
     on<ProductDetailsMorePressed>(_onMorePressed);
     on<ProductDetailsClearMessage>(_onClearMessage);
     on<ProductDetailsLikePressed>(_onLikePressed);
+    on<ProductDetailsWishlistPressed>(_onWishlistPressed);
     on<ProductDetailsClearWishlistSnack>(_onClearWishlistSnack);
     if (_canFetchPhotos(storeId, product)) {
       add(const ProductDetailsLoadPhotos());
@@ -189,8 +199,22 @@ class ProductDetailsBloc
             : (updated.imagePaths.isEmpty
                 ? item.path
                 : updated.imagePaths[index]);
+    // Keep destination importStatus from the seed collage / product when
+    // collection detail omits parallel import arrays.
+    final mergedProduct = updated.copyWith(
+      importFlags:
+          updated.importFlags.importStatus != null
+              ? updated.importFlags
+              : item.product.importFlags,
+      imageImportStatuses:
+          updated.imageImportStatuses.isNotEmpty
+              ? updated.imageImportStatuses
+              : (item.product.imageImportStatuses.isNotEmpty
+                  ? item.product.imageImportStatuses
+                  : null),
+    );
     return ProductDetailsFeedItem(
-      product: updated,
+      product: mergedProduct,
       imageIndex: index,
       path: resolvedPath,
       storeId: item.storeId,
@@ -245,6 +269,149 @@ class ProductDetailsBloc
     final requestedListingId = state.product.id;
     emit(state.copyWith(isLoadingPhotos: true));
     try {
+      // Jewel product id → GET /products/:id; else legacy collection detail.
+      try {
+        final catalogProduct = await _collectionRepository.fetchProduct(
+          productId: requestedListingId,
+        );
+        if (emit.isDone) return;
+        if (state.product.id != requestedListingId) {
+          emit(state.copyWith(isLoadingPhotos: false));
+          return;
+        }
+        if (catalogProduct.id.trim().isNotEmpty) {
+          final fromProduct =
+              CatalogUiMapper.catalogProductToStoreProduct(catalogProduct);
+          final merged = state.product.copyWith(
+            title:
+                fromProduct.title.trim().isNotEmpty
+                    ? fromProduct.title
+                    : null,
+            imagePaths:
+                fromProduct.imagePaths.isNotEmpty
+                    ? fromProduct.imagePaths
+                    : null,
+            photoAssetIds:
+                fromProduct.photoAssetIds.isNotEmpty
+                    ? fromProduct.photoAssetIds
+                    : null,
+            imageThumbhashes:
+                fromProduct.imageThumbhashes.isNotEmpty
+                    ? fromProduct.imageThumbhashes
+                    : null,
+            isLocked: fromProduct.isLocked,
+            stockStatus: fromProduct.stockStatus,
+            mtoDays: fromProduct.mtoDays,
+            precisionTag:
+                fromProduct.precisionTag.isNotEmpty
+                    ? fromProduct.precisionTag
+                    : null,
+            collectionId:
+                fromProduct.collectionId.isNotEmpty
+                    ? fromProduct.collectionId
+                    : null,
+            likeCount: fromProduct.likeCount,
+            viewCount: fromProduct.viewCount,
+            importFlags: fromProduct.importFlags,
+            imageImportStatuses:
+                fromProduct.imageImportStatuses.isNotEmpty
+                    ? fromProduct.imageImportStatuses
+                    : null,
+            canEdit: state.isOwnStore || state.product.canEdit,
+            canDelete: state.isOwnStore || state.product.canDelete,
+          );
+          final likedIds = Set<String>.from(state.likedPhotoIds);
+          if (catalogProduct.liked == true) {
+            likedIds.add('product:${merged.id}');
+            final primaryAsset = merged.photoAssetIds.isNotEmpty
+                ? merged.photoAssetIds.first.trim()
+                : '';
+            if (primaryAsset.isNotEmpty) likedIds.add(primaryAsset);
+          }
+          // Prefer server wishlisted; else warm wishlist cache.
+          final fromServer = catalogProduct.wishlisted;
+          final fromCache =
+              fromServer == null
+                  ? WishlistPrefetcher.instance.containsTargetId(merged.id)
+                  : false;
+          final wishlisted =
+              fromServer ?? (fromCache || state.isWishlisted);
+          if (fromServer != null) {
+            BeVerify.ok(
+              'details hydrate from product GET',
+              detail:
+                  '${BeVerify.flag('liked', catalogProduct.liked)} '
+                  '${BeVerify.flag('wishlisted', fromServer)} '
+                  'like=${catalogProduct.liked == true} '
+                  'wishlist=$wishlisted',
+            );
+          } else {
+            BeVerify.fail(
+              'wishlisted omitted — using cache fallback',
+              detail:
+                  'cacheHit=$fromCache wishlist=$wishlisted '
+                  '${BeVerify.flag('liked', catalogProduct.liked)}',
+            );
+          }
+          final productSpec = ProductSpec.fromCatalogProductMap(
+            catalogProduct.toFlatSpecMap(),
+          );
+          final wishIds = Set<String>.from(state.wishlistedProductIds);
+          if (wishlisted && merged.id.trim().isNotEmpty) {
+            wishIds.add(merged.id.trim());
+          }
+          emit(
+            state.copyWith(
+              product: merged,
+              specifications: productSpec,
+              productSpecsById: {
+                if (merged.id.trim().isNotEmpty) merged.id.trim(): productSpec,
+                for (final id in merged.photoAssetIds)
+                  if (id.trim().isNotEmpty) id.trim(): productSpec,
+              },
+              precisionTag:
+                  fromProduct.precisionTag.isNotEmpty
+                      ? fromProduct.precisionTag
+                      : state.precisionTag,
+              likedPhotoIds: likedIds,
+              isLoadingPhotos: false,
+              canEdit: merged.canEdit,
+              canDelete: merged.canDelete,
+              usesProductLike: true,
+              isWishlisted: wishlisted,
+              wishlistedProductIds: wishIds,
+              isContentLocked: false,
+            ),
+          );
+          return;
+        }
+      } on CatalogApiException catch (e) {
+        if (e.code == 'LOCKED_PRODUCT') {
+          if (emit.isDone) return;
+          emit(
+            state.copyWith(
+              isLoadingPhotos: false,
+              isContentLocked: true,
+              clearInfoMessage: true,
+            ),
+          );
+          return;
+        }
+        // Not a product id / endpoint miss — fall through to collection.
+        BeVerify.info(
+          'product GET → collection fallback',
+          detail:
+              'listing=${BeVerify.shortId(requestedListingId)} '
+              'code=${e.code}',
+        );
+      } catch (_) {
+        // Not a product id / endpoint miss — fall through to collection.
+        BeVerify.info(
+          'product GET → collection fallback',
+          detail: 'listing=${BeVerify.shortId(requestedListingId)} non-api',
+        );
+      }
+
       final detail = await _collectionRepository.fetchCollection(
         storeId: storeId!,
         listingId: requestedListingId,
@@ -255,7 +422,24 @@ class ProductDetailsBloc
         emit(state.copyWith(isLoadingPhotos: false));
         return;
       }
-      final updated = CatalogUiMapper.detailToProduct(detail);
+      // Server detail (incl. products[]-derived lock/stock) wins over a stale
+      // store-profile seed — seed only fills gaps the detail omits.
+      final fromDetail = CatalogUiMapper.detailToProduct(detail);
+      final updated = fromDetail.copyWith(
+        isLocked: detail.isLocked || state.product.isLocked,
+        stockStatus: detail.stockStatus ?? state.product.stockStatus,
+        mtoDays: detail.mtoDays ?? state.product.mtoDays,
+        importFlags:
+            fromDetail.importFlags.importStatus != null
+                ? fromDetail.importFlags
+                : state.product.importFlags,
+        imageImportStatuses:
+            fromDetail.imageImportStatuses.isNotEmpty
+                ? fromDetail.imageImportStatuses
+                : (state.product.imageImportStatuses.isNotEmpty
+                    ? state.product.imageImportStatuses
+                    : null),
+      );
       final perms = detail.permissions;
       final canEdit = _resolveCanEdit(
         explicit: perms?.edit ?? updated.canEdit,
@@ -290,9 +474,55 @@ class ProductDetailsBloc
         'imageIndex=$resolvedImageIndex '
         'edit=${perms?.edit} delete=${perms?.delete}',
       );
+      final nullHashes =
+          updated.imageThumbhashes.where((h) => h.trim().isEmpty).length;
+      BeVerify.step(
+        'PD collection detail',
+        detail:
+            'id=${BeVerify.shortId(updated.id)} '
+            'photos=${updated.imagePaths.length} '
+            'locked=${updated.isLocked} '
+            'stock=${updated.stockStatus?.apiValue} '
+            'thumbhashNULL=$nullHashes '
+            'embeddedSpecs=${detail.productSpecsById.length}',
+      );
+      if (nullHashes == 0 && updated.imagePaths.isNotEmpty) {
+        BeVerify.ok('collection detail thumbhash', detail: 'NULL=0');
+      } else if (nullHashes > 0) {
+        BeVerify.fail(
+          'collection detail thumbhash',
+          detail: 'NULL=$nullHashes GAP_THUMBHASH_NULL',
+        );
+      }
+      CatalogMediaDebug.render(
+        'product_details loaded listing=${updated.id} '
+        'photos=${updated.imagePaths.length} thumbhashNULL=$nullHashes '
+        'feed=${remapped.feed?.length ?? 0} feedIndex=${remapped.feedIndex} '
+        'imageIndex=$resolvedImageIndex',
+      );
+      if (nullHashes > 0) {
+        CatalogMediaDebug.gap(
+          'product_details detail has empty thumbhash slots=$nullHashes '
+          'listing=${updated.id}',
+        );
+      }
       final likedFromDetail = CatalogUiMapper.likedPhotoIdsFromDetail(detail);
+      final likedKeys = <String>{
+        ...likedFromDetail,
+        for (final id in likedFromDetail)
+          if (id.isNotEmpty && !id.startsWith('img_')) 'product:$id',
+      };
       final likeCounts = CatalogUiMapper.photoLikeCountsFromDetail(detail);
       final viewCounts = CatalogUiMapper.photoViewCountsFromDetail(detail);
+      final fromNested = ProductSpec.fromApiJson(
+        detail.specifications?.toJson(),
+      );
+      final specsById = detail.productSpecsById;
+      final groupSpec =
+          _chromeableSpec(fromNested) ??
+          detail.defaultsSpec ??
+          _firstChromeableSpec(specsById.values) ??
+          fromNested;
       emit(
         state.copyWith(
           product: updated,
@@ -302,14 +532,13 @@ class ProductDetailsBloc
           galleryFeedIndex: remapped.feedIndex,
           revision: detail.revision,
           apiTag: detail.tag,
-          specifications: ProductSpec.fromApiJson(
-            detail.specifications?.toJson(),
-          ),
+          specifications: groupSpec,
+          productSpecsById: specsById,
           precisionTag: detail.precisionTag,
           subGroups: detail.subGroups,
           canEdit: canEdit,
           canDelete: canDelete,
-          likedPhotoIds: {...state.likedPhotoIds, ...likedFromDetail},
+          likedPhotoIds: {...state.likedPhotoIds, ...likedKeys},
           photoLikeCounts: {...state.photoLikeCounts, ...likeCounts},
           photoViewCounts: {...state.photoViewCounts, ...viewCounts},
         ),
@@ -573,18 +802,33 @@ class ProductDetailsBloc
     }
 
     emit(state.copyWith(isDeleting: true));
+    final productId = state.product.id.trim();
     try {
-      await _collectionRepository.deleteCollection(
-        storeId: storeId,
-        listingId: state.product.id,
-      );
-      AppLog.d(_tag, 'Deleted collection ${state.product.id}');
+      // Jewel first-class product delete; fall back to legacy collection delete.
+      try {
+        await _collectionRepository.deleteProduct(productId: productId);
+        AppLog.d(_tag, 'Deleted product $productId');
+      } on CatalogApiException catch (e) {
+        final missingProduct =
+            e.statusCode == 404 ||
+            e.code == 'PRODUCT_NOT_FOUND' ||
+            e.code == 'NOT_FOUND';
+        if (!missingProduct) rethrow;
+        await _collectionRepository.deleteCollection(
+          storeId: storeId,
+          listingId: productId,
+        );
+        AppLog.d(_tag, 'Deleted collection $productId (product 404 fallback)');
+      }
       emit(state.copyWith(isDeleting: false, isDeleted: true));
     } catch (e) {
-      AppLog.e(_tag, 'Delete collection failed', e);
+      AppLog.e(_tag, 'Delete product failed', e);
       final alreadyGone =
           e is CatalogApiException &&
-          (e.statusCode == 404 || e.code == 'COLLECTION_NOT_FOUND');
+          (e.statusCode == 404 ||
+              e.code == 'COLLECTION_NOT_FOUND' ||
+              e.code == 'PRODUCT_NOT_FOUND' ||
+              e.code == 'NOT_FOUND');
       if (alreadyGone) {
         emit(state.copyWith(isDeleting: false, isDeleted: true));
         return;
@@ -609,6 +853,13 @@ class ProductDetailsBloc
     ProductDetailsApplyEditedProduct event,
     Emitter<ProductDetailsState> emit,
   ) {
+    final fromNested = event.specifications;
+    final specsById = event.productSpecsById;
+    final groupSpec =
+        _chromeableSpec(fromNested) ??
+        (specsById != null ? _firstChromeableSpec(specsById.values) : null) ??
+        fromNested ??
+        state.specifications;
     emit(
       state.copyWith(
         product: event.product.copyWith(
@@ -619,6 +870,10 @@ class ProductDetailsBloc
         canDelete: event.product.canDelete || state.canDelete,
         revision: event.revision,
         apiTag: event.apiTag,
+        specifications: groupSpec,
+        productSpecsById: specsById ?? state.productSpecsById,
+        precisionTag: event.precisionTag ?? state.precisionTag,
+        subGroups: event.subGroups ?? state.subGroups,
         initialImageIndex: _clampIndex(state.initialImageIndex, event.product),
         infoMessage: 'Product updated.',
       ),
@@ -654,7 +909,24 @@ class ProductDetailsBloc
     final listingId = state.product.id.trim();
     if (listingId.isEmpty) {
       emit(
-        state.copyWith(infoMessage: 'Unable to like this photo right now.'),
+        state.copyWith(infoMessage: 'Unable to like this item right now.'),
+      );
+      return;
+    }
+
+    // Jewel: like the CatalogProduct for this photo (embedded id), never the
+    // collection listing id when products[] are present.
+    final targetId = state.catalogProductIdForPhoto(event.imageIndex);
+    if (targetId.isNotEmpty &&
+        (state.usesProductLike ||
+            state.hasEmbeddedProducts ||
+            state.product.collectionId.trim().isNotEmpty ||
+            state.product.stockStatus != null ||
+            !targetId.startsWith('img_'))) {
+      await _toggleProductLike(
+        emit,
+        productId: targetId,
+        imageIndex: event.imageIndex,
       );
       return;
     }
@@ -666,14 +938,10 @@ class ProductDetailsBloc
     if (emit.isDone) return;
     final photoId = resolved.photoId;
     if (photoId.isEmpty) {
-      emit(
-        state.copyWith(
-          isLikeBusy: false,
-          infoMessage:
-              state.isLoadingPhotos
-                  ? 'Photo is still loading. Try again in a moment.'
-                  : 'This photo cannot be liked yet. Open the product again.',
-        ),
+      await _toggleProductLike(
+        emit,
+        productId: targetId.isNotEmpty ? targetId : listingId,
+        imageIndex: event.imageIndex,
       );
       return;
     }
@@ -720,7 +988,7 @@ class ProductDetailsBloc
             likedPhotoIds: next,
             photoLikeCounts: nextCounts,
             isLikeBusy: false,
-            showWishlistSnack: true,
+            clearWishlistSnack: true,
           ),
         );
       }
@@ -749,6 +1017,219 @@ class ProductDetailsBloc
       emit(
         state.copyWith(
           isLikeBusy: false,
+          infoMessage: CatalogErrorMapper.toUserMessage(e),
+        ),
+      );
+    }
+  }
+
+  Future<void> _toggleProductLike(
+    Emitter<ProductDetailsState> emit, {
+    required String productId,
+    int? imageIndex,
+  }) async {
+    final id = productId.trim();
+    if (id.isEmpty) return;
+    final likeKey = 'product:$id';
+    final currentlyLiked =
+        state.likedPhotoIds.contains(likeKey) ||
+        (imageIndex != null && state.isPhotoLiked(imageIndex));
+    BeVerify.step(
+      'L like product',
+      detail:
+          'id=${BeVerify.shortId(id)} '
+          'listing=${BeVerify.shortId(state.product.id)} '
+          'photo=${imageIndex ?? '-'} '
+          '→ ${currentlyLiked ? 'unlike' : 'like'}',
+    );
+    emit(state.copyWith(isLikeBusy: true, clearInfoMessage: true));
+    try {
+      final result =
+          currentlyLiked
+              ? await _wishlistRepository.unlikeProduct(productId: id)
+              : await _wishlistRepository.likeProduct(productId: id);
+      if (emit.isDone) return;
+      final next = Set<String>.from(state.likedPhotoIds);
+      if (result.liked) {
+        next.add(likeKey);
+        final photoId =
+            imageIndex != null ? state.photoIdAt(imageIndex) : '';
+        if (photoId.isNotEmpty) next.add(photoId);
+      } else {
+        next.remove(likeKey);
+        final photoId =
+            imageIndex != null ? state.photoIdAt(imageIndex) : '';
+        if (photoId.isNotEmpty) next.remove(photoId);
+      }
+      final prevCount =
+          (imageIndex != null
+              ? state.likeCountForPhoto(imageIndex)
+              : null) ??
+          state.photoLikeCounts[id] ??
+          state.product.likeCount ??
+          0;
+      final nextCount =
+          result.likeCount ??
+          (result.liked
+              ? prevCount + 1
+              : (prevCount > 0 ? prevCount - 1 : 0));
+      final nextCounts = Map<String, int>.from(state.photoLikeCounts)
+        ..[id] = nextCount;
+      final photoId = imageIndex != null ? state.photoIdAt(imageIndex) : '';
+      if (photoId.isNotEmpty) nextCounts[photoId] = nextCount;
+
+      // Card badge = sum of per-slot product likes (embedded photos) so the
+      // store grid can show a count after liking one photo in a collection.
+      final listingIsTarget = id == state.product.id.trim();
+      final listingLikeCount = _listingLikeCountFromPhotoCounts(
+        product: state.product,
+        photoLikeCounts: nextCounts,
+        fallback: nextCount,
+      );
+      BeVerify.ok(
+        'like toggle',
+        detail:
+            'id=${BeVerify.shortId(id)} liked=${result.liked} '
+            'count=$nextCount listingLike=$listingLikeCount '
+            'listingScope=$listingIsTarget',
+      );
+      emit(
+        state.copyWith(
+          product: state.product.copyWith(likeCount: listingLikeCount),
+          likedPhotoIds: next,
+          photoLikeCounts: nextCounts,
+          isLikeBusy: false,
+          usesProductLike: listingIsTarget || state.usesProductLike,
+          clearWishlistSnack: true,
+        ),
+      );
+    } on CatalogApiException catch (e) {
+      BeVerify.fail(
+        'like toggle',
+        detail: 'id=${BeVerify.shortId(id)} code=${e.code} ${e.message}',
+      );
+      AppLog.e(_tag, 'Product like toggle failed', e);
+      if (emit.isDone) return;
+      emit(
+        state.copyWith(
+          isLikeBusy: false,
+          infoMessage: CatalogErrorMapper.toUserMessage(e),
+        ),
+      );
+    } catch (e) {
+      BeVerify.fail('like toggle', detail: 'id=${BeVerify.shortId(id)} $e');
+      AppLog.e(_tag, 'Product like toggle failed', e);
+      if (emit.isDone) return;
+      emit(
+        state.copyWith(
+          isLikeBusy: false,
+          infoMessage: CatalogErrorMapper.toUserMessage(e),
+        ),
+      );
+    }
+  }
+
+  /// Store-card badge: sum like counts for each collage slot (deduped).
+  static int _listingLikeCountFromPhotoCounts({
+    required StoreProduct product,
+    required Map<String, int> photoLikeCounts,
+    required int fallback,
+  }) {
+    final slots = product.photoAssetIds;
+    if (slots.isEmpty) return fallback;
+    final seen = <String>{};
+    var sum = 0;
+    var any = false;
+    for (final raw in slots) {
+      final slot = raw.trim();
+      if (slot.isEmpty || !seen.add(slot)) continue;
+      final c = photoLikeCounts[slot];
+      if (c == null) continue;
+      any = true;
+      sum += c;
+    }
+    return any ? sum : fallback;
+  }
+
+  Future<void> _onWishlistPressed(
+    ProductDetailsWishlistPressed event,
+    Emitter<ProductDetailsState> emit,
+  ) async {
+    if (state.isWishlistBusy) return;
+    final productId = state.catalogProductIdForPhoto(event.imageIndex);
+    if (productId.isEmpty) {
+      emit(
+        state.copyWith(infoMessage: 'Unable to update wishlist right now.'),
+      );
+      return;
+    }
+    final currently = state.isPhotoWishlisted(event.imageIndex);
+    BeVerify.step(
+      'L wishlist product',
+      detail:
+          'id=${BeVerify.shortId(productId)} '
+          'listing=${BeVerify.shortId(state.product.id)} '
+          'photo=${event.imageIndex} '
+          '→ ${currently ? 'remove' : 'add'}',
+    );
+    emit(state.copyWith(isWishlistBusy: true, clearInfoMessage: true));
+    try {
+      final result =
+          currently
+              ? await _wishlistRepository.removeWishlistProduct(
+                productId: productId,
+              )
+              : await _wishlistRepository.addWishlistProduct(
+                productId: productId,
+              );
+      if (emit.isDone) return;
+      final nextWish = Set<String>.from(state.wishlistedProductIds);
+      if (result.wishlisted) {
+        nextWish.add(productId);
+      } else {
+        nextWish.remove(productId);
+      }
+      BeVerify.ok(
+        'wishlist toggle',
+        detail:
+            'id=${BeVerify.shortId(productId)} '
+            'wishlisted=${result.wishlisted}',
+      );
+      emit(
+        state.copyWith(
+          isWishlisted:
+              productId == state.product.id.trim()
+                  ? result.wishlisted
+                  : state.isWishlisted,
+          wishlistedProductIds: nextWish,
+          isWishlistBusy: false,
+          clearWishlistSnack: true,
+        ),
+      );
+    } on CatalogApiException catch (e) {
+      BeVerify.fail(
+        'wishlist toggle',
+        detail:
+            'id=${BeVerify.shortId(productId)} code=${e.code} ${e.message}',
+      );
+      AppLog.e(_tag, 'Wishlist toggle failed', e);
+      if (emit.isDone) return;
+      emit(
+        state.copyWith(
+          isWishlistBusy: false,
+          infoMessage: CatalogErrorMapper.toUserMessage(e),
+        ),
+      );
+    } catch (e) {
+      BeVerify.fail(
+        'wishlist toggle',
+        detail: 'id=${BeVerify.shortId(productId)} $e',
+      );
+      AppLog.e(_tag, 'Wishlist toggle failed', e);
+      if (emit.isDone) return;
+      emit(
+        state.copyWith(
+          isWishlistBusy: false,
           infoMessage: CatalogErrorMapper.toUserMessage(e),
         ),
       );
@@ -784,16 +1265,22 @@ class ProductDetailsBloc
         imageIndex: imageIndex,
       );
       final likedFromDetail = CatalogUiMapper.likedPhotoIdsFromDetail(detail);
+      final likedKeys = <String>{
+        ...likedFromDetail,
+        for (final id in likedFromDetail)
+          if (id.isNotEmpty && !id.startsWith('img_')) 'product:$id',
+      };
       final likeCounts = CatalogUiMapper.photoLikeCountsFromDetail(detail);
       final viewCounts = CatalogUiMapper.photoViewCountsFromDetail(detail);
       emit(
         state.copyWith(
           product: updated,
-          likedPhotoIds: {...state.likedPhotoIds, ...likedFromDetail},
+          likedPhotoIds: {...state.likedPhotoIds, ...likedKeys},
           photoLikeCounts: {...state.photoLikeCounts, ...likeCounts},
           photoViewCounts: {...state.photoViewCounts, ...viewCounts},
           revision: detail.revision,
           subGroups: detail.subGroups,
+          productSpecsById: detail.productSpecsById,
           isLoadingPhotos: false,
         ),
       );
@@ -812,5 +1299,21 @@ class ProductDetailsBloc
     Emitter<ProductDetailsState> emit,
   ) {
     emit(state.copyWith(clearWishlistSnack: true));
+  }
+
+  /// Spec that can drive details chrome (weight and/or purity/size lines).
+  static ProductSpec? _chromeableSpec(ProductSpec? spec) {
+    if (spec == null) return null;
+    if (spec.primaryWeightDisplay != null) return spec;
+    if (spec.weightDetailLines.isNotEmpty) return spec;
+    return null;
+  }
+
+  static ProductSpec? _firstChromeableSpec(Iterable<ProductSpec> specs) {
+    for (final spec in specs) {
+      final hit = _chromeableSpec(spec);
+      if (hit != null) return hit;
+    }
+    return null;
   }
 }

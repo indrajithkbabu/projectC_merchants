@@ -16,10 +16,14 @@ This file defines what to follow for UI and logic inside `lib/presentation/main_
   Import requests, Appearance, View products, screenshots, logout / delete.
 - Shell home titles (Stores / Contacts / Wishlist) share `ShellTabTitleBar`
   (40px row, 22pt, top = statusBar + 8) so tab switches stay vertically stable.
+  Trailing stays right-aligned (`Expanded` title cluster + trailing). Wishlist
+  collapses search/filters into title-trailing icons on scroll and supports
+  gallery-style pinch column zoom (see privacy FEATURE_CONVENTIONS).
 - Wishlist shell tab reuses `WishlistRoute` (`embeddedInShell: true`). No back
-  button; pad with `FloatingBottomNavBar.reservedHeight`. Bump `refreshSignal`
-  on tab select so new likes appear without app restart (quiet refresh when
-  list already painted).
+  button; pass `FloatingBottomNavBar.reservedHeight` as scroll/empty bottom
+  padding only (never outer `Padding` that leaves a blank band under the list).
+  Bump `refreshSignal` on tab select so new likes appear without app restart
+  (quiet refresh when list already painted).
 - My store shell tab reuses `StoreMyStoreTab` with `showBack: false` + hamburger
   → Settings (no day/night icon on this tab). Primary CTAs: **Import requests**
   (pending count from `StoreProfileBloc`) + **Share store**. Wrapped in
@@ -33,7 +37,9 @@ This file defines what to follow for UI and logic inside `lib/presentation/main_
   `effectiveProfileImageUrl` is set; otherwise initials. Use `CatalogImageCache`.
 - Own-store My store nav: prefer store cover avatar when available; else
   store-mall icon.
-- Tab bodies must leave bottom padding via `FloatingBottomNavBar.reservedHeight`.
+- Tab bodies must leave bottom padding via `FloatingBottomNavBar.reservedHeight`
+  **inside** scrollables / empty states so content reaches the floating nav
+  (Telegram-style). Do not shrink the whole tab with outer bottom padding.
 - Soft keyboard open → hide floating nav with slide + fade; restore smoothly when IME closes (`resizeToAvoidBottomInset: false` on the shell so the bar is not pushed above the keypad).
 - No blocking loaders (no centered `CircularProgressIndicator`). Prefer cached/session data + quiet refresh + pull-to-refresh.
 - Use `AppPadding`, `AppTextStyles`, and `AppColors` (including `navBar*` tokens).
@@ -92,6 +98,12 @@ This file defines what to follow for UI and logic inside `lib/presentation/main_
 ## Route and Navigation Notes
 - Post-onboarding entry remains `store_listing_route`, which now builds `MainShellRoute`.
 - Nested pushes (store profile, import flows, `settings_route`) stay on the root navigator above the shell.
+- **System / edge back on the shell** (`PopScope` in `main_shell_route.dart`):
+  - Any non-Stores tab → switch to Stores (index 0). My store multi-select
+    consumes back first (`MyStoreTabState.consumeSystemBack`) before tab switch.
+  - On Stores: first back shows “Press back again to exit”; second within ~2s
+    calls `SystemNavigator.pop()`. Nested routes above the shell still pop
+    normally (shell `PopScope` only runs when the shell route is current).
 - Stores header avatar → Profile tab (no store) or My store tab (own store).
 - Opening own store from listing still pushes `store_profile_route` (Discover /
   Activity / Wishlist / My store owner chrome). Shell Wishlist / My store do

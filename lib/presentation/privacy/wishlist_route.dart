@@ -1,8 +1,13 @@
+import 'dart:async';
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:project_c/di/service_locator.dart';
 import 'package:project_c/helper/app_padding.dart';
 import 'package:project_c/helper/app_shimmer.dart';
 import 'package:project_c/helper/colors.dart';
+import 'package:project_c/helper/product_image.dart';
 import 'package:project_c/helper/text_styles.dart';
 import 'package:project_c/helper/widgets/app_back_button.dart';
 import 'package:project_c/helper/widgets/shell_tab_title_bar.dart';
@@ -12,12 +17,15 @@ import 'package:project_c/models/store_privacy_mode.dart';
 import 'package:project_c/models/store_product.dart';
 import 'package:project_c/navigation/routes.dart';
 import 'package:project_c/presentation/privacy/privacy_widgets/wishlist_item_card.dart';
+import 'package:project_c/presentation/search/search_models.dart';
+import 'package:project_c/presentation/search/search_widgets/search_app_bar_field.dart';
+import 'package:project_c/presentation/search/search_widgets/search_filter_bar.dart';
 import 'package:project_c/services/wishlist_prefetcher.dart';
 import 'package:project_c/webservice/catalog_error_mapper.dart';
 import 'package:project_c/webservice/store/store_repository.dart';
 import 'package:project_c/webservice/wishlist/wishlist_repository.dart';
 
-/// Wishlist tab / body (walkthrough screen 12) — photo likes via catalog API.
+/// Wishlist tab / body (walkthrough screen 12) — private bookmarks via catalog API.
 class WishlistRoute extends StatefulWidget {
   const WishlistRoute({
     super.key,
@@ -43,9 +51,22 @@ class WishlistRoute extends StatefulWidget {
   State<WishlistRoute> createState() => _WishlistRouteState();
 }
 
-class _WishlistRouteState extends State<WishlistRoute> {
+class _WishlistRouteState extends State<WishlistRoute>
+    with TickerProviderStateMixin, WidgetsBindingObserver {
+  /// Pinch zoom-in → fewer cells (min 2). Zoom-out → denser grid (max 9).
+  /// Default matches the existing 2-column wishlist layout.
+  static const _minColumns = 2.0;
+  static const _maxColumns = 9.0;
+
   late final WishlistRepository _wishlist;
   late final StoreRepository _stores;
+  late final TextEditingController _searchCtrl;
+  late final FocusNode _searchFocus;
+  late final ScrollController _scrollController;
+  late final AnimationController _chromeAnim;
+  late final Animation<double> _chromeFactor;
+  late final AnimationController _columnSnap;
+  final GlobalKey _chromeKey = GlobalKey();
 
   List<WishlistItem> _items = const [];
   String? _nextCursor;
@@ -54,13 +75,52 @@ class _WishlistRouteState extends State<WishlistRoute> {
   bool _loadingMore = false;
   String? _busyId;
   String? _followBusyStoreId;
-  String? _storeFilterId;
+  SearchFilterSelection _filters = const SearchFilterSelection();
+  bool _chromeVisible = true;
+  double _measuredChromeHeight = 0;
+  double _prevChromeAnimValue = 1;
+  /// True after the soft keyboard was clearly open while search was focused.
+  /// Used so swipe/back IME dismiss can clear stuck focus without racing the
+  /// open animation (which can briefly report inset 0).
+  bool _sawImeWhileFocused = false;
+  Timer? _imeDismissUnfocusTimer;
+  /// Suppresses scroll-collapse while chrome animates or search is focusing.
+  bool _suppressScrollCollapse = false;
+  Timer? _suppressScrollCollapseTimer;
+
+  /// Continuous column count while pinching (snaps to int on release).
+  double _columns = _minColumns;
+  double _pinchBaseColumns = _minColumns;
+  bool _pinching = false;
+  final Map<int, Offset> _pinchPointers = <int, Offset>{};
+  double? _pinchStartDistance;
+  int _lastWarmedColumns = _minColumns.toInt();
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _wishlist = ServiceLocator.get<WishlistRepository>();
     _stores = ServiceLocator.get<StoreRepository>();
+    _searchCtrl = TextEditingController();
+    _searchFocus = FocusNode();
+    _scrollController = ScrollController();
+    _searchCtrl.addListener(() => setState(() {}));
+    _searchFocus.addListener(_onSearchFocusChanged);
+    _chromeAnim = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 260),
+      value: 1,
+    )..addListener(_compensateScrollForChrome);
+    _chromeFactor = CurvedAnimation(
+      parent: _chromeAnim,
+      curve: Curves.easeOutCubic,
+      reverseCurve: Curves.easeInCubic,
+    );
+    _columnSnap = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 180),
+    );
     final warm = WishlistPrefetcher.instance.peek();
     if (warm != null) {
       _items = warm.items;
@@ -77,10 +137,410 @@ class _WishlistRouteState extends State<WishlistRoute> {
   }
 
   @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _imeDismissUnfocusTimer?.cancel();
+    _suppressScrollCollapseTimer?.cancel();
+    _chromeAnim.removeListener(_compensateScrollForChrome);
+    _chromeAnim.dispose();
+    _columnSnap.dispose();
+    _scrollController.dispose();
+    _searchFocus.removeListener(_onSearchFocusChanged);
+    _searchCtrl.dispose();
+    _searchFocus.dispose();
+    super.dispose();
+  }
+
+  int get _crossAxisCount =>
+      _columns.round().clamp(_minColumns.toInt(), _maxColumns.toInt());
+
+  double _gridSpacing(int cols) {
+    if (cols >= 6) return 2;
+    if (cols >= 4) return 4;
+    return 10;
+  }
+
+  List<String> get _photoUrls => [
+    for (final item in _items)
+      if (!item.isLocked && item.photo.url.trim().startsWith('http'))
+        item.photo.url.trim(),
+  ];
+
+  void _warmWishlistGrid({required int columns}) {
+    final urls = _photoUrls;
+    if (urls.isEmpty) return;
+    final warmCount = CatalogImageCache.mediaGridWarmCount(columns: columns);
+    // ignore: unawaited_futures
+    CatalogImageCache.warmWindow(
+      urls: urls,
+      firstIndex: 0,
+      lastIndex: math.min(urls.length - 1, warmCount - 1),
+      cacheWidth: CatalogImageCache.gridCacheWidth(),
+    );
+    _lastWarmedColumns = math.max(_lastWarmedColumns, columns);
+  }
+
+  double? _pinchFingerDistance() {
+    if (_pinchPointers.length < 2) return null;
+    final pts = _pinchPointers.values.toList(growable: false);
+    return (pts[0] - pts[1]).distance;
+  }
+
+  void _onPinchPointerDown(PointerDownEvent event) {
+    _pinchPointers[event.pointer] = event.position;
+    if (_pinchPointers.length == 2 && !_pinching) {
+      _pinchStartDistance = _pinchFingerDistance();
+      if (_pinchStartDistance != null && _pinchStartDistance! >= 12) {
+        _onPinchStart(_columns);
+      }
+    }
+  }
+
+  void _onPinchPointerMove(PointerMoveEvent event) {
+    if (!_pinchPointers.containsKey(event.pointer)) return;
+    _pinchPointers[event.pointer] = event.position;
+    if (!_pinching || _pinchPointers.length < 2) return;
+    final start = _pinchStartDistance;
+    final now = _pinchFingerDistance();
+    if (start == null || now == null || start < 12) return;
+    _onPinchUpdate(now / start);
+  }
+
+  void _onPinchPointerEnd(PointerEvent event) {
+    _pinchPointers.remove(event.pointer);
+    if (_pinching && _pinchPointers.length < 2) {
+      _pinchStartDistance = null;
+      _onPinchEnd();
+    }
+  }
+
+  void _onPinchStart(double baseColumns) {
+    _searchFocus.unfocus();
+    _columnSnap.stop();
+    setState(() {
+      _pinching = true;
+      _pinchBaseColumns = baseColumns;
+    });
+  }
+
+  void _onPinchUpdate(double scale) {
+    if (!_pinching || !scale.isFinite || scale <= 0) return;
+    // Pinch out (scale > 1) → fewer columns (zoom in). Pinch in → more columns.
+    final next = (_pinchBaseColumns / scale).clamp(_minColumns, _maxColumns);
+    if ((next - _columns).abs() < 0.008) return;
+    setState(() => _columns = next);
+    final cols = next.round().clamp(_minColumns.toInt(), _maxColumns.toInt());
+    if (cols > _lastWarmedColumns) {
+      _warmWishlistGrid(columns: cols);
+    }
+  }
+
+  void _onPinchEnd() {
+    if (!_pinching) return;
+    final from = _columns;
+    final to =
+        from
+            .round()
+            .clamp(_minColumns.toInt(), _maxColumns.toInt())
+            .toDouble();
+    setState(() => _pinching = false);
+    _warmWishlistGrid(columns: to.toInt());
+    if ((from - to).abs() < 0.02) {
+      if (from != to) setState(() => _columns = to);
+      return;
+    }
+    final anim = Tween<double>(begin: from, end: to).animate(
+      CurvedAnimation(parent: _columnSnap, curve: Curves.easeOutCubic),
+    );
+    void tick() {
+      if (!mounted) return;
+      setState(() => _columns = anim.value);
+    }
+
+    anim.addListener(tick);
+    _columnSnap.forward(from: 0).whenComplete(() {
+      anim.removeListener(tick);
+      if (!mounted) return;
+      setState(() => _columns = to);
+    });
+  }
+
+  double _imeBottomInset(BuildContext context) {
+    final mq = MediaQuery.viewInsetsOf(context).bottom;
+    // Prefer the larger signal — shell uses resizeToAvoidBottomInset: false
+    // and swipe-dismiss can update View insets before MediaQuery in some builds.
+    final view = View.maybeOf(context);
+    if (view == null) return mq;
+    final fromView = view.viewInsets.bottom / view.devicePixelRatio;
+    return math.max(mq, fromView);
+  }
+
+  void _unfocusSearchIfImeClosed() {
+    if (!_searchFocus.hasFocus) return;
+    if (_imeBottomInset(context) > 0) return;
+    _sawImeWhileFocused = false;
+    _searchFocus.unfocus();
+  }
+
+  void _scheduleUnfocusAfterImeDismiss() {
+    _imeDismissUnfocusTimer?.cancel();
+    _imeDismissUnfocusTimer = Timer(const Duration(milliseconds: 100), () {
+      if (!mounted) return;
+      if (_imeBottomInset(context) > 0) return;
+      _unfocusSearchIfImeClosed();
+    });
+  }
+
+  @override
+  void didChangeMetrics() {
+    if (!mounted) return;
+    final inset = _imeBottomInset(context);
+
+    // Require a real open (threshold) so the open animation's inset flicker
+    // cannot arm a false dismiss.
+    if (_searchFocus.hasFocus && inset > 48) {
+      _sawImeWhileFocused = true;
+      _imeDismissUnfocusTimer?.cancel();
+      _imeDismissUnfocusTimer = null;
+      return;
+    }
+
+    if (_sawImeWhileFocused && inset <= 0 && _searchFocus.hasFocus) {
+      // Swipe-down / back hid the keypad but left the FocusNode hot.
+      _scheduleUnfocusAfterImeDismiss();
+    }
+    if (!_searchFocus.hasFocus) {
+      _sawImeWhileFocused = false;
+    }
+  }
+
+  void _onSearchFocusChanged() {
+    if (_searchFocus.hasFocus) {
+      _pauseScrollCollapse();
+      _setChromeVisible(true);
+      // If IME is already gone when focus flips on, do not arm dismiss logic.
+      if (_imeBottomInset(context) <= 0) {
+        _sawImeWhileFocused = false;
+      }
+    } else {
+      _sawImeWhileFocused = false;
+      _imeDismissUnfocusTimer?.cancel();
+      _imeDismissUnfocusTimer = null;
+    }
+  }
+
+  void _pauseScrollCollapse({
+    Duration hold = const Duration(milliseconds: 320),
+  }) {
+    _suppressScrollCollapse = true;
+    _suppressScrollCollapseTimer?.cancel();
+    _suppressScrollCollapseTimer = Timer(hold, () {
+      if (mounted) _suppressScrollCollapse = false;
+    });
+  }
+
+  /// Approx. height of the first wishlist grid row at the current column count.
+  double _firstRowExtent(BuildContext context) {
+    final width = MediaQuery.sizeOf(context).width;
+    final cols = _crossAxisCount;
+    final spacing = _gridSpacing(cols);
+    final tile =
+        (width - AppPadding.horizontal * 2 - spacing * (cols - 1)) / cols;
+    return tile + spacing;
+  }
+
+  /// Collapse when the IME is closed. Stuck focus after swipe-dismiss must not
+  /// block minimize — unfocus runs on IME dismiss and on user scroll.
+  bool get _canCollapseChrome =>
+      !_loading &&
+      _visible.length > 2 &&
+      !_pinching &&
+      !_suppressScrollCollapse &&
+      !_chromeAnim.isAnimating &&
+      _imeBottomInset(context) <= 0;
+
+  void _captureChromeHeight() {
+    final box = _chromeKey.currentContext?.findRenderObject() as RenderBox?;
+    if (box != null && box.hasSize && box.size.height > 0) {
+      _measuredChromeHeight = box.size.height;
+    }
+  }
+
+  void _compensateScrollForChrome() {
+    if (!_scrollController.hasClients) {
+      _prevChromeAnimValue = _chromeAnim.value;
+      return;
+    }
+    final height = _measuredChromeHeight;
+    if (height <= 0) {
+      _prevChromeAnimValue = _chromeAnim.value;
+      return;
+    }
+    final value = _chromeAnim.value;
+    // Collapsing (1→0): viewport grows from top → bump scroll to keep items still.
+    final delta = height * (_prevChromeAnimValue - value);
+    _prevChromeAnimValue = value;
+    if (delta.abs() < 0.05) return;
+
+    final pos = _scrollController.position;
+    final maxExtent = math.max(pos.maxScrollExtent, pos.pixels + delta);
+    final next = (pos.pixels + delta).clamp(pos.minScrollExtent, maxExtent);
+    if ((next - pos.pixels).abs() < 0.05) return;
+    _scrollController.jumpTo(next.toDouble());
+  }
+
+  void _setChromeVisible(bool visible) {
+    if (_chromeVisible == visible) return;
+    if (_chromeVisible) {
+      _captureChromeHeight();
+    }
+    _chromeVisible = visible;
+    if (visible) {
+      _chromeAnim.forward();
+    } else {
+      _searchFocus.unfocus();
+      _chromeAnim.reverse();
+    }
+  }
+
+  bool _onGridScroll(ScrollNotification notification) {
+    if (notification.metrics.axis != Axis.vertical) return false;
+
+    // Pagination
+    if (_nextCursor != null &&
+        !_loadingMore &&
+        notification.metrics.pixels >=
+            notification.metrics.maxScrollExtent - 240) {
+      _load(reset: false);
+    }
+
+    if (notification is! ScrollUpdateNotification) return false;
+
+    // Ignore layout/IME/jumpTo corrections — only user scrolls toggle chrome.
+    final userDriven =
+        notification.dragDetails != null ||
+        (_scrollController.hasClients &&
+            _scrollController.position.userScrollDirection !=
+                ScrollDirection.idle);
+    if (!userDriven) return false;
+
+    // Swipe-dismissed keypad often leaves the field focused — clear it so
+    // minimize can run on this / the next scroll update.
+    _unfocusSearchIfImeClosed();
+
+    if (!_canCollapseChrome) {
+      if (!_chromeVisible && _imeBottomInset(context) <= 0) {
+        _setChromeVisible(true);
+      }
+      return false;
+    }
+
+    final pixels = notification.metrics.pixels;
+    final delta = notification.scrollDelta ?? 0;
+    final topZone = _firstRowExtent(context);
+
+    // Expand again when the first row is back in view (scroll up).
+    if (pixels <= topZone) {
+      if (!_chromeVisible) _setChromeVisible(true);
+      return false;
+    }
+
+    // Collapse when scrolling down past the first row.
+    if (delta > 2 && _chromeVisible) {
+      _setChromeVisible(false);
+    }
+    return false;
+  }
+
+  void _expandChromeAndFocusSearch() {
+    _pauseScrollCollapse();
+    _setChromeVisible(true);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _searchFocus.requestFocus();
+    });
+  }
+
+  Widget _collapsedChromeActions() {
+    final filtersActive =
+        _filters.hasActiveFilters ||
+        _filters.sort != SearchSortOption.newest;
+    final queryActive = _searchCtrl.text.trim().isNotEmpty;
+    return AnimatedBuilder(
+      animation: _chromeAnim,
+      builder: (context, child) {
+        final t = (1.0 - _chromeAnim.value).clamp(0.0, 1.0);
+        if (t < 0.04) return const SizedBox.shrink();
+        return Opacity(
+          opacity: Curves.easeOutCubic.transform(t),
+          child: child,
+        );
+      },
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          SizedBox(
+            width: 40,
+            height: ShellTabTitleBar.rowHeight,
+            child: IconButton(
+              tooltip: 'Search',
+              padding: EdgeInsets.zero,
+              constraints: const BoxConstraints(
+                minWidth: 40,
+                minHeight: ShellTabTitleBar.rowHeight,
+              ),
+              onPressed: _expandChromeAndFocusSearch,
+              icon: Badge(
+                isLabelVisible: queryActive,
+                smallSize: 8,
+                backgroundColor: AppColors.primary,
+                child: Icon(
+                  Icons.search_rounded,
+                  size: 24,
+                  color: AppColors.textPrimary,
+                ),
+              ),
+            ),
+          ),
+          if (_items.isNotEmpty)
+            SizedBox(
+              width: 40,
+              height: ShellTabTitleBar.rowHeight,
+              child: IconButton(
+                tooltip: 'Sort & Filter',
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints(
+                  minWidth: 40,
+                  minHeight: ShellTabTitleBar.rowHeight,
+                ),
+                onPressed: _openAllFilters,
+                icon: Badge(
+                  isLabelVisible: filtersActive,
+                  smallSize: 8,
+                  backgroundColor: AppColors.primary,
+                  child: Icon(
+                    Icons.tune_rounded,
+                    size: 22,
+                    color: AppColors.textPrimary,
+                  ),
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  @override
   void didUpdateWidget(covariant WishlistRoute oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (widget.refreshSignal != oldWidget.refreshSignal &&
         widget.refreshSignal > 0) {
+      // Leaving + returning to the shell tab must not keep a typed query.
+      if (_searchCtrl.text.isNotEmpty) {
+        _searchCtrl.clear();
+      }
+      _searchFocus.unfocus();
       _load(reset: true, quiet: true, forceRefresh: true);
     }
   }
@@ -117,13 +577,10 @@ class _WishlistRouteState extends State<WishlistRoute> {
           WishlistPrefetcher.instance.adopt(page);
         }
       } else if (reset) {
-        page = await _wishlist.fetchWishlist(status: 'all');
+        page = await _wishlist.fetchWishlist();
         WishlistPrefetcher.instance.adopt(page);
       } else {
-        page = await _wishlist.fetchWishlist(
-          cursor: _nextCursor,
-          status: 'all',
-        );
+        page = await _wishlist.fetchWishlist(cursor: _nextCursor);
       }
       if (!mounted) return;
       setState(() {
@@ -144,36 +601,181 @@ class _WishlistRouteState extends State<WishlistRoute> {
     }
   }
 
-  List<WishlistItem> get _visible {
-    final id = _storeFilterId;
-    if (id == null || id.isEmpty) return _items;
-    return _items.where((e) => e.store.id == id).toList(growable: false);
-  }
+  String get _query => _searchCtrl.text.trim().toLowerCase();
 
-  Map<String, int> get _storeCounts {
-    final map = <String, int>{};
-    for (final item in _items) {
-      final id = item.store.id.trim();
-      if (id.isEmpty) continue;
-      map[id] = (map[id] ?? 0) + 1;
+  SearchFilterCatalog get _catalog => _catalogFromItems(_items);
+
+  List<WishlistItem> get _visible =>
+      _filterItems(_items, filters: _filters, query: _query);
+
+  List<WishlistItem> _filterItems(
+    List<WishlistItem> source, {
+    required SearchFilterSelection filters,
+    required String query,
+  }) {
+    final q = query.trim().toLowerCase();
+    final metals = filters.metals;
+    final purities = filters.purities;
+    final stores = filters.stores;
+    var list =
+        source.where((item) {
+          if (stores.isNotEmpty && !stores.contains(item.store.id.trim())) {
+            return false;
+          }
+          if (metals.isNotEmpty) {
+            final itemMetals = item.metalFilterValues;
+            if (itemMetals.isEmpty || !itemMetals.any(metals.contains)) {
+              return false;
+            }
+          }
+          if (purities.isNotEmpty) {
+            final p = item.purityFilterValue;
+            if (p.isEmpty || !purities.contains(p)) return false;
+          }
+          if (q.isEmpty) return true;
+          final hay =
+              '${item.displayTitle} ${item.collectionName} ${item.tag} '
+              '${item.store.name} ${item.metalFilterValues.join(' ')} '
+              '${item.purityLabel}'.toLowerCase();
+          return hay.contains(q);
+        }).toList();
+
+    switch (filters.sort) {
+      case SearchSortOption.newest:
+      case SearchSortOption.popular:
+      case SearchSortOption.mostViewed:
+        // Wishlist API has no viewCount / likeCount — newest (likedAt) fallback.
+        list.sort((a, b) {
+          final at = a.likedAt?.millisecondsSinceEpoch ?? 0;
+          final bt = b.likedAt?.millisecondsSinceEpoch ?? 0;
+          return bt.compareTo(at);
+        });
+      case SearchSortOption.lightest:
+        list.sort((a, b) {
+          final aw = a.weightSortValue ?? double.infinity;
+          final bw = b.weightSortValue ?? double.infinity;
+          return aw.compareTo(bw);
+        });
+      case SearchSortOption.heaviest:
+        list.sort((a, b) {
+          final aw = a.weightSortValue ?? -double.infinity;
+          final bw = b.weightSortValue ?? -double.infinity;
+          return bw.compareTo(aw);
+        });
     }
-    return map;
+    return list;
   }
 
-  Map<String, String> get _storeNames {
-    final map = <String, String>{};
-    for (final item in _items) {
-      final id = item.store.id.trim();
-      if (id.isEmpty) continue;
-      map.putIfAbsent(
-        id,
-        () =>
-            item.store.name.trim().isEmpty
-                ? 'Store'
-                : item.store.name.trim(),
+  SearchFilterCatalog _catalogFromItems(List<WishlistItem> items) {
+    final metalCounts = <String, int>{};
+    final purityCounts = <String, int>{};
+    final storeCounts = <String, int>{};
+    final storeNames = <String, String>{};
+    for (final item in items) {
+      for (final m in item.metalFilterValues) {
+        metalCounts[m] = (metalCounts[m] ?? 0) + 1;
+      }
+      final p = item.purityFilterValue;
+      if (p.isNotEmpty) purityCounts[p] = (purityCounts[p] ?? 0) + 1;
+      final sid = item.store.id.trim();
+      if (sid.isNotEmpty) {
+        storeCounts[sid] = (storeCounts[sid] ?? 0) + 1;
+        storeNames.putIfAbsent(
+          sid,
+          () =>
+              item.store.name.trim().isEmpty
+                  ? 'Store'
+                  : item.store.name.trim(),
+        );
+      }
+    }
+    final metalKeys = metalCounts.keys.toList()..sort();
+    final purityKeys = purityCounts.keys.toList()..sort();
+    final storeKeys = storeCounts.keys.toList()
+      ..sort(
+        (a, b) => (storeNames[a] ?? a).compareTo(storeNames[b] ?? b),
       );
-    }
-    return map;
+    return SearchFilterCatalog(
+      metals: [
+        for (final k in metalKeys)
+          SearchFilterOption(
+            value: k,
+            label: _metalLabel(k),
+            count: metalCounts[k] ?? 0,
+          ),
+      ],
+      purities: [
+        for (final k in purityKeys)
+          SearchFilterOption(
+            value: k,
+            label: k.endsWith('%') ? k : '$k%',
+            count: purityCounts[k] ?? 0,
+          ),
+      ],
+      stores: [
+        for (final k in storeKeys)
+          SearchFilterOption(
+            value: k,
+            label: storeNames[k] ?? 'Store',
+            count: storeCounts[k] ?? 0,
+          ),
+      ],
+    );
+  }
+
+  static String _metalLabel(String value) {
+    if (value.isEmpty) return value;
+    return '${value[0].toUpperCase()}${value.substring(1)}';
+  }
+
+  void _applyFilters(SearchFilterSelection next) {
+    setState(() => _filters = next);
+  }
+
+  Future<void> _openAllFilters() async {
+    _searchFocus.unfocus();
+    final catalog = _catalog;
+    final next = await Navigator.of(context).pushNamed(
+      Routes.searchFiltersRoute,
+      arguments: <String, Object?>{
+        'scope': SearchFilterScope.wishlist,
+        'initial': _filters,
+        'initialCatalog': catalog,
+        'initialTotal': _visible.length,
+        'loadPreview': (SearchFilterSelection selection) async {
+          final count =
+              _filterItems(
+                _items,
+                filters: selection,
+                query: _query,
+              ).length;
+          return (catalog: _catalogFromItems(_items), totalProducts: count);
+        },
+      },
+    );
+    if (!mounted || next is! SearchFilterSelection) return;
+    _applyFilters(next);
+  }
+
+  Widget _countPill(int count) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+      decoration: BoxDecoration(
+        color: AppColors.primary.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(
+          color: AppColors.primary.withValues(alpha: 0.28),
+        ),
+      ),
+      child: Text(
+        '$count',
+        style: AppTextStyles.label(
+          fontSize: 13,
+          fontWeight: FontWeight.w700,
+          color: AppColors.primary,
+        ),
+      ),
+    );
   }
 
   Future<void> _remove(WishlistItem item) async {
@@ -181,30 +783,28 @@ class _WishlistRouteState extends State<WishlistRoute> {
     if (id.isEmpty || _busyId != null) return;
     setState(() => _busyId = id);
     try {
-      // Prefer photo unlike when ids are known (keeps server likeCount in sync).
-      final assetId = item.assetId.trim();
-      final listingId = item.listingId.trim();
-      if (item.isActive && assetId.isNotEmpty && listingId.isNotEmpty) {
-        try {
-          await _wishlist.unlikePhoto(
-            listingId: listingId,
-            photoId: assetId,
-            storeId: item.store.id.trim().isEmpty ? null : item.store.id.trim(),
-          );
-        } catch (_) {
-          await _wishlist.removeWishlistItem(id);
-        }
-      } else {
+      // Private wishlist only — never public unlike / likeCount.
+      final targetId = item.listingId.trim();
+      var removed = false;
+      try {
         await _wishlist.removeWishlistItem(id);
+        removed = true;
+      } catch (_) {
+        // Fall through to product/collection delete by target id.
+      }
+      if (!removed && targetId.isNotEmpty) {
+        if (item.isCollection) {
+          await _wishlist.removeWishlistCollection(collectionId: targetId);
+        } else {
+          await _wishlist.removeWishlistProduct(productId: targetId);
+        }
+      } else if (!removed) {
+        throw StateError('Unable to remove wishlist item');
       }
       if (!mounted) return;
       setState(() {
         _items = _items.where((e) => e.id != id).toList(growable: false);
         _busyId = null;
-        if (_storeFilterId != null &&
-            !_items.any((e) => e.store.id == _storeFilterId)) {
-          _storeFilterId = null;
-        }
       });
     } catch (e) {
       if (!mounted) return;
@@ -279,11 +879,12 @@ class _WishlistRouteState extends State<WishlistRoute> {
     return slug.isEmpty ? '' : '$slug.jewelflow.app';
   }
 
-  /// Active items with a photo — swipe feed for product details.
+  /// Active product rows with a photo — swipe feed for product details.
   List<WishlistItem> get _swipeableVisible =>
       _visible
           .where(
             (e) =>
+                e.isProduct &&
                 e.isActive &&
                 e.listingId.trim().isNotEmpty &&
                 e.store.id.trim().isNotEmpty &&
@@ -312,6 +913,37 @@ class _WishlistRouteState extends State<WishlistRoute> {
     final storeId = item.store.id.trim();
     if (listingId.isEmpty || storeId.isEmpty) return;
 
+    // Collection wishlist rows → collection browse (not product details).
+    if (item.isCollection) {
+      final link = _storeLinkFor(item);
+      final product = StoreProduct(
+        id: listingId,
+        title: item.displayTitle,
+        description: item.description,
+        tags: const [],
+        imagePaths:
+            item.photo.url.trim().isEmpty
+                ? const <String>[]
+                : [item.photo.url],
+        imageThumbhashes:
+            (item.photo.thumbhash?.trim().isNotEmpty ?? false)
+                ? [item.photo.thumbhash!.trim()]
+                : const <String>[],
+      );
+      await Navigator.of(context).pushNamed(
+        Routes.collectionBrowseRoute,
+        arguments: <String, Object?>{
+          'product': product,
+          'storeId': storeId,
+          'storeName': item.store.name,
+          if (link.isNotEmpty) 'storeLink': link,
+          'isOwnStore': false,
+        },
+      );
+      if (mounted) await _load(reset: true, quiet: true);
+      return;
+    }
+
     final swipeable = _swipeableVisible;
     final feedIndex = swipeable.indexWhere((e) => e.id == item.id);
     final feed =
@@ -335,10 +967,6 @@ class _WishlistRouteState extends State<WishlistRoute> {
 
     final product = _productFromItem(item);
     final link = _storeLinkFor(item);
-    final likedIds = <String>{
-      for (final e in swipeable)
-        if (e.assetId.trim().isNotEmpty) e.assetId.trim(),
-    };
 
     await Navigator.of(context).pushNamed(
       Routes.productDetailsRoute,
@@ -349,9 +977,8 @@ class _WishlistRouteState extends State<WishlistRoute> {
         if (link.isNotEmpty) 'storeLink': link,
         'isOwnStore': false,
         'imageIndex': 0,
-        if (likedIds.isNotEmpty) 'likedPhotoIds': likedIds.toList(),
-        if (item.assetId.trim().isNotEmpty)
-          'likedPhotoId': item.assetId.trim(),
+        // Bookmark ≠ public like — seed wishlist only.
+        'isWishlisted': true,
         if (feed.isNotEmpty) 'galleryFeed': feed,
         if (feed.isNotEmpty)
           'galleryFeedIndex': feedIndex < 0 ? 0 : feedIndex,
@@ -364,12 +991,17 @@ class _WishlistRouteState extends State<WishlistRoute> {
   @override
   Widget build(BuildContext context) {
     final visible = _visible;
-    final storeCounts = _storeCounts;
-    final storeNames = _storeNames;
     final total = _items.length;
-    final storeCount = storeCounts.length;
+    final catalog = _catalog;
+    final countBadge = total > 0 ? _countPill(total) : null;
+    // Float nav over content — reserve space inside scrollables only
+    // (never shrink the whole tab with outer bottom padding / blank band).
+    final bottomPad =
+        widget.bottomInset > 0 ? widget.bottomInset + 8 : 24.0;
 
-    final body = Column(
+    final collapsedActions = _collapsedChromeActions();
+
+    return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         Padding(
@@ -381,60 +1013,91 @@ class _WishlistRouteState extends State<WishlistRoute> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               if (widget.embeddedInShell)
-                const ShellTabTitleBar(title: 'Wishlist')
+                ShellTabTitleBar(
+                  title: 'Wishlist',
+                  titleBadge: countBadge,
+                  trailing: collapsedActions,
+                )
               else
-                Row(
-                  children: [
-                    if (widget.onBack != null)
-                      AppBackButton(onPressed: widget.onBack),
-                    Expanded(
-                      child: Text(
-                        'Wishlist',
-                        style: AppTextStyles.headline(
-                          fontSize: 18,
-                          fontWeight: FontWeight.w700,
-                          height: 1.2,
-                        ),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ),
-                  ],
-                ),
-              const SizedBox(height: 10),
-              Text(
-                '$total liked items from $storeCount stores',
-                style: AppTextStyles.bodySecondary(fontSize: 14),
-              ),
-              if (storeCounts.isNotEmpty) ...[
-                const SizedBox(height: 12),
                 SizedBox(
-                  height: 36,
-                  child: ListView(
-                    scrollDirection: Axis.horizontal,
+                  height: ShellTabTitleBar.rowHeight,
+                  child: Row(
                     children: [
-                      _FilterChip(
-                        label: 'All $total',
-                        selected: _storeFilterId == null,
-                        onTap: () => setState(() => _storeFilterId = null),
-                      ),
-                      const SizedBox(width: 8),
-                      for (final entry in storeCounts.entries) ...[
-                        _FilterChip(
-                          label:
-                              '${storeNames[entry.key] ?? 'Store'} ${entry.value}',
-                          selected: _storeFilterId == entry.key,
-                          onTap:
-                              () => setState(
-                                () => _storeFilterId = entry.key,
+                      if (widget.onBack != null)
+                        AppBackButton(onPressed: widget.onBack),
+                      Expanded(
+                        child: Align(
+                          alignment: Alignment.centerLeft,
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Flexible(
+                                child: Text(
+                                  'Wishlist',
+                                  style: AppTextStyles.headline(
+                                    fontSize: 18,
+                                    fontWeight: FontWeight.w700,
+                                    height: 1.2,
+                                  ),
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
                               ),
+                              if (countBadge != null) ...[
+                                const SizedBox(width: 8),
+                                countBadge,
+                              ],
+                            ],
+                          ),
                         ),
-                        const SizedBox(width: 8),
-                      ],
+                      ),
+                      collapsedActions,
                     ],
                   ),
                 ),
-              ],
+              SizeTransition(
+                sizeFactor: _chromeFactor,
+                axisAlignment: -1,
+                child: FadeTransition(
+                  opacity: _chromeFactor,
+                  child: KeyedSubtree(
+                    key: _chromeKey,
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const SizedBox(height: 10),
+                        SearchAppBarField(
+                          controller: _searchCtrl,
+                          focusNode: _searchFocus,
+                          hintText: 'Search wishlist',
+                          onChanged: (_) => setState(() {}),
+                          onClear: () {
+                            _searchCtrl.clear();
+                            setState(() {});
+                            _setChromeVisible(true);
+                          },
+                        ),
+                        if (_items.isNotEmpty) ...[
+                          const SizedBox(height: 10),
+                          SearchFilterBar(
+                            selection: _filters,
+                            catalog: catalog,
+                            scope: SearchFilterScope.wishlist,
+                            onChanged: (next) {
+                              _setChromeVisible(true);
+                              _applyFilters(next);
+                            },
+                            onOpenAllFilters: () {
+                              _setChromeVisible(true);
+                              _openAllFilters();
+                            },
+                          ),
+                        ],
+                      ],
+                    ),
+                  ),
+                ),
+              ),
             ],
           ),
         ),
@@ -442,164 +1105,117 @@ class _WishlistRouteState extends State<WishlistRoute> {
           child:
               // Shell tab: never shimmer (warm/prefetch paints immediately).
               _loading && !widget.embeddedInShell
-                  ? const _WishlistShimmer()
+                  ? _WishlistShimmer(bottomPad: bottomPad)
                   : visible.isEmpty
                   ? Center(
                     child: Padding(
-                      padding: AppPadding.screenHorizontal,
+                      padding: AppPadding.screen(bottom: bottomPad),
                       child: Text(
                         _items.isEmpty
-                            ? 'Liked photos appear here.'
-                            : 'No items from this store.',
+                            ? 'Wishlisted photos appear here.'
+                            : 'No matching items.',
                         style: AppTextStyles.bodySecondary(),
                         textAlign: TextAlign.center,
                       ),
                     ),
                   )
-                  : NotificationListener<ScrollNotification>(
-                    onNotification: (n) {
-                      if (_nextCursor == null || _loadingMore) return false;
-                      if (n.metrics.pixels <
-                          n.metrics.maxScrollExtent - 240) {
-                        return false;
-                      }
-                      _load(reset: false);
-                      return false;
-                    },
-                    child: RefreshIndicator(
-                      color: AppColors.primary,
-                      onRefresh:
-                          () => _load(
-                            reset: true,
-                            quiet: widget.embeddedInShell,
-                            forceRefresh: true,
-                          ),
-                      child: CustomScrollView(
-                        physics: const AlwaysScrollableScrollPhysics(
-                          parent: BouncingScrollPhysics(),
-                        ),
-                        slivers: [
-                          SliverPadding(
-                            padding: AppPadding.screen(top: 4, bottom: 8),
-                            sliver: SliverGrid(
-                              gridDelegate:
-                                  const SliverGridDelegateWithFixedCrossAxisCount(
-                                    crossAxisCount: 2,
-                                    crossAxisSpacing: 10,
-                                    mainAxisSpacing: 10,
-                                    // Equal width & height for every tile.
-                                    childAspectRatio: 1,
+                  : Listener(
+                    behavior: HitTestBehavior.opaque,
+                    onPointerDown: _onPinchPointerDown,
+                    onPointerMove: _onPinchPointerMove,
+                    onPointerUp: _onPinchPointerEnd,
+                    onPointerCancel: _onPinchPointerEnd,
+                    child: NotificationListener<ScrollNotification>(
+                      onNotification: _onGridScroll,
+                      child: RefreshIndicator(
+                        color: AppColors.primary,
+                        onRefresh:
+                            () => _load(
+                              reset: true,
+                              quiet: widget.embeddedInShell,
+                              forceRefresh: true,
+                            ),
+                        child: CustomScrollView(
+                          controller: _scrollController,
+                          physics:
+                              _pinching
+                                  ? const NeverScrollableScrollPhysics()
+                                  : const AlwaysScrollableScrollPhysics(
+                                    parent: BouncingScrollPhysics(),
                                   ),
-                              delegate: SliverChildBuilderDelegate(
-                                (context, index) {
-                                  final item = visible[index];
-                                  return WishlistItemCard(
-                                    item: item,
-                                    onTap: () => _openItem(item),
-                                    onRemove: () => _remove(item),
-                                    onFollow:
-                                        item.isLocked
-                                            ? () => _followLocked(item)
-                                            : null,
-                                    isFollowBusy:
-                                        _followBusyStoreId == item.store.id,
-                                    isRemoveBusy: _busyId == item.id,
-                                  );
-                                },
-                                childCount: visible.length,
+                          slivers: [
+                            SliverPadding(
+                              padding: AppPadding.screen(
+                                top: 4,
+                                bottom: bottomPad,
+                              ),
+                              sliver: SliverGrid(
+                                gridDelegate:
+                                    SliverGridDelegateWithFixedCrossAxisCount(
+                                      crossAxisCount: _crossAxisCount,
+                                      crossAxisSpacing: _gridSpacing(
+                                        _crossAxisCount,
+                                      ),
+                                      mainAxisSpacing: _gridSpacing(
+                                        _crossAxisCount,
+                                      ),
+                                      childAspectRatio: 1,
+                                    ),
+                                delegate: SliverChildBuilderDelegate(
+                                  (context, index) {
+                                    final item = visible[index];
+                                    return IgnorePointer(
+                                      ignoring: _pinching,
+                                      child: WishlistItemCard(
+                                        key: ValueKey(item.id),
+                                        item: item,
+                                        onTap: () => _openItem(item),
+                                        onRemove: () => _remove(item),
+                                        onFollow:
+                                            item.isLocked
+                                                ? () => _followLocked(item)
+                                                : null,
+                                        isFollowBusy:
+                                            _followBusyStoreId ==
+                                            item.store.id,
+                                        isRemoveBusy: _busyId == item.id,
+                                      ),
+                                    );
+                                  },
+                                  childCount: visible.length,
+                                ),
                               ),
                             ),
-                          ),
-                          if (_loadingMore)
-                            const SliverToBoxAdapter(
-                              child: Padding(
-                                padding: EdgeInsets.symmetric(vertical: 16),
-                                child: Center(
-                                  child: SizedBox(
-                                    width: 22,
-                                    height: 22,
-                                    child: CircularProgressIndicator(
-                                      strokeWidth: 2,
+                            if (_loadingMore)
+                              const SliverToBoxAdapter(
+                                child: Padding(
+                                  padding: EdgeInsets.symmetric(vertical: 16),
+                                  child: Center(
+                                    child: SizedBox(
+                                      width: 22,
+                                      height: 22,
+                                      child: CircularProgressIndicator(
+                                        strokeWidth: 2,
+                                      ),
                                     ),
                                   ),
                                 ),
                               ),
-                            ),
-                        ],
+                          ],
+                        ),
                       ),
                     ),
                   ),
         ),
-        Padding(
-          padding: AppPadding.screen(bottom: 24),
-          child: Text(
-            'Only you can see your Wishlist. Stores see a like count, '
-            'never the list.',
-            style: AppTextStyles.caption(height: 1.4),
-            textAlign: TextAlign.center,
-          ),
-        ),
       ],
-    );
-
-    if (widget.bottomInset <= 0) return body;
-    return Padding(
-      padding: EdgeInsets.only(bottom: widget.bottomInset),
-      child: body,
-    );
-  }
-}
-
-class _FilterChip extends StatelessWidget {
-  const _FilterChip({
-    required this.label,
-    required this.selected,
-    required this.onTap,
-  });
-
-  final String label;
-  final bool selected;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    return Material(
-      color:
-          selected
-              ? AppColors.primary.withValues(alpha: 0.12)
-              : AppColors.surfaceSecondary,
-      borderRadius: BorderRadius.circular(999),
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(999),
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(999),
-            border: Border.all(
-              color:
-                  selected
-                      ? AppColors.primary.withValues(alpha: 0.35)
-                      : AppColors.border,
-            ),
-          ),
-          child: Text(
-            label,
-            style: AppTextStyles.label(
-              fontSize: 13,
-              fontWeight: FontWeight.w700,
-              color:
-                  selected ? AppColors.primary : AppColors.textPrimary,
-            ),
-          ),
-        ),
-      ),
     );
   }
 }
 
 class _WishlistShimmer extends StatefulWidget {
-  const _WishlistShimmer();
+  const _WishlistShimmer({this.bottomPad = 16});
+
+  final double bottomPad;
 
   @override
   State<_WishlistShimmer> createState() => _WishlistShimmerState();
@@ -631,7 +1247,7 @@ class _WishlistShimmerState extends State<_WishlistShimmer>
       builder: (context, _) {
         final t = _ctrl.value;
         return GridView.builder(
-          padding: AppPadding.screen(top: 4, bottom: 16),
+          padding: AppPadding.screen(top: 4, bottom: widget.bottomPad),
           gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
             crossAxisCount: 2,
             crossAxisSpacing: 10,

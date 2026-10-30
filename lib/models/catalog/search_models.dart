@@ -122,6 +122,7 @@ class SearchSuggestMatch extends Equatable {
     this.netWeight,
     this.purity,
     this.thumbnailUrl,
+    this.thumbhash,
     this.privacy,
     this.followStatus = StoreFollowStatus.none,
     this.canViewContent,
@@ -143,6 +144,7 @@ class SearchSuggestMatch extends Equatable {
   final double? netWeight;
   final String? purity;
   final String? thumbnailUrl;
+  final String? thumbhash;
 
   /// Store privacy from suggest / enriched payloads (null when omitted).
   final StorePrivacyMode? privacy;
@@ -184,6 +186,7 @@ class SearchSuggestMatch extends Equatable {
       netWeight: netWeight,
       purity: purity,
       thumbnailUrl: thumbnailUrl,
+      thumbhash: thumbhash,
       privacy: privacy ?? this.privacy,
       followStatus: followStatus ?? this.followStatus,
       canViewContent: canViewContent ?? this.canViewContent,
@@ -213,6 +216,7 @@ class SearchSuggestMatch extends Equatable {
       netWeight: (json['netWeight'] as num?)?.toDouble(),
       purity: json['purity']?.toString(),
       thumbnailUrl: json['thumbnailUrl'] as String?,
+      thumbhash: json['thumbhash'] as String? ?? json['thumbHash'] as String?,
       privacy: privacy,
       followStatus: storeFollowStatusFromString(followRaw),
       canViewContent: json['canViewContent'] as bool?,
@@ -235,6 +239,7 @@ class SearchSuggestMatch extends Equatable {
         netWeight,
         purity,
         thumbnailUrl,
+        thumbhash,
         privacy,
         followStatus,
         canViewContent,
@@ -510,6 +515,7 @@ class SearchHit extends Equatable {
     this.collectionId,
     this.subGroupId,
     this.thumbnailUrl,
+    this.thumbhash,
     this.store,
     this.details = const SearchHitDetails(),
     this.viewCount,
@@ -520,6 +526,7 @@ class SearchHit extends Equatable {
   final String? collectionId;
   final String? subGroupId;
   final String? thumbnailUrl;
+  final String? thumbhash;
   final SearchHitStore? store;
   final SearchHitDetails details;
 
@@ -538,6 +545,7 @@ class SearchHit extends Equatable {
       collectionId: json['collectionId'] as String?,
       subGroupId: json['subGroupId'] as String?,
       thumbnailUrl: json['thumbnailUrl'] as String?,
+      thumbhash: json['thumbhash'] as String? ?? json['thumbHash'] as String?,
       store:
           rawStore is Map
               ? SearchHitStore.fromJson(Map<String, dynamic>.from(rawStore))
@@ -557,6 +565,7 @@ class SearchHit extends Equatable {
         collectionId,
         subGroupId,
         thumbnailUrl,
+        thumbhash,
         store,
         details,
         viewCount,
@@ -691,6 +700,9 @@ class SearchQuery extends Equatable {
     this.wastages = const [],
     this.stores = const [],
     this.locations = const [],
+    this.stockStatuses = const [],
+    this.minWeight,
+    this.maxWeight,
     this.sort = 'newest',
     this.limit = 20,
     this.cursor,
@@ -705,19 +717,28 @@ class SearchQuery extends Equatable {
   final List<String> wastages;
   final List<String> stores;
   final List<String> locations;
+  final List<String> stockStatuses;
+  final double? minWeight;
+  final double? maxWeight;
   final String sort;
   final int limit;
   final String? cursor;
 
   Map<String, String> toQueryMap({bool includeStoreLocation = true}) {
+    final parsed = _weightBoundsFromFacets(weights);
+    final minW = minWeight ?? parsed.$1;
+    final maxW = maxWeight ?? parsed.$2;
     final map = <String, String>{
       if (q != null && q!.trim().isNotEmpty) 'q': q!.trim(),
       if (categories.isNotEmpty) 'category': categories.join(','),
       if (metals.isNotEmpty) 'metal': metals.join(','),
       if (purities.isNotEmpty) 'purity': purities.join(','),
       if (weights.isNotEmpty) 'weight': weights.join(','),
+      if (minW != null) 'minWeight': '$minW',
+      if (maxW != null) 'maxWeight': '$maxW',
       if (sizes.isNotEmpty) 'size': sizes.join(','),
       if (wastages.isNotEmpty) 'wastage': wastages.join(','),
+      if (stockStatuses.isNotEmpty) 'stock_status': stockStatuses.join(','),
       if (includeStoreLocation && stores.isNotEmpty) 'store': stores.join(','),
       if (includeStoreLocation && locations.isNotEmpty)
         'location': locations.join(','),
@@ -726,6 +747,38 @@ class SearchQuery extends Equatable {
       if (cursor != null && cursor!.isNotEmpty) 'cursor': cursor!,
     };
     return map;
+  }
+
+  /// Parses facet tokens like `5-10`, `0-5g`, `10+` into min/max grams.
+  static (double?, double?) _weightBoundsFromFacets(List<String> weights) {
+    double? min;
+    double? max;
+    for (final raw in weights) {
+      final t = raw.trim().toLowerCase().replaceAll('g', '').trim();
+      if (t.isEmpty) continue;
+      final range = RegExp(
+        r'^(\d+(?:\.\d+)?)\s*[-–]\s*(\d+(?:\.\d+)?)$',
+      ).firstMatch(t);
+      if (range != null) {
+        final a = double.tryParse(range.group(1)!);
+        final b = double.tryParse(range.group(2)!);
+        if (a != null) min = min == null ? a : (a < min ? a : min);
+        if (b != null) max = max == null ? b : (b > max ? b : max);
+        continue;
+      }
+      final plus = RegExp(r'^(\d+(?:\.\d+)?)\+$').firstMatch(t);
+      if (plus != null) {
+        final a = double.tryParse(plus.group(1)!);
+        if (a != null) min = min == null ? a : (a < min ? a : min);
+        continue;
+      }
+      final single = double.tryParse(t);
+      if (single != null) {
+        min = min == null ? single : (single < min ? single : min);
+        max = max == null ? single : (single > max ? single : max);
+      }
+    }
+    return (min, max);
   }
 
   @override
@@ -739,6 +792,9 @@ class SearchQuery extends Equatable {
         wastages,
         stores,
         locations,
+        stockStatuses,
+        minWeight,
+        maxWeight,
         sort,
         limit,
         cursor,

@@ -11,10 +11,14 @@ This file defines what to follow for UI and logic inside `lib/presentation/searc
 - Telegram-style white surfaces; filled search field matches Stores home
   (`BorderRadius.circular(32)`, `contentPadding` 12/12, `surfaceSecondary`
   fill). `SearchAppBarField` and store-profile footer use the same chrome.
-- Global / in-store results use a horizontal filter strip. First pill is **Sort & Filter** → pushes `search_filters_route` (full screen, Flipkart-style split Filters). Remaining pills are per-group dropdowns. In-store drops Store + Location; zero-count options are greyed.
+  Optional `alwaysShowClose` / `onClose` exist for callers that want an empty
+  field close affordance; Wishlist keeps the default (X only when text ≠ ∅).
+- Global / in-store results use a horizontal filter strip. First pill is **Sort & Filter** → pushes `search_filters_route` (full screen, Flipkart-style split Filters). Remaining pills are per-group dropdowns. In-store drops Store + Location; zero-count options are greyed. Wishlist reuses the same bar/sheet with `SearchFilterScope.wishlist` (Sort + Metal + Purity + Store only; options from loaded wishlist items).
 - Selecting a dropdown option applies immediately, closes the menu, and reloads results. **Sort & Filter** screen edits all groups together; **Apply** pops the selection (live preview count on the CTA).
 - `global_search_route` uses `SmoothFadePageRoute` (fade only). Keyboard shows after the entry animation and stays until tap-outside, Cancel/Back, or edge back-swipe.
 - Loading states use layout-matched shimmers (`search_shimmers.dart`) — never `CircularProgressIndicator` for Discover, suggestions, facets chips, or results grids (including load-more).
+- Result cards use `ProductImageCollage` with `thumbhash` when the search hit
+  includes it (InstantCatalogPhoto: blur placeholder while CDN loads).
 
 ## Logic Ownership
 - Live catalog search APIs via `SearchRepository` (`lib/webservice/search/`):
@@ -44,7 +48,9 @@ This file defines what to follow for UI and logic inside `lib/presentation/searc
 - Filter keys sent to API are facet `value`s (e.g. `necklace`, `under_10`), not display labels.
 - Sort maps: Newest → `newest`, Most viewed → `most_viewed`, Lightest →
   `weight_asc`, Heaviest → `weight_desc`. Result cards show product
-  `viewCount` when the API returns a positive count.
+  `viewCount` when the API returns a positive count. Omit weight / wastage
+  chips when the value is 0 (`0 g`, `0% wastage`) — shared by global and
+  in-store via `SearchProductResult.weightChip` / `wastageChip`.
 - Side effects (snackbars, navigation) stay in route methods, not in `build`.
 - Errors use `CatalogErrorMapper.toUserMessage` (never raw API text).
 
@@ -60,11 +66,10 @@ This file defines what to follow for UI and logic inside `lib/presentation/searc
 - **Product result tap** → `product_details_route` with a `galleryFeed` of the
   **current filtered search results** (one page per hit). Swipe moves to the next
   / previous result — not other photos inside the same collection. Global search
-  hits may span stores (per-hit `storeId` on feed items). Store name shows a `>`
-  chevron → opens that store’s `store_profile_route` with the listing group
-  highlighted; tapping the group opens collection browse (all items). Suggest
-  taps open a single-hit feed. Does **not** open `collection_browse_route` on
-  the result card itself.
+  hits may span stores (per-hit `storeId` on feed items). Product details no
+  longer shows store name / chevron; open the store from search result cards
+  instead. Suggest taps open a single-hit feed. Does **not** open
+  `collection_browse_route` on the result card itself.
 - API contract: `lib/webservice/search/CATALOG_SEARCH_AND_FILTER.md`.
 
 ## Folder Scope

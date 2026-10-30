@@ -1,0 +1,507 @@
+import 'package:drag_select_grid_view/src/drag_select_grid_view/selection.dart';
+import 'package:flutter_test/flutter_test.dart';
+
+void main() {
+  group("`SelectionManager` tests", () {
+    group("Select by tapping.", () {
+      test(
+        "When tapping the index 0, "
+        "then the index 0 gets selected.",
+        () {
+          final manager = SelectionManager();
+          expect(manager.selectedIndexes, <int>{});
+
+          manager.tap(0);
+          expect(manager.selectedIndexes, {0});
+        },
+      );
+
+      test(
+        "Given that the index 0 is selected, "
+        "when tapping the index 0, "
+        "then the index 0 gets UNSELECTED.",
+        () {
+          final manager = SelectionManager();
+
+          manager.tap(0);
+          expect(manager.selectedIndexes, {0});
+
+          manager.tap(0);
+          expect(manager.selectedIndexes, <int>{});
+        },
+      );
+
+      test(
+        "Given that the index 0 was UNSELECTED, "
+        "when tapping the index 0, "
+        "then the index 0 gets selected again.",
+        () {
+          final manager = SelectionManager();
+
+          manager.tap(0);
+          expect(manager.selectedIndexes, {0});
+
+          manager.tap(0);
+          expect(manager.selectedIndexes, <int>{});
+
+          manager.tap(0);
+          expect(manager.selectedIndexes, {0});
+        },
+      );
+    });
+
+    group("Select by dragging forward.", () {
+      test(
+        "When dragging from index 0 to index 2, "
+        "then all indexes from 0 to 2 get selected.",
+        () {
+          final manager = SelectionManager();
+
+          manager.startDrag(0);
+          manager.updateDrag(1);
+          manager.updateDrag(2);
+          manager.endDrag();
+
+          expect(manager.selectedIndexes, {0, 1, 2});
+        },
+      );
+
+      test(
+        "When directly dragging from index 0 to index 2, "
+        "then all indexes from 0 to 2 get selected.",
+        () {
+          final manager = SelectionManager();
+
+          manager.startDrag(0);
+          manager.updateDrag(2);
+          manager.endDrag();
+
+          expect(manager.selectedIndexes, {0, 1, 2});
+        },
+      );
+
+      test(
+        "Given that all indexes from 0 to 2 were selected by dragging, "
+        "when dragging back to the index 0, "
+        "then the indexes 2 and 1 get UNSELECTED, "
+        "and the index 0 stills selected.",
+        () {
+          final manager = SelectionManager();
+
+          manager.startDrag(0);
+          manager.updateDrag(1);
+          manager.updateDrag(2);
+
+          manager.updateDrag(1);
+          manager.updateDrag(0);
+          manager.endDrag();
+
+          expect(manager.selectedIndexes, {0});
+        },
+      );
+
+      test(
+        "Given that all indexes from 0 to 2 were selected by dragging, "
+        "when directly dragging back to the index 0, "
+        "then the indexes 2 and 1 get UNSELECTED, "
+        "and the index 0 stills selected.",
+        () {
+          final manager = SelectionManager();
+
+          manager.startDrag(0);
+          manager.updateDrag(2);
+          manager.updateDrag(0);
+          manager.endDrag();
+
+          expect(manager.selectedIndexes, {0});
+        },
+      );
+
+      test(
+        "Given that all indexes from 2 to 4 were selected by dragging, "
+        "when dragging back to the index 0, "
+        "then the indexes 4 and 3 get UNSELECTED, "
+        "and the index 2 stills selected, "
+        "and the indexes 1 and 0 get selected.",
+        () {
+          final manager = SelectionManager();
+
+          manager.startDrag(2);
+          manager.updateDrag(3);
+          manager.updateDrag(4);
+
+          manager.updateDrag(3);
+          manager.updateDrag(2);
+          manager.updateDrag(1);
+          manager.updateDrag(0);
+          manager.endDrag();
+
+          expect(manager.selectedIndexes, {0, 1, 2});
+        },
+      );
+
+      test(
+        "Given that all indexes from 2 to 4 were selected by dragging, "
+        "and that all indexes from 2 to 0 were selected by dragging back, "
+        "when dragging to the index 2, "
+        "then the indexes 0 and 1 get UNSELECTED, "
+        "and the index 2 stills selected.",
+        () {
+          final manager = SelectionManager();
+
+          manager.startDrag(2);
+          manager.updateDrag(3);
+          manager.updateDrag(4);
+
+          manager.updateDrag(3);
+          manager.updateDrag(2);
+          manager.updateDrag(1);
+          manager.updateDrag(0);
+
+          manager.updateDrag(1);
+          manager.updateDrag(2);
+          manager.endDrag();
+
+          expect(manager.selectedIndexes, {2});
+        },
+      );
+
+      test(
+        "Given that all indexes from 2 to 4 were selected by dragging, "
+        "when directly dragging back to the index 0, "
+        "then the indexes 4 and 3 get UNSELECTED, "
+        "and the index 2 stills selected, "
+        "and the indexes 1 and 0 get selected.",
+        () {
+          final manager = SelectionManager();
+
+          manager.startDrag(2);
+          manager.updateDrag(4);
+          manager.updateDrag(0);
+          manager.endDrag();
+
+          expect(manager.selectedIndexes, {0, 1, 2});
+        },
+      );
+
+      test(
+        "Given that all indexes from 2 to 4 were selected by dragging, "
+        "and that all indexes from 2 to 0 were selected by dragging back, "
+        "when directly dragging to the index 2, "
+        "then the indexes 0 and 1 get UNSELECTED, "
+        "and the index 2 stills selected.",
+        () {
+          final manager = SelectionManager();
+
+          manager.startDrag(2);
+          manager.updateDrag(4);
+          manager.updateDrag(0);
+          manager.updateDrag(2);
+          manager.endDrag();
+
+          expect(manager.selectedIndexes, {2});
+        },
+      );
+    });
+
+    group("Select by dragging backward.", () {
+      test(
+        "When dragging from index 2 to index 0, "
+        "then all indexes from 2 to 0 get selected.",
+        () {
+          final manager = SelectionManager();
+
+          manager.startDrag(2);
+          manager.updateDrag(1);
+          manager.updateDrag(0);
+          manager.endDrag();
+
+          expect(manager.selectedIndexes, {0, 1, 2});
+        },
+      );
+
+      test(
+        "When directly dragging from index 2 to index 0, "
+        "then all indexes from 2 to 0 get selected.",
+        () {
+          final manager = SelectionManager();
+
+          manager.startDrag(2);
+          manager.updateDrag(0);
+          manager.endDrag();
+
+          expect(manager.selectedIndexes, {0, 1, 2});
+        },
+      );
+
+      test(
+        "Given that all indexes from 2 to 0 were selected by dragging, "
+        "when dragging back to the index 2, "
+        "then the indexes 0 and 1 get UNSELECTED, "
+        "and the index 2 stills selected.",
+        () {
+          final manager = SelectionManager();
+
+          manager.startDrag(2);
+          manager.updateDrag(1);
+          manager.updateDrag(0);
+
+          manager.updateDrag(1);
+          manager.updateDrag(2);
+          manager.endDrag();
+
+          expect(manager.selectedIndexes, {2});
+        },
+      );
+
+      test(
+        "Given that all indexes from 2 to 0 were selected by dragging, "
+        "when directly dragging back to the index 2, "
+        "then the indexes 0 and 1 get UNSELECTED, "
+        "and the index 2 stills selected.",
+        () {
+          final manager = SelectionManager();
+
+          manager.startDrag(2);
+          manager.updateDrag(0);
+          manager.updateDrag(2);
+          manager.endDrag();
+
+          expect(manager.selectedIndexes, {2});
+        },
+      );
+
+      test(
+        "Given that all indexes from 2 to 0 were selected by dragging, "
+        "when dragging back to the index 4, "
+        "then the indexes 0 and 1 get UNSELECTED, "
+        "and the index 2 stills selected, "
+        "and the indexes 3 and 4 get selected.",
+        () {
+          final manager = SelectionManager();
+
+          manager.startDrag(2);
+          manager.updateDrag(1);
+          manager.updateDrag(0);
+
+          manager.updateDrag(1);
+          manager.updateDrag(2);
+          manager.updateDrag(3);
+          manager.updateDrag(4);
+          manager.endDrag();
+
+          expect(manager.selectedIndexes, {2, 3, 4});
+        },
+      );
+
+      test(
+        "Given that all indexes from 0 to 2 were selected by dragging, "
+        "and that all indexes from 2 to 4 were selected by dragging back, "
+        "when dragging to the index 2, "
+        "then the indexes 4 and 3 get UNSELECTED, "
+        "and the index 2 stills selected.",
+        () {
+          final manager = SelectionManager();
+
+          manager.startDrag(2);
+          manager.updateDrag(1);
+          manager.updateDrag(0);
+
+          manager.updateDrag(1);
+          manager.updateDrag(2);
+          manager.updateDrag(3);
+          manager.updateDrag(4);
+
+          manager.updateDrag(3);
+          manager.updateDrag(2);
+          manager.endDrag();
+
+          expect(manager.selectedIndexes, {2});
+        },
+      );
+
+      test(
+        "Given that all indexes from 2 to 0 were selected by dragging, "
+        "when directly dragging back to the index 4, "
+        "then the indexes 0 and 1 get UNSELECTED, "
+        "and the index 2 stills selected, "
+        "and the indexes 3 and 4 get selected.",
+        () {
+          final manager = SelectionManager();
+
+          manager.startDrag(2);
+          manager.updateDrag(0);
+          manager.updateDrag(4);
+          manager.endDrag();
+
+          expect(manager.selectedIndexes, {2, 3, 4});
+        },
+      );
+
+      test(
+        "Given that all indexes from 0 to 2 were selected by dragging, "
+        "and that all indexes from 2 to 4 were selected by dragging back, "
+        "when directly dragging to the index 2, "
+        "then the indexes 4 and 3 get UNSELECTED, "
+        "and the index 2 stills selected.",
+        () {
+          final manager = SelectionManager();
+
+          manager.startDrag(2);
+          manager.updateDrag(0);
+          manager.updateDrag(4);
+          manager.updateDrag(2);
+          manager.endDrag();
+
+          expect(manager.selectedIndexes, {2});
+        },
+      );
+
+      test(
+        "Given that the indexes 0 and 1 were selected by dragging, "
+        "which stills activated, "
+        "when clearing the selection, "
+        "then all indexes get UNSELECTED, "
+        "and the drag is interrupted.",
+        () {
+          final manager = SelectionManager();
+
+          manager.startDrag(0);
+          manager.updateDrag(1);
+          manager.clear();
+
+          expect(manager.selectedIndexes, <int>{});
+          expect(manager.dragStartIndex, -1);
+          expect(manager.dragEndIndex, -1);
+        },
+      );
+
+      test(
+        "Given that the indexes 0 and 1 were selected by dragging, "
+        "which stills activated, "
+        "when directly selecting indexes 2 and 3, "
+        "then all indexes get UNSELECTED, "
+        "then the indexes 2 and 3 get selected, "
+        "and the drag is interrupted.",
+        () {
+          final manager = SelectionManager();
+
+          manager.startDrag(0);
+          manager.updateDrag(1);
+          manager.selectedIndexes = {2, 3};
+
+          expect(manager.selectedIndexes, {2, 3});
+          expect(manager.dragStartIndex, -1);
+          expect(manager.dragEndIndex, -1);
+        },
+      );
+    });
+
+    test(
+      "When trying to drag by the index 0 without starting drag, "
+      "then index 0 stills unselected.",
+      () {
+        final manager = SelectionManager();
+
+        manager.updateDrag(0);
+        expect(manager.selectedIndexes, <int>{});
+      },
+    );
+
+    test(
+      "When trying to drag by a negative index, "
+      "then the negative index stills unselected.",
+      () {
+        final manager = SelectionManager();
+
+        manager.startDrag(0);
+        manager.updateDrag(-1);
+        expect(manager.selectedIndexes, {0});
+      },
+    );
+  });
+
+  group("`Selection` tests", () {
+    test("`Selection.empty` has empty `selectedIndexes`.", () {
+      expect(const Selection.empty().selectedIndexes, <int>{});
+    });
+
+    test(
+      "When a `Selection` has an empty `selectedIndexes`, "
+      "then `isSelecting` is false.",
+      () {
+        expect(
+          const Selection.empty().isSelecting,
+          isFalse,
+        );
+      },
+    );
+
+    test(
+      "When a `Selection` has a non-empty `selectedIndexes`, "
+      "then `isSelecting` is true.",
+      () {
+        expect(
+          Selection(const {0, 1}).isSelecting,
+          isTrue,
+        );
+      },
+    );
+
+    test(
+      "When the `Set` passed to `Selection` is modified, "
+      "then `selectedIndexes` is not modified.",
+      () {
+        final selectedIndexes = {0, 1};
+        final selection = Selection(selectedIndexes);
+        selectedIndexes.remove(0);
+        expect(selection.selectedIndexes, {0, 1});
+      },
+    );
+
+    test(
+      "When the `Set` got from `Selection` is modified, "
+      "then an error is thrown.",
+      () {
+        final selection = Selection(const {0, 1});
+        expect(
+          () => selection.selectedIndexes.remove(0),
+          throwsA(isA<UnsupportedError>()),
+        );
+      },
+    );
+
+    test("`toString()`.", () {
+      expect(
+        const Selection.empty().toString(),
+        isNot("Instance of 'Selection'"),
+      );
+    });
+
+    group("`operator ==` and `hashCode`.", () {
+      final selection = Selection(const {0, 1, 2});
+      final equalSelection = Selection(const {0, 1, 2});
+      final anotherEqualSelection = Selection(const {0, 1, 2});
+      const differentSelection = Selection.empty();
+
+      test('Reflexivity.', () {
+        expect(selection, selection);
+        expect(selection.hashCode, selection.hashCode);
+      });
+
+      test('Symmetry.', () {
+        expect(selection, isNot(differentSelection));
+        expect(differentSelection, isNot(selection));
+      });
+
+      test('Transitivity.', () {
+        expect(selection, equalSelection);
+        expect(equalSelection, anotherEqualSelection);
+        expect(selection, anotherEqualSelection);
+        expect(selection.hashCode, equalSelection.hashCode);
+        expect(equalSelection.hashCode, anotherEqualSelection.hashCode);
+        expect(selection.hashCode, anotherEqualSelection.hashCode);
+      });
+    });
+  });
+}

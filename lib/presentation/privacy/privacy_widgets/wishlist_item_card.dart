@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:project_c/helper/catalog_responsive_image.dart';
 import 'package:project_c/helper/colors.dart';
 import 'package:project_c/helper/product_image.dart';
 import 'package:project_c/helper/text_styles.dart';
@@ -80,7 +81,12 @@ class _ActiveGridCard extends StatelessWidget {
           fit: StackFit.expand,
           children: [
             ProductMediaImage(
-              path: item.photo.url,
+              path: CatalogResponsiveImage.resolve(
+                masterUrl: item.photo.url,
+                thumbnailUrl: item.photo.thumbnailUrl,
+                detailUrl: item.photo.detailUrl,
+                role: CatalogImageRole.grid,
+              ),
               thumbhash: item.photo.thumbhash,
               fit: BoxFit.cover,
             ),
@@ -97,21 +103,11 @@ class _ActiveGridCard extends StatelessWidget {
                     width: 34,
                     height: 34,
                     child: Center(
-                      child:
-                          isRemoveBusy
-                              ? SizedBox(
-                                width: 16,
-                                height: 16,
-                                child: CircularProgressIndicator(
-                                  strokeWidth: 2,
-                                  color: AppColors.textOnPrimary,
-                                ),
-                              )
-                              : Icon(
-                                Icons.favorite_rounded,
-                                color: AppColors.error,
-                                size: 18,
-                              ),
+                      child: Icon(
+                        Icons.favorite_rounded,
+                        color: AppColors.error,
+                        size: 18,
+                      ),
                     ),
                   ),
                 ),

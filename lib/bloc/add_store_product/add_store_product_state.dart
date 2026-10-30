@@ -58,6 +58,9 @@ class AddStoreProductState extends Equatable {
     this.publishedApiTag,
     this.replacedListingId,
     this.errorMessage,
+    this.awaitingPartialUploadDecision = false,
+    this.pendingUploadSuccesses = const [],
+    this.pendingUploadFailedPaths = const [],
   });
 
   final String? storeId;
@@ -82,11 +85,16 @@ class AddStoreProductState extends Equatable {
   final String? replacedListingId;
   final String? errorMessage;
 
+  /// Scenario 3: S3 partial failure — wait for Publish N / Retry Failed.
+  final bool awaitingPartialUploadDecision;
+  final List<CatalogUploadedPhoto> pendingUploadSuccesses;
+  final List<String> pendingUploadFailedPaths;
+
   bool get canContinueFromGallery =>
       selectedImageIds.isNotEmpty && !isPickingImages;
 
   bool get canPublish {
-    if (isPublishing) return false;
+    if (isPublishing || awaitingPartialUploadDecision) return false;
     if (title.trim().isEmpty) return false;
     return selectedImageIds.isNotEmpty;
   }
@@ -150,6 +158,10 @@ class AddStoreProductState extends Equatable {
     String? replacedListingId,
     String? errorMessage,
     bool clearError = false,
+    bool? awaitingPartialUploadDecision,
+    bool clearPartialUpload = false,
+    List<CatalogUploadedPhoto>? pendingUploadSuccesses,
+    List<String>? pendingUploadFailedPaths,
   }) {
     return AddStoreProductState(
       storeId: storeId ?? this.storeId,
@@ -184,6 +196,19 @@ class AddStoreProductState extends Equatable {
               ? null
               : (replacedListingId ?? this.replacedListingId),
       errorMessage: clearError ? null : (errorMessage ?? this.errorMessage),
+      awaitingPartialUploadDecision:
+          clearPartialUpload
+              ? false
+              : (awaitingPartialUploadDecision ??
+                  this.awaitingPartialUploadDecision),
+      pendingUploadSuccesses:
+          clearPartialUpload
+              ? const []
+              : (pendingUploadSuccesses ?? this.pendingUploadSuccesses),
+      pendingUploadFailedPaths:
+          clearPartialUpload
+              ? const []
+              : (pendingUploadFailedPaths ?? this.pendingUploadFailedPaths),
     );
   }
 
@@ -210,5 +235,8 @@ class AddStoreProductState extends Equatable {
     publishedApiTag,
     replacedListingId,
     errorMessage,
+    awaitingPartialUploadDecision,
+    pendingUploadSuccesses,
+    pendingUploadFailedPaths,
   ];
 }

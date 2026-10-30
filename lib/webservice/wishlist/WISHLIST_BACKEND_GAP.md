@@ -26,7 +26,7 @@ optional `liked` / `likeCount` for the viewer).
 | Like | `PUT /products/:listingId/photos/:photoId/like` |
 | Unlike | `DELETE /products/:listingId/photos/:photoId/like` |
 | Alias | `PUT\|DELETE /stores/:storeId/collections/:listingId/photos/:photoId/like` |
-| List wishlist | `GET /wishlist?limit=&cursor=&status=all\|active\|locked` |
+| List wishlist | `GET /wishlist?limit=&cursor=` (no `status` — rejected as unknown) |
 | Remove by id | `DELETE /wishlist/:wishlistId` |
 
 `listingId` = collection id (already available).  

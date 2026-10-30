@@ -54,8 +54,24 @@ class ProductSpec extends Equatable {
     this.category = '',
   });
 
-  static const purityOptions = <String>['75', '82', '86', '92', '999'];
+  /// Union of all metal purity chips (validation + legacy forms).
+  static const purityOptions = <String>[
+    '99.9',
+    '95',
+    '92.5',
+    '92',
+    '91.6',
+    '90',
+    '84',
+    '82',
+    '80',
+    '75',
+    '58.5',
+    '999',
+    '86',
+  ];
 
+  /// Compose rail metals (design). `diamond` kept for older listings/edit.
   static const metalOptions = <String>[
     'gold',
     'silver',
@@ -64,17 +80,100 @@ class ProductSpec extends Equatable {
     'diamond',
   ];
 
+  static const composeMetalOptions = <String>[
+    'gold',
+    'silver',
+    'rose gold',
+    'platinum',
+  ];
+
   static const categoryOptions = <String>[
     'ring',
     'necklace',
     'bangle',
     'earrings',
+    'jhumka',
     'pendant',
-    'bracelet',
     'chain',
+    'haram',
+    'bracelet',
     'bridal_set',
     'other',
   ];
+
+  /// Nine compose-rail categories (design).
+  static const composeCategoryOptions = <String>[
+    'ring',
+    'necklace',
+    'bangle',
+    'earrings',
+    'jhumka',
+    'pendant',
+    'chain',
+    'haram',
+    'bracelet',
+  ];
+
+  static List<String> purityOptionsForMetal(String metal) {
+    switch (metal.trim().toLowerCase()) {
+      case 'silver':
+        return const ['92.5', '99.9', '80'];
+      case 'rose gold':
+        return const ['75', '58.5', '92'];
+      case 'platinum':
+        return const ['95', '90'];
+      case 'gold':
+      default:
+        return const ['92', '91.6', '84', '75', '99.9'];
+    }
+  }
+
+  static String defaultPurityForMetal(String metal) {
+    final opts = purityOptionsForMetal(metal);
+    return opts.isEmpty ? '92' : opts.first;
+  }
+
+  static String metalSymbol(String metal) {
+    switch (metal.trim().toLowerCase()) {
+      case 'silver':
+        return 'Ag';
+      case 'rose gold':
+        return 'RG';
+      case 'platinum':
+        return 'Pt';
+      case 'gold':
+      default:
+        return 'Au';
+    }
+  }
+
+  static String metalLabel(String metal) {
+    final m = metal.trim();
+    if (m.isEmpty) return 'Metal';
+    return m[0].toUpperCase() + m.substring(1);
+  }
+
+  /// Compact right-rail metal text (Gold / Silver / Rose / Plat).
+  static String metalRailLabel(String metal) {
+    switch (metal.trim().toLowerCase()) {
+      case 'silver':
+        return 'Silver';
+      case 'rose gold':
+        return 'Rose';
+      case 'platinum':
+        return 'Plat';
+      case 'gold':
+      default:
+        return 'Gold';
+    }
+  }
+
+  static String categoryShort(String category) {
+    final c = category.trim();
+    if (c.isEmpty) return '+';
+    if (c.length == 1) return c.toUpperCase();
+    return c.substring(0, 2).toUpperCase();
+  }
 
   final WeightMode weightMode;
   final double? grossMin;
@@ -273,6 +372,165 @@ class ProductSpec extends Equatable {
     return true;
   }
 
+  /// Flat product body for `POST …/products/batch` (jewel flow).
+  ///
+  /// When [isValid] is false (title-only / partial), omits weight/wastage/size
+  /// so the server publishes with `hasPrecisionTag: false`.
+  Map<String, dynamic> toBatchProductJson({
+    String? imageId,
+    List<String>? imageIds,
+    required String stockStatus,
+    int? mtoDays,
+    required bool isLocked,
+    List<String> tags = const [],
+    String? title,
+    String? thumbhash,
+    String? imageKey,
+    int? imageBytes,
+    int? imageWidth,
+    int? imageHeight,
+  }) {
+    final ids =
+        (imageIds ?? const <String>[])
+            .map((e) => e.trim())
+            .where((e) => e.isNotEmpty)
+            .toList();
+    final singleId = (imageId ?? '').trim();
+    final hash = (thumbhash ?? '').trim();
+    final key = (imageKey ?? '').trim();
+    final body = <String, dynamic>{
+      if (ids.length > 1)
+        'image_ids': ids
+      else if (ids.length == 1)
+        'image_id': ids.first
+      else if (singleId.isNotEmpty)
+        'image_id': singleId,
+      // Persist placeholder + size so list/detail don't return thumbhash:null /
+      // bytes:0 when the sign session metadata was not copied server-side.
+      if (hash.isNotEmpty) 'thumbhash': hash,
+      if (key.isNotEmpty) 'key': key,
+      if (imageBytes != null && imageBytes > 0) 'bytes': imageBytes,
+      if (imageWidth != null && imageWidth > 0) 'width': imageWidth,
+      if (imageHeight != null && imageHeight > 0) 'height': imageHeight,
+      'stock_status': stockStatus,
+      if (stockStatus == 'mto' && mtoDays != null) 'mto_days': mtoDays,
+      'is_locked': isLocked,
+      'tags': tags,
+      if ((title ?? '').trim().isNotEmpty) 'title': title!.trim(),
+    };
+
+    final metalRaw =
+        metalType.isEmpty ? '' : metalType.first.trim().toLowerCase();
+    if (metalRaw.isNotEmpty) {
+      body['metal'] = switch (metalRaw) {
+        'rose gold' || 'rosegold' => 'rose_gold',
+        _ => metalRaw.replaceAll(' ', '_'),
+      };
+    }
+    if (category.trim().isNotEmpty) {
+      body['category'] = category.trim();
+    }
+
+    // Partial / title-only: only send specs that are actually filled.
+    if (!isValid) {
+      if (purity != null && purity!.trim().isNotEmpty) {
+        body['purity'] = purity!.replaceAll('%', '').trim();
+        body['purity_mode'] =
+            purityMode == FieldMode.varied ? 'varied' : 'fixed';
+      }
+      if (grossMin != null && grossMin! > 0) {
+        body['gross_min'] = grossMin;
+        body['gross_max'] =
+            weightMode == WeightMode.range
+                ? (grossMax ?? grossMin)
+                : grossMin;
+      }
+      if (deductStone && reduction != null && reduction! > 0) {
+        body['stone_weight'] = reduction;
+      }
+      if (wastageMode == FieldMode.fixed && wastagePercent != null) {
+        body['wastage_pct'] = wastagePercent;
+        body['wastage_mode'] = 'fixed';
+      } else if (wastageMode == FieldMode.varied && wastagePercent != null) {
+        body['wastage_pct'] = wastagePercent;
+        body['wastage_mode'] = 'varied';
+      }
+      if (sizeMode == SizeMode.fixed && sizeValue != null) {
+        body['size_mode'] = 'fixed';
+        body['size_value'] = sizeValue;
+        body['size_unit'] = switch (sizeUnit) {
+          SizeUnit.mm => 'mm',
+          SizeUnit.cm => 'cm',
+          SizeUnit.inch => 'in',
+          SizeUnit.custom =>
+            customUnit.trim().isEmpty ? 'mm' : customUnit.trim().toLowerCase(),
+        };
+      } else if (sizeMode == SizeMode.free) {
+        body['size_mode'] = 'free';
+      } else if (sizeMode == SizeMode.varied) {
+        body['size_mode'] = 'varied';
+      }
+      return body;
+    }
+
+    final purityValue = (purity ?? '92').replaceAll('%', '').trim();
+    final stone =
+        deductStone && reduction != null && reduction! > 0 ? reduction : null;
+    final sizeUnitApi = switch (sizeUnit) {
+      SizeUnit.mm => 'mm',
+      SizeUnit.cm => 'cm',
+      SizeUnit.inch => 'in',
+      SizeUnit.custom =>
+        customUnit.trim().isEmpty ? 'mm' : customUnit.trim().toLowerCase(),
+    };
+    body.addAll({
+      if (!body.containsKey('metal')) 'metal': 'gold',
+      'purity': purityValue,
+      'purity_mode': purityMode == FieldMode.varied ? 'varied' : 'fixed',
+      'gross_min': grossMin ?? 0,
+      'gross_max':
+          weightMode == WeightMode.range
+              ? (grossMax ?? grossMin ?? 0)
+              : (grossMin ?? 0),
+      'stone_weight': stone,
+      'wastage_pct': wastageMode == FieldMode.fixed ? (wastagePercent ?? 0) : 0,
+      'wastage_mode': wastageMode == FieldMode.varied ? 'varied' : 'fixed',
+      'size_mode': sizeMode == SizeMode.fixed ? 'fixed' : 'free',
+      'size_value': sizeMode == SizeMode.fixed ? sizeValue : null,
+      'size_unit': sizeMode == SizeMode.fixed ? sizeUnitApi : null,
+    });
+    return body;
+  }
+
+  /// Minimal title-only product row (no weight/purity/size).
+  static Map<String, dynamic> titleOnlyBatchProductJson({
+    required String imageId,
+    required String stockStatus,
+    int? mtoDays,
+    required bool isLocked,
+    List<String> tags = const [],
+    String? title,
+    String? thumbhash,
+    String? imageKey,
+    int? imageBytes,
+    int? imageWidth,
+    int? imageHeight,
+  }) {
+    return const ProductSpec().toBatchProductJson(
+      imageId: imageId,
+      stockStatus: stockStatus,
+      mtoDays: mtoDays,
+      isLocked: isLocked,
+      tags: tags,
+      title: title,
+      thumbhash: thumbhash,
+      imageKey: imageKey,
+      imageBytes: imageBytes,
+      imageWidth: imageWidth,
+      imageHeight: imageHeight,
+    );
+  }
+
   /// Catalog multipart / JSON `specifications` payload.
   Map<String, dynamic> toApiJson() {
     final weight =
@@ -324,6 +582,82 @@ class ProductSpec extends Equatable {
       'metalType': metalType,
       'category': category.trim(),
     };
+  }
+
+  /// Flat CatalogProduct fields (`metal`, `gross_min`, `wastage_pct`, …).
+  factory ProductSpec.fromCatalogProductMap(Map<String, dynamic>? json) {
+    if (json == null || json.isEmpty) return const ProductSpec();
+
+    final metalRaw = (json['metal'] as String?)?.trim().toLowerCase() ?? '';
+    final metal = switch (metalRaw) {
+      'rose_gold' || 'rosegold' => 'rose gold',
+      '' => 'gold',
+      _ => metalRaw.replaceAll('_', ' '),
+    };
+    final purityRaw =
+        (json['purity'] as String?)?.replaceAll('%', '').trim() ?? '';
+    final grossMin = (json['gross_min'] as num?)?.toDouble();
+    final grossMax =
+        (json['gross_max'] as num?)?.toDouble() ?? grossMin;
+    final wastage = (json['wastage_pct'] as num?)?.toDouble();
+    final stone = (json['stone_weight'] as num?)?.toDouble();
+    final sizeModeRaw =
+        (json['size_mode'] as String?)?.trim().toLowerCase() ?? 'free';
+    final sizeValue = (json['size_value'] as num?)?.toDouble();
+    final unitRaw =
+        (json['size_unit'] as String?)?.trim().toLowerCase() ?? 'mm';
+    final SizeUnit sizeUnit;
+    final String customUnit;
+    switch (unitRaw) {
+      case 'cm':
+        sizeUnit = SizeUnit.cm;
+        customUnit = '';
+      case 'inch' || 'in':
+        sizeUnit = SizeUnit.inch;
+        customUnit = '';
+      case 'mm':
+        sizeUnit = SizeUnit.mm;
+        customUnit = '';
+      default:
+        sizeUnit = SizeUnit.custom;
+        customUnit = unitRaw;
+    }
+    final SizeMode sizeMode;
+    if (sizeModeRaw == 'fixed' || sizeModeRaw == 'standard') {
+      sizeMode = SizeMode.fixed;
+    } else if (sizeModeRaw == 'varied') {
+      sizeMode = SizeMode.varied;
+    } else {
+      sizeMode = SizeMode.free;
+    }
+    final category = (json['category'] as String?)?.trim() ?? '';
+    final isRange =
+        grossMin != null &&
+        grossMax != null &&
+        (grossMax - grossMin).abs() > 0.0001;
+
+    return ProductSpec(
+      weightMode: isRange ? WeightMode.range : WeightMode.fixed,
+      grossMin: grossMin,
+      grossMax: grossMax,
+      deductStone: stone != null && stone > 0,
+      reduction: stone,
+      purityMode: FieldMode.fixed,
+      purity:
+          purityOptions.contains(purityRaw)
+              ? purityRaw
+              : (purityRaw.isEmpty ? '92' : purityRaw),
+      // Null wastage on jewel products → Varied so chrome / isValid still work
+      // (Fine weight stays hidden until a numeric wastage exists).
+      wastageMode: wastage != null ? FieldMode.fixed : FieldMode.varied,
+      wastagePercent: wastage,
+      sizeMode: sizeMode,
+      sizeValue: sizeValue,
+      sizeUnit: sizeUnit,
+      customUnit: customUnit,
+      metalType: [metal],
+      category: category,
+    );
   }
 
   factory ProductSpec.fromApiJson(Map<String, dynamic>? json) {

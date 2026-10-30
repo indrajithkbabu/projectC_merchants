@@ -77,6 +77,25 @@ Common picks:
 ## Navigation and Transitions
 - Route setup must go through `lib/navigation/route_initializer.dart`.
 - Shared transition style uses `CupertinoPageRoute` for smooth iOS-like push/pop behavior.
+- Immersive photo open from store profile Single/Gallery (and channel Gallery)
+  uses `TelegramPhotoPageRoute` when args include `photoSourceRect` + `photoPath`.
+  Flyer uses a photo-aspect flight rect (cover over the cell → contain on
+  screen) with a clip that expands from the cell — works for any photo size.
+  Scrim dims the grid; close is the reverse. Other entry points keep
+  `CupertinoPageRoute`.
+- Store profile Discover header uses Telegram floating capsules
+  (`StoreProfileTelegramHeader`): frosted back / identity / actions pills
+  (`AppColors.appBar` translucent), DP + name + followers, add|import + search
+  (owner/visitor gated) — not a solid full-width app bar.
+- Catalog image lists (Discover / channel / gallery / collection browse) are
+  edge-to-edge (no decorative list top/bottom pad); content scrolls under the
+  status bar and home indicator. Soft cool edge washes use shared
+  `CatalogImageEdgeFades` from `lib/helper/widgets/`.
+- Discover header → `store_channel_route` uses `StoreChannelRevealRoute`
+  (fade + soft upward expand from the header). Do not use Cupertino sideways
+  push for this handoff. Channel pinned bar is transparent frosted glass when
+  collapsed (content visible through); count row is Products / Followers /
+  Following; store-link card has copy + WhatsApp share.
 - Add new routes centrally in:
   - `lib/navigation/routes.dart`
   - `lib/navigation/route_initializer.dart`
@@ -92,7 +111,7 @@ Common picks:
   - Own store profile: inbox badge → `store_import_requests_route` (accept / reject incoming; outgoing waits on source)
   - Own-store shell: My store gear → `settings_route` (Appearance, View products, screenshots, logout/delete, **Account privacy**, **Import requests**). Profile tab (no-store only) still hosts Create store.
   - Stores home (own store): notification icon → `activity_route`. Store profile (pushed) is Discover-only for owner and visitor (no owner bottom nav). Shell Wishlist + My store tabs; product-details like snack **View** → shell Wishlist via `ShellNav` (quiet refresh).
-  - From another store profile (only if viewer has own store): `store_import_select_route` -> pending -> approved (catalog import requests)
+  - From another store profile (only if viewer has own store): long-press photos → Import opens Quick upload prefilled (`quick_import_flow`, local session until the import API is wired). Toolbar download still uses `store_import_select_route` -> pending -> approved.
   - `country_picker_route` is opened from phone screen.
 
 ## Floating bottom navigation
@@ -101,11 +120,16 @@ Common picks:
   - **No own store:** Stores · Contacts · Settings · Profile
   - **Own store:** Stores · Contacts · Wishlist (heart) · My store — Settings moves under My store toolbar gear (`settings_route`). Wishlist + My store reuse the same widgets/logic as store-profile owner tabs.
 - Own-store shell hosts a long-lived `StoreProfileBloc` (cache-first + prefetch) so My store does not cold-shimmer on every visit.
-- Content must reserve space with `FloatingBottomNavBar.reservedHeight`; shell uses `extendBodyBehindBottom: true`.
+- Content must reserve space with `FloatingBottomNavBar.reservedHeight` inside
+  scrollables/empty states (not outer tab padding that leaves a blank band);
+  shell uses `extendBodyBehindBottom: true`.
+- Shell system back: non-Stores tab → Stores; two backs on Stores exits the app
+  (see `main_shell/FEATURE_CONVENTIONS.md`). Nested routes above the shell pop first.
 - Prefer quiet backend refresh (no blocking loaders) and pull-to-refresh. Do not remount Wishlist on tab re-select (keeps grid state; pull-to-refresh still available).
 - Shell home titles (Stores / Contacts / Wishlist) use shared `ShellTabTitleBar`
   (40px row, 22pt, `statusBar + 8` top) so IndexedStack tab switches keep the
-  title locked in place with no vertical jump.
+  title locked in place with no vertical jump. Trailing actions (bell / ⋮ /
+  collapsed wishlist search) stay right-aligned.
 - Own-store Wishlist is prefetched (`WishlistPrefetcher`) after auth `/me` +
   home warm — shell Wishlist tab must not shimmer on first open.
 
@@ -123,13 +147,23 @@ Common picks:
     Cancel — keep for any remaining chooser surfaces; add-product add-more
     uses `ProductGalleryPicker(includeCamera: true)` instead)
 - Add-product gallery multi-select: `ProductGalleryPicker` in
-  `lib/helper/product_gallery_picker.dart` (`drag_select_grid_view` for tap +
-  hold/slide; albums dropdown; request photo permission before presenting the
-  sheet; optional `includeCamera` → live Camera preview cell (`camera`
-  package, 2×3) beside a 2×3 gallery block; tap Camera closes sheet then
-  in-app full-screen capture with the same `camera` package. Used for
-  store-profile Add products and add-more from photo preview on
-  `add_product_group_route`).
+  `lib/helper/product_gallery_picker.dart` (Telegram attach-media bottomsheet:
+  lightweight [PopupRoute] with dimmed barrier, slide-up, rounded sheet, drag
+  handle, tap-outside dismiss — same look as [showModalBottomSheet]; permission
+  + first page warm during open; progressive JPEG thumbs; live camera stays on
+  while scrolling (stable Texture child under Transform via AnimatedBuilder —
+  grid does not rebuild on scroll); camera cell uses a clipped ImageFilter
+  frosted blur placeholder until live preview binds; DPR-sized JPEG thumbs
+  with stable asset keys;
+  selection order map + count ValueNotifier; cacheExtent ~240; count badge
+  toggles/deselects; photo body selects, or opens compose on an already-
+  selected photo via `initialIndex`; hold-and-slide via path-patched
+  `packages/drag_select_grid_view`; albums dropdown meta loads on open;
+  optional `includeCamera` → live Camera preview cell (`camera` package, 2×3)
+  beside a 2×3 gallery block; tap Camera closes sheet then in-app full-screen
+  capture. Store-profile Add products uses `confirmAsSend: true` (green send +
+  count) then `add_product_compose_route` before `add_product_group_route`.
+  Add-more from group preview keeps Done confirm.)
 
 Do not duplicate these widgets inside feature folders.
 
@@ -146,11 +180,20 @@ Do not duplicate these widgets inside feature folders.
 - **OTP scope:** Indian mobile numbers only (`+91`, 10 digits starting 6–9). Country picker stays available for UX but selecting another country shows a snackbar; API may return `UNSUPPORTED_PHONE_COUNTRY`.
 - **OTP behavior:** Catalog API SMS OTP; retain `challengeId`; resend cooldown from API (typically 60s). No hardcoded demo code. Android auto-reads via SMS User Consent (`otp_autofill` / `OtpSmsAutofill`) then auto-verifies; manual entry still available.
 - **API base:** Flavor `baseUrl` includes `/v1/catalog`. Networking lives under `lib/webservice/` + `lib/resources/endpoints.dart`.
-- **Collection create:** Direct-to-S3 two-phase upload — on-device JPEG compress
-  (max edge 2560) + ThumbHash, staging `POST /stores/:id/uploads/presign`, PUT
-  compressed bytes to S3 (retry/renew), then JSON `POST /stores/:id/collections`
-  with `photos` + `clientRequestId` / `Idempotency-Key`. Legacy multipart remains
-  as a fallback path only.
+- **Collection / product create:** Direct-to-R2 two-phase upload — on-device
+  WebP compress (JPEG prefix SOF+EXIF probe, EXIF-aware max edge 1080,
+  quality 85, prepare×3, `compressWithFile`) + ThumbHash from a native
+  ~100px preview of the compressed master (full-master `compute` fallback),
+  `POST /uploads/sign`
+  (store aliases), PUT compressed bytes to Cloudflare R2 `presignedUrl`, then
+  JSON `POST …/products/batch` with `image_id` + metadata (+ Idempotency-Key).
+  Legacy multipart / collections create remains a fallback only.
+- **Responsive image render:** `CatalogResponsiveImage` / `StoreProduct.urlForRole`
+  — Group mosaics → `thumbnailUrl`; Single → `detailUrl`; Media + Gallery
+  (profile / channel / `store_gallery`) pinch 2…9 cols: 6–9 → `thumbnailUrl`,
+  2–5 → `detailUrl`; tap / product-details pinch → master `url`.
+  Prod media host is `…/v1/catalog/media/…` (with `cdn-cgi/image/…` variants).
+  ThumbHash is the instant placeholder. Debug: `CatalogMediaDBG`.
 - **Country picker package:** `country_picker` (English country names, searchable list).
 - **Font family:** Inter everywhere via `AppTheme` + `AppTextStyles`.
 - **Main horizontal spacing:** 15 via `AppPadding.horizontal`.

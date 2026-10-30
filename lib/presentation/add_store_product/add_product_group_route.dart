@@ -5,21 +5,44 @@ import 'package:project_c/bloc/bulk_upload/bulk_upload_bloc.dart';
 import 'package:project_c/di/service_locator.dart';
 import 'package:project_c/helper/app_padding.dart';
 import 'package:project_c/helper/colors.dart';
+import 'package:project_c/helper/jewel_upload_qa.dart';
 import 'package:project_c/helper/text_styles.dart';
 import 'package:project_c/helper/widgets/app_back_button.dart';
 import 'package:project_c/helper/widgets/primary_button.dart';
 import 'package:project_c/helper/widgets/screen_wrapper.dart';
 import 'package:project_c/models/bulk_upload.dart';
+import 'package:project_c/models/catalog/catalog_product_models.dart';
 import 'package:project_c/models/pending_product_upload.dart';
 import 'package:project_c/navigation/routes.dart';
 import 'package:project_c/presentation/add_store_product/add_store_product_widgets/bulk_photos_ios_preview.dart';
 import 'package:project_c/presentation/add_store_product/add_store_product_widgets/product_form_widgets.dart';
 import 'package:project_c/presentation/add_store_product/add_store_product_widgets/product_spec_form.dart';
+import 'package:project_c/presentation/add_store_product/compose_product_draft.dart';
+import 'package:project_c/presentation/add_store_product/leave_create_product_flow.dart';
 import 'package:project_c/services/product_upload_coordinator.dart';
 import 'package:project_c/session/catalog_session.dart';
 
 class AddProductGroupRoute extends StatefulWidget {
-  const AddProductGroupRoute({super.key});
+  const AddProductGroupRoute({
+    super.key,
+    this.composeOverlay = false,
+    this.composeSpec,
+    this.composeStockStatus = '',
+    this.composeMtoDays,
+    this.composeIsLocked = false,
+    this.composeApplyToAll = true,
+    this.composeDrafts = const [],
+  });
+
+  /// When true, details were filled on compose — skip the form and continue
+  /// (title-only publish or open preview) using the same API gates.
+  final bool composeOverlay;
+  final ProductSpec? composeSpec;
+  final String composeStockStatus;
+  final int? composeMtoDays;
+  final bool composeIsLocked;
+  final bool composeApplyToAll;
+  final List<ComposePhotoDraft> composeDrafts;
 
   @override
   State<AddProductGroupRoute> createState() => _AddProductGroupRouteState();
@@ -35,6 +58,7 @@ class _AddProductGroupRouteState extends State<AddProductGroupRoute> {
 
   /// Optional description field — collapsed behind a + until expanded.
   bool _showDescription = false;
+  bool _composeHandoffStarted = false;
 
   @override
   void initState() {
@@ -44,7 +68,16 @@ class _AddProductGroupRouteState extends State<AddProductGroupRoute> {
     _descriptionController = TextEditingController(text: state.description);
     _tagController = TextEditingController(text: state.tagDraft);
     _showDescription = state.description.trim().isNotEmpty;
-    _detailsDraft = state.groupSpec.isValid ? state.groupSpec : null;
+    _detailsDraft =
+        widget.composeSpec ??
+        (state.groupSpec.isValid ? state.groupSpec : null);
+    if (widget.composeOverlay) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted || _composeHandoffStarted) return;
+        _composeHandoffStarted = true;
+        _onPrimaryPressed(context.read<BulkUploadBloc>().state);
+      });
+    }
   }
 
   @override
@@ -74,16 +107,53 @@ class _AddProductGroupRouteState extends State<AddProductGroupRoute> {
     });
   }
 
+  CatalogStockStatus get _composeStock {
+    switch (widget.composeStockStatus) {
+      case 'outOfStock':
+        return CatalogStockStatus.outOfStock;
+      case 'mto':
+        return CatalogStockStatus.mto;
+      case 'inStock':
+      default:
+        return CatalogStockStatus.inStock;
+    }
+  }
+
   Future<void> _openPreview() async {
     final bloc = context.read<BulkUploadBloc>();
+    final drafts = widget.composeDrafts;
+    final photoRows =
+        drafts.isEmpty
+            ? const <TitleOnlyPhotoRow>[]
+            : [
+              for (final d in drafts)
+                TitleOnlyPhotoRow(
+                  spec: d.spec,
+                  tags: d.tags,
+                  stockStatus: d.stockStatus.catalog,
+                  mtoDays: d.mtoDays,
+                  isLocked: d.isLocked,
+                ),
+            ];
     final result = await Navigator.of(context).pushNamed(
       Routes.addProductGroupPreviewRoute,
-      arguments: <String, Object?>{'bloc': bloc},
+      arguments: <String, Object?>{
+        'bloc': bloc,
+        'stockStatus': _composeStock.apiValue,
+        'mtoDays': widget.composeMtoDays,
+        'isLocked': widget.composeIsLocked,
+        'photoRows': photoRows,
+      },
     );
     if (!mounted) return;
 
     if (result is Map) {
       Navigator.of(context).pop(Map<String, Object?>.from(result));
+      return;
+    }
+    // Background upload started on preview — leave from here (single leave).
+    if (result == kCreateProductBackgroundUpload) {
+      leaveCreateProductFlow(context);
       return;
     }
     if (bloc.state.isPublished || bloc.state.publishedProduct != null) {
@@ -92,6 +162,11 @@ class _AddProductGroupRouteState extends State<AddProductGroupRoute> {
     }
     if (result == 'close_flow') {
       _popToStoreWithPublished(bloc);
+      return;
+    }
+    // Compose already collected details — back from preview leaves the flow.
+    if (widget.composeOverlay) {
+      Navigator.of(context).pop();
     }
   }
 
@@ -111,7 +186,9 @@ class _AddProductGroupRouteState extends State<AddProductGroupRoute> {
   }
 
   void _leaveForBackgroundUpload() {
-    Navigator.of(context).pop(<String, Object?>{'uploading': true});
+    // Prefer returning to Discover store profile (pending shimmer). A single
+    // pop can leave the user on shell home when profile is not the parent.
+    leaveCreateProductFlow(context);
   }
 
   String? _resolveStoreId(BulkUploadState state) {
@@ -124,11 +201,32 @@ class _AddProductGroupRouteState extends State<AddProductGroupRoute> {
       _detailsDraft != null && _detailsDraft!.isValid;
 
   void _onPrimaryPressed(BulkUploadState state) {
-    if (_detailsValid) {
-      final spec = _detailsDraft;
-      if (spec == null || !spec.isValid) return;
-      // Same as former group-details Apply → opens preview for precise/edit/delete.
-      context.read<BulkUploadBloc>().add(BulkUploadApplyGroupSpec(spec));
+    final drafts = widget.composeDrafts;
+    final anyDraftValid = drafts.any((d) => d.spec.isValid);
+
+    if (_detailsValid || (widget.composeOverlay && anyDraftValid)) {
+      final spec =
+          (_detailsDraft != null && _detailsDraft!.isValid)
+              ? _detailsDraft!
+              : drafts.map((d) => d.spec).firstWhere(
+                (s) => s.isValid,
+                orElse: () => widget.composeSpec ?? state.groupSpec,
+              );
+      if (!spec.isValid) return;
+
+      // This-photo: keep per-item specs; All / single: apply shared group spec.
+      if (widget.composeOverlay &&
+          !widget.composeApplyToAll &&
+          drafts.length == state.items.length) {
+        context.read<BulkUploadBloc>().add(
+          BulkUploadSeedComposeItems(
+            groupSpec: spec,
+            itemSpecs: [for (final d in drafts) d.spec],
+          ),
+        );
+      } else {
+        context.read<BulkUploadBloc>().add(BulkUploadApplyGroupSpec(spec));
+      }
       return;
     }
 
@@ -142,7 +240,28 @@ class _AddProductGroupRouteState extends State<AddProductGroupRoute> {
       return;
     }
 
+    final photoRows =
+        drafts.isEmpty
+            ? const <TitleOnlyPhotoRow>[]
+            : [
+              for (final d in drafts)
+                TitleOnlyPhotoRow(
+                  spec: d.spec,
+                  tags: d.tags,
+                  stockStatus: d.stockStatus.catalog,
+                  mtoDays: d.mtoDays,
+                  isLocked: d.isLocked,
+                ),
+            ];
+
     // Fire-and-forget title-only upload → store profile shows shimmer.
+    JewelUploadQa.step(
+      'UI publish → startTitleOnly',
+      detail:
+          'store=$storeId photos=${state.items.length} '
+          'photoRows=${photoRows.length} stock=${_composeStock.apiValue} '
+          'locked=${widget.composeIsLocked}',
+    );
     ServiceLocator.get<ProductUploadCoordinator>().startTitleOnly(
       TitleOnlyUploadRequest(
         storeId: storeId,
@@ -150,6 +269,13 @@ class _AddProductGroupRouteState extends State<AddProductGroupRoute> {
         imagePaths: [for (final item in state.items) item.imagePath],
         tags: state.tags,
         description: state.description,
+        composeSpec:
+            widget.composeSpec ??
+            (_detailsDraft ?? state.groupSpec),
+        photoRows: photoRows,
+        stockStatus: _composeStock,
+        mtoDays: widget.composeMtoDays,
+        isLocked: widget.composeIsLocked,
       ),
     );
     _leaveForBackgroundUpload();
@@ -202,9 +328,19 @@ class _AddProductGroupRouteState extends State<AddProductGroupRoute> {
         ),
       ],
       child: ScreenWrapper(
-        backgroundColor: AppColors.background,
+        backgroundColor:
+            widget.composeOverlay ? Colors.black : AppColors.background,
         child: BlocBuilder<BulkUploadBloc, BulkUploadState>(
           builder: (context, state) {
+            if (widget.composeOverlay) {
+              return const Center(
+                child: SizedBox(
+                  width: 28,
+                  height: 28,
+                  child: CircularProgressIndicator(strokeWidth: 2.4),
+                ),
+              );
+            }
             final canSubmit = state.canContinue;
 
             return Column(

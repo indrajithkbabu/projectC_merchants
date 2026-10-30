@@ -9,6 +9,8 @@ import 'package:cached_network_image/cached_network_image.dart';
 import 'package:fast_thumbhash/fast_thumbhash.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_cache_manager/flutter_cache_manager.dart';
+import 'package:project_c/helper/catalog_media_debug.dart';
+import 'package:project_c/helper/catalog_responsive_image.dart';
 import 'package:project_c/helper/colors.dart';
 
 /// File-based image cache (JSON index) — avoids sqflite / MissingPluginException
@@ -42,6 +44,9 @@ class CatalogImageCache {
   /// Local file path for disk-warm URLs (FileImage — sync paint on reopen).
   static final Map<String, String> _filePaths = <String, String>{};
 
+  /// Decode keys (`url@cacheWidth`) already resolved into [ImageCache] this session.
+  static final Set<String> _decodedKeys = <String>{};
+
   /// In-flight disk fetches (dedupe concurrent warms).
   static final Map<String, Future<void>> _diskInFlight = {};
 
@@ -50,6 +55,10 @@ class CatalogImageCache {
 
   /// True when [url] was downloaded/cached on disk this session.
   static bool isDiskWarm(String url) => _diskReady.contains(url.trim());
+
+  /// True when [url] was decoded at [cacheWidth] (warm or successful paint).
+  static bool isDecoded(String url, int cacheWidth) =>
+      _decodedKeys.contains('${url.trim()}@$cacheWidth');
 
   /// Local path when [url] is on disk (null if not probed/warmed yet).
   static String? diskPath(String url) => _filePaths[url.trim()];
@@ -64,10 +73,36 @@ class CatalogImageCache {
     }
   }
 
+  /// Mark [url] as decoded at [cacheWidth] so remounts skip placeholder flash.
+  static void markDecoded(String url, int cacheWidth) {
+    final value = url.trim();
+    if (value.startsWith('http://') || value.startsWith('https://')) {
+      _decodedKeys.add('$value@$cacheWidth');
+    }
+  }
+
+  /// How many Media-grid tiles to decode-warm for ~[screens] of a [columns]
+  /// grid. Capped so [ImageCache] is not thrashed on dense 9-col layouts.
+  static int mediaGridWarmCount({
+    required int columns,
+    double screens = 1.75,
+  }) {
+    final cols = columns.clamp(2, 9);
+    final view = _primaryView;
+    if (view == null) return (cols * 12 * screens).round().clamp(36, 96);
+    final dpr = view.devicePixelRatio;
+    final screenW = view.physicalSize.width / dpr;
+    final screenH = view.physicalSize.height / dpr;
+    final cell = (screenW / cols).clamp(1.0, screenW);
+    final rows = (screenH / cell).ceil() + 3;
+    return (cols * rows * screens).round().clamp(36, 96);
+  }
+
   /// Drops disk + memory image cache (logout / delete account).
   static Future<void> clearAll() async {
     _diskReady.clear();
     _filePaths.clear();
+    _decodedKeys.clear();
     _diskInFlight.clear();
     _decodeInFlight.clear();
     try {
@@ -86,6 +121,15 @@ class CatalogImageCache {
     return ((screenW / 2) * dpr).round().clamp(1, 4096);
   }
 
+  /// ~¾-screen decode for Media zoom-in / Single view (`detailUrl` tier).
+  static int detailCacheWidth() {
+    final view = _primaryView;
+    if (view == null) return 1080;
+    final dpr = view.devicePixelRatio;
+    final screenW = view.physicalSize.width / dpr;
+    return ((screenW * 0.75) * dpr).round().clamp(1, 4096);
+  }
+
   /// Full-screen decode width for heroes / product details.
   static int fullCacheWidth() {
     final view = _primaryView;
@@ -93,6 +137,15 @@ class CatalogImageCache {
     final dpr = view.devicePixelRatio;
     final screenW = view.physicalSize.width / dpr;
     return (screenW * dpr).round().clamp(1, 4096);
+  }
+
+  /// Decode width matching [CatalogImageRole] so warm + paint share one key.
+  static int cacheWidthForRole(CatalogImageRole role) {
+    return switch (role) {
+      CatalogImageRole.grid => gridCacheWidth(),
+      CatalogImageRole.detail => detailCacheWidth(),
+      CatalogImageRole.zoom => fullCacheWidth(),
+    };
   }
 
   /// Stable decode width for store/profile circular avatars (shared memory key).
@@ -206,6 +259,19 @@ class CatalogImageCache {
     await _decodeWarmAll(toDecode, cacheWidth: width, concurrency: concurrency);
   }
 
+  /// Raise [ImageCache] budget for catalog grids (dense Media / collage).
+  static void ensureCatalogMemoryBudget() {
+    final cache = PaintingBinding.instance.imageCache;
+    // ~150MB / 220 live entries — enough for a dense Media viewport without
+    // immediately evicting tiles that were just warmed for pinch zoom-out.
+    if (cache.maximumSizeBytes < 150 << 20) {
+      cache.maximumSizeBytes = 150 << 20;
+    }
+    if (cache.maximumSize < 220) {
+      cache.maximumSize = 220;
+    }
+  }
+
   /// Viewport warm for long grids: disk for [diskPad] around the window,
   /// decode only `[firstIndex … lastIndex]` (clamped). Scales to 1000s.
   static Future<void> warmWindow({
@@ -216,6 +282,7 @@ class CatalogImageCache {
     int? cacheWidth,
     int concurrency = 8,
   }) async {
+    ensureCatalogMemoryBudget();
     final normalized = [
       for (final u in urls)
         if (u.trim().startsWith('http')) u.trim(),
@@ -232,12 +299,20 @@ class CatalogImageCache {
     final diskSlice = normalized.sublist(diskStart, diskEnd);
     final decodeSlice = normalized.sublist(start, end + 1);
 
-    await _diskWarmAll(diskSlice, concurrency: concurrency);
     final width = cacheWidth ?? gridCacheWidth();
+    CatalogMediaDebug.warm(
+      'warmWindow urls=${normalized.length} decode=$start..$end '
+      '(${decodeSlice.length}) diskPad=${diskSlice.length} cacheW=$width '
+      'concurrency=$concurrency',
+    );
+    await _diskWarmAll(diskSlice, concurrency: concurrency);
     await _decodeWarmAll(
       decodeSlice,
       cacheWidth: width,
       concurrency: concurrency,
+    );
+    CatalogMediaDebug.warm(
+      'warmWindow done decode=${decodeSlice.length} cacheW=$width',
     );
   }
 
@@ -370,8 +445,11 @@ class CatalogImageCache {
         );
         final done = Completer<void>();
         late ImageStreamListener listener;
+        var decoded = false;
         listener = ImageStreamListener(
           (ImageInfo info, bool synchronousCall) {
+            decoded = true;
+            markDecoded(url, cacheWidth);
             stream.removeListener(listener);
             if (!done.isCompleted) done.complete();
           },
@@ -385,6 +463,7 @@ class CatalogImageCache {
           const Duration(seconds: 20),
           onTimeout: () {},
         );
+        if (decoded) markDiskWarm(url);
       } catch (_) {}
     }();
 
@@ -445,44 +524,137 @@ class ProductImagePaths {
     return FileImage(file);
   }
 
-  /// Decode a base64 ThumbHash into an [ImageProvider], or null on failure.
-  ///
-  /// Builds PNG bytes eagerly and validates them so a bad hash never reaches
-  /// [MemoryImage] (which would throw "Could not decompress image" async).
-  static ImageProvider? thumbhashProvider(String? thumbhashBase64) {
+  /// Parse a base64 ThumbHash, or null on failure.
+  static ThumbHash? parseThumbhash(String? thumbhashBase64) {
     final raw = thumbhashBase64?.trim() ?? '';
     if (raw.isEmpty) return null;
     try {
       final decoded = base64Decode(base64.normalize(raw));
       if (decoded.length < 5) return null;
-      final hash = ThumbHash.fromBytes(Uint8List.fromList(decoded));
-      final png = hash.toPngBytes();
-      if (png.length < 8 ||
-          png[0] != 0x89 ||
-          png[1] != 0x50 ||
-          png[2] != 0x4E ||
-          png[3] != 0x47) {
-        return null;
-      }
-      return MemoryImage(png);
+      return ThumbHash.fromBytes(Uint8List.fromList(decoded));
     } catch (_) {
       return null;
     }
   }
 
-  /// Average color from a ThumbHash — safe solid fill when PNG decode is risky.
+  /// Average color from a ThumbHash — safe solid fill when blur decode fails.
   static Color? thumbhashAverageColor(String? thumbhashBase64) {
-    final raw = thumbhashBase64?.trim() ?? '';
-    if (raw.isEmpty) return null;
     try {
-      final decoded = base64Decode(base64.normalize(raw));
-      if (decoded.length < 5) return null;
-      return ThumbHash.fromBytes(
-        Uint8List.fromList(decoded),
-      ).toAverageColor();
+      return parseThumbhash(thumbhashBase64)?.toAverageColor();
     } catch (_) {
       return null;
     }
+  }
+}
+
+/// InstantCatalogPhoto-style blur: RGBA → [RawImage] (no PNG [MemoryImage],
+/// which threw "Could not decompress image" for some hashes).
+class ThumbhashBlurPlaceholder extends StatefulWidget {
+  const ThumbhashBlurPlaceholder({
+    super.key,
+    required this.thumbhash,
+    this.fit = BoxFit.cover,
+    this.width,
+    this.height,
+    this.fallbackColor,
+  });
+
+  final String thumbhash;
+  final BoxFit fit;
+  final double? width;
+  final double? height;
+  final Color? fallbackColor;
+
+  @override
+  State<ThumbhashBlurPlaceholder> createState() =>
+      _ThumbhashBlurPlaceholderState();
+}
+
+class _ThumbhashBlurPlaceholderState extends State<ThumbhashBlurPlaceholder> {
+  ui.Image? _image;
+  Color? _fallback;
+
+  @override
+  void initState() {
+    super.initState();
+    _decode();
+  }
+
+  @override
+  void didUpdateWidget(covariant ThumbhashBlurPlaceholder oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.thumbhash != widget.thumbhash) {
+      _image?.dispose();
+      _image = null;
+      _fallback = null;
+      _decode();
+    }
+  }
+
+  @override
+  void dispose() {
+    _image?.dispose();
+    super.dispose();
+  }
+
+  Future<void> _decode() async {
+    final hash = ProductImagePaths.parseThumbhash(widget.thumbhash);
+    final average =
+        widget.fallbackColor ??
+        ProductImagePaths.thumbhashAverageColor(widget.thumbhash) ??
+        AppColors.surfaceSecondary;
+    if (hash == null) {
+      if (!mounted) return;
+      setState(() => _fallback = average);
+      return;
+    }
+    try {
+      final rgba = hash.toRGBA();
+      if (rgba.width <= 0 ||
+          rgba.height <= 0 ||
+          rgba.rgba.length != rgba.width * rgba.height * 4) {
+        if (!mounted) return;
+        setState(() => _fallback = average);
+        return;
+      }
+      final completer = Completer<ui.Image>();
+      ui.decodeImageFromPixels(
+        rgba.rgba,
+        rgba.width,
+        rgba.height,
+        ui.PixelFormat.rgba8888,
+        completer.complete,
+      );
+      final image = await completer.future;
+      if (!mounted) {
+        image.dispose();
+        return;
+      }
+      setState(() {
+        _image?.dispose();
+        _image = image;
+        _fallback = null;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _fallback = average);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final image = _image;
+    if (image != null) {
+      return RawImage(
+        image: image,
+        fit: widget.fit,
+        width: widget.width ?? double.infinity,
+        height: widget.height ?? double.infinity,
+      );
+    }
+    return ColoredBox(
+      color: _fallback ?? widget.fallbackColor ?? AppColors.surfaceSecondary,
+    );
   }
 }
 
@@ -498,6 +670,9 @@ class ProductMediaImage extends StatelessWidget {
     this.width,
     this.height,
     this.thumbhash,
+    this.thumbhashOnly = false,
+    this.decodeCacheWidth,
+    this.filterQuality = FilterQuality.low,
     this.error,
   });
 
@@ -506,6 +681,17 @@ class ProductMediaImage extends StatelessWidget {
   final double? width;
   final double? height;
   final String? thumbhash;
+
+  /// Ignored (kept for call-site compatibility). Frontend guide InstantCatalogPhoto
+  /// always loads the CDN URL; ThumbHash is placeholder only.
+  final bool thumbhashOnly;
+
+  /// When set (e.g. [CatalogImageCache.fullCacheWidth] on product-details zoom),
+  /// skip layout-derived width so warm + paint + pinch rebuilds share one key.
+  final int? decodeCacheWidth;
+
+  /// Use [FilterQuality.medium] for pinch-zoom heroes; grids stay [low].
+  final FilterQuality filterQuality;
   final Widget? error;
 
   /// Logical px for [ResizeImage] — must match [CatalogImageCache.gridCacheWidth]
@@ -527,58 +713,38 @@ class ProductMediaImage extends StatelessWidget {
     return screenW / 2;
   }
 
+  Widget _placeholder() {
+    final hash = thumbhash?.trim() ?? '';
+    final average = ProductImagePaths.thumbhashAverageColor(thumbhash);
+    if (hash.isNotEmpty) {
+      return ThumbhashBlurPlaceholder(
+        thumbhash: hash,
+        fit: fit,
+        width: width ?? double.infinity,
+        height: height ?? double.infinity,
+        fallbackColor: average ?? AppColors.surfaceSecondary,
+      );
+    }
+    return ColoredBox(color: average ?? AppColors.surfaceSecondary);
+  }
+
   @override
   Widget build(BuildContext context) {
     final value = path.trim();
     if (value.isEmpty) return error ?? _broken();
 
     if (ProductImagePaths.isNetwork(value)) {
+      // InstantCatalogPhoto: always fetch CDN URL; ThumbHash is placeholder only.
+      final fixedWidth = decodeCacheWidth;
+      if (fixedWidth != null && fixedWidth > 0) {
+        return _networkImage(value, cacheWidth: fixedWidth);
+      }
       return LayoutBuilder(
         builder: (context, constraints) {
           final dpr = MediaQuery.devicePixelRatioOf(context);
           final logical = _decodeLogicalWidth(context, constraints, width);
           final cacheWidth = (logical * dpr).round().clamp(1, 4096);
-          final provider = CatalogImageCache.providerFor(
-            value,
-            cacheWidth: cacheWidth,
-          );
-          final diskWarm = CatalogImageCache.isDiskWarm(value);
-          final placeholder = ProductImagePaths.thumbhashProvider(thumbhash);
-          final averageColor = ProductImagePaths.thumbhashAverageColor(
-            thumbhash,
-          );
-          return Image(
-            key: ValueKey('$value@$cacheWidth'),
-            image: provider,
-            fit: fit,
-            width: width ?? double.infinity,
-            height: height ?? double.infinity,
-            gaplessPlayback: true,
-            frameBuilder: (context, child, frame, wasSynchronouslyLoaded) {
-              if (wasSynchronouslyLoaded || frame != null) {
-                if (frame != null) CatalogImageCache.markDiskWarm(value);
-                return child;
-              }
-              // Disk already has bytes — no placeholder flash while decoding.
-              if (diskWarm) return child;
-              if (placeholder != null) {
-                return Image(
-                  image: placeholder,
-                  fit: fit,
-                  width: width ?? double.infinity,
-                  height: height ?? double.infinity,
-                  errorBuilder:
-                      (_, __, ___) => ColoredBox(
-                        color: averageColor ?? AppColors.surfaceSecondary,
-                      ),
-                );
-              }
-              return ColoredBox(
-                color: averageColor ?? AppColors.surfaceSecondary,
-              );
-            },
-            errorBuilder: (_, __, ___) => error ?? _broken(),
-          );
+          return _networkImage(value, cacheWidth: cacheWidth);
         },
       );
     }
@@ -593,6 +759,66 @@ class ProductMediaImage extends StatelessWidget {
       height: height ?? double.infinity,
       gaplessPlayback: true,
       errorBuilder: (_, __, ___) => error ?? _broken(),
+    );
+  }
+
+  Widget _networkImage(String value, {required int cacheWidth}) {
+    final provider = CatalogImageCache.providerFor(
+      value,
+      cacheWidth: cacheWidth,
+    );
+    final alreadyDecoded = CatalogImageCache.isDecoded(value, cacheWidth);
+    final hash = thumbhash;
+    return Image(
+      key: ValueKey('$value@$cacheWidth'),
+      image: provider,
+      fit: fit,
+      width: width ?? double.infinity,
+      height: height ?? double.infinity,
+      gaplessPlayback: true,
+      filterQuality: filterQuality,
+      frameBuilder: (context, child, frame, wasSynchronouslyLoaded) {
+        if (wasSynchronouslyLoaded || frame != null) {
+          CatalogImageCache.markDecoded(value, cacheWidth);
+          if (frame != null) CatalogImageCache.markDiskWarm(value);
+          CatalogMediaDebug.paintOnce(
+            url: value,
+            cacheWidth: cacheWidth,
+            outcome: wasSynchronouslyLoaded ? 'syncFrame' : 'asyncFrame',
+            thumbhash: hash,
+            alreadyDecoded: alreadyDecoded,
+          );
+          return child;
+        }
+        // Prior decode at this width — avoid thumbhash flash on grid remount
+        // (channel Media pinch / NestedScrollView rebuilds).
+        if (alreadyDecoded) {
+          CatalogMediaDebug.paintOnce(
+            url: value,
+            cacheWidth: cacheWidth,
+            outcome: 'reuseDecoded',
+            thumbhash: hash,
+            alreadyDecoded: true,
+          );
+          return child;
+        }
+        // InstantCatalogPhoto: keep blur until the CDN frame arrives.
+        CatalogMediaDebug.paintOnce(
+          url: value,
+          cacheWidth: cacheWidth,
+          outcome: 'placeholder',
+          thumbhash: hash,
+          alreadyDecoded: false,
+        );
+        return _placeholder();
+      },
+      errorBuilder: (_, __, ___) {
+        CatalogMediaDebug.gap(
+          'paint ERROR ${CatalogMediaDebug.shortUrl(value)} '
+          'cacheW=$cacheWidth ${CatalogMediaDebug.thumbhashFlag(hash)}',
+        );
+        return error ?? _broken();
+      },
     );
   }
 

@@ -4,14 +4,17 @@ import 'package:project_c/bloc/bulk_upload/bulk_upload_bloc.dart';
 import 'package:project_c/di/service_locator.dart';
 import 'package:project_c/helper/app_log.dart';
 import 'package:project_c/helper/app_padding.dart';
+import 'package:project_c/helper/catalog_responsive_image.dart';
 import 'package:project_c/helper/catalog_subgroup_name.dart';
 import 'package:project_c/helper/catalog_ui_mapper.dart';
 import 'package:project_c/helper/colors.dart';
 import 'package:project_c/helper/product_image.dart';
 import 'package:project_c/helper/text_styles.dart';
 import 'package:project_c/helper/widgets/app_back_button.dart';
+import 'package:project_c/helper/widgets/catalog_image_edge_fades.dart';
 import 'package:project_c/helper/widgets/screen_wrapper.dart';
 import 'package:project_c/models/bulk_upload.dart';
+import 'package:project_c/models/catalog/catalog_product_models.dart';
 import 'package:project_c/models/catalog/collection_models.dart';
 import 'package:project_c/models/catalog/collection_specifications.dart';
 import 'package:project_c/models/product_details_feed_item.dart';
@@ -33,6 +36,7 @@ class CollectionBrowseRoute extends StatefulWidget {
     this.pageTitle,
     this.forcedSingles,
     this.seedDetail,
+    this.seedProducts,
   });
 
   final StoreProduct product;
@@ -50,6 +54,10 @@ class CollectionBrowseRoute extends StatefulWidget {
   /// Shared detail for imageIndex resolution when [forcedSingles] is set.
   final CollectionDetail? seedDetail;
 
+  /// Optional jewel-flow product tiles (from profile enrich / caller).
+  /// When null, browse may derive a seed from [product] collage arrays.
+  final List<CatalogProduct>? seedProducts;
+
   @override
   State<CollectionBrowseRoute> createState() => _CollectionBrowseRouteState();
 }
@@ -60,6 +68,7 @@ class _CollectionBrowseRouteState extends State<CollectionBrowseRoute> {
 
   CollectionDetail? _detail;
   StoreProduct? _product;
+  List<CatalogProduct> _collectionProducts = const [];
   bool _loading = true;
   bool _busy = false;
   bool _selectMode = false;
@@ -72,6 +81,8 @@ class _CollectionBrowseRouteState extends State<CollectionBrowseRoute> {
   bool get _canManage =>
       widget.isOwnStore && widget.forcedSingles == null && _detail != null;
 
+  bool get _hasProductTiles => _collectionProducts.isNotEmpty;
+
   @override
   void initState() {
     super.initState();
@@ -81,9 +92,31 @@ class _CollectionBrowseRouteState extends State<CollectionBrowseRoute> {
       _loading = false;
       _logTiles(_tiles());
       _warmMedia();
-    } else {
-      _load();
+      return;
     }
+
+    final seed = _resolveSeedProducts();
+    if (seed.isNotEmpty) {
+      _collectionProducts = seed;
+      _product = widget.product;
+      _loading = false;
+      _logTiles(_tiles());
+      _warmMedia();
+      // Refresh in background: full product page + own-store detail for manage.
+      // ignore: unawaited_futures
+      _load(quiet: true);
+      return;
+    }
+    _load();
+  }
+
+  List<CatalogProduct> _resolveSeedProducts() {
+    final explicit = widget.seedProducts;
+    if (explicit != null && explicit.isNotEmpty) return List.of(explicit);
+    return CatalogUiMapper.seedProductsFromCollectionCard(
+      widget.product,
+      storeId: widget.storeId,
+    );
   }
 
   void _warmMedia() {
@@ -108,6 +141,7 @@ class _CollectionBrowseRouteState extends State<CollectionBrowseRoute> {
   }
 
   Future<void> _load({bool quiet = false}) async {
+    final hadSeed = _collectionProducts.isNotEmpty;
     if (!quiet) {
       setState(() {
         _loading = true;
@@ -116,28 +150,120 @@ class _CollectionBrowseRouteState extends State<CollectionBrowseRoute> {
     }
     try {
       final repository = ServiceLocator.get<CollectionRepository>();
-      final detail = await repository.fetchCollection(
-        storeId: widget.storeId,
-        listingId: widget.product.id,
-      );
+      final collectionId = widget.product.id;
+
+      // Jewel tiles: products?collectionId=. Detail only for own-store manage
+      // (Select/Edit/Ungroup) or as fallback when products are empty. Parallel
+      // when both are needed so Group → browse is not blocked twice.
+      final wantDetail = widget.isOwnStore || !hadSeed;
+
+      List<CatalogProduct> products = const [];
+      CollectionDetail? detail;
+
+      if (wantDetail) {
+        final productsFuture = repository
+            .listStoreProducts(
+              storeId: widget.storeId,
+              collectionId: collectionId,
+              limit: 100,
+            )
+            .then((page) => page.items)
+            .catchError((Object e) {
+              AppLog.d(
+                _logTag,
+                'products?collectionId failed — detail fallback err=$e',
+              );
+              return const <CatalogProduct>[];
+            });
+        final detailFuture = repository
+            .fetchCollection(
+              storeId: widget.storeId,
+              listingId: collectionId,
+            )
+            .then<CollectionDetail?>((d) => d)
+            .catchError((Object e) {
+              AppLog.d(
+                _logTag,
+                'fetchCollection failed err=$e',
+              );
+              return null;
+            });
+        final results = await Future.wait<Object?>([
+          productsFuture,
+          detailFuture,
+        ]);
+        products = results[0] as List<CatalogProduct>;
+        detail = results[1] as CollectionDetail?;
+        if (products.isEmpty && detail == null && !hadSeed) {
+          throw StateError('collection browse load empty');
+        }
+      } else {
+        try {
+          final page = await repository.listStoreProducts(
+            storeId: widget.storeId,
+            collectionId: collectionId,
+            limit: 100,
+          );
+          products = page.items;
+        } catch (e) {
+          if (!hadSeed) rethrow;
+          AppLog.d(
+            _logTag,
+            'quiet products refresh failed — keeping seed err=$e',
+          );
+        }
+      }
+
       if (!mounted) return;
+      // Quiet refresh: keep seed tiles if the network page is empty.
+      // When seeded, merge API products into the collage (cover-first) order so
+      // tiles do not jump after the background refresh lands.
+      final List<CatalogProduct> nextProducts;
+      if (products.isEmpty) {
+        nextProducts = quiet && hadSeed ? _collectionProducts : products;
+      } else if (quiet && hadSeed) {
+        nextProducts = _mergeProductsPreserveOrder(
+          seed: _collectionProducts,
+          fresh: products,
+        );
+      } else {
+        nextProducts = products;
+      }
+      final nextDetail = detail ?? (quiet ? _detail : null);
+      final orderUnchanged =
+          quiet &&
+          hadSeed &&
+          _sameProductIdOrder(_collectionProducts, nextProducts);
       setState(() {
-        _detail = detail;
-        _product = CatalogUiMapper.detailToProduct(detail);
+        _detail = nextDetail;
+        _collectionProducts = nextProducts;
+        _product =
+            nextDetail != null
+                ? CatalogUiMapper.detailToProduct(nextDetail)
+                : widget.product;
         _loading = false;
         _busy = false;
-        _selectedPhotoIds.clear();
-        // Keep select mode if user was managing; drop empty selection.
+        if (!quiet) _selectedPhotoIds.clear();
       });
-      _warmMedia();
+      // Skip re-warm when tile order/ids are unchanged (avoids decode churn).
+      if (!orderUnchanged || !quiet) {
+        _warmMedia();
+      }
       AppLog.d(
         _logTag,
-        'loaded listing=${detail.id} photos=${detail.photoCount} '
-        'main=${detail.mainGroupPhotos.length} subs=${detail.subGroups.length}',
+        'loaded listing=$collectionId products=${nextProducts.length} '
+        'photos=${nextDetail?.photoCount ?? 0} quiet=$quiet '
+        'seeded=$hadSeed detail=${nextDetail != null} '
+        'orderKept=$orderUnchanged',
       );
       _logTiles(_tiles());
     } catch (e) {
       if (!mounted) return;
+      if (quiet && hadSeed) {
+        AppLog.e(_logTag, 'quiet load failed — keeping seed', e);
+        setState(() => _busy = false);
+        return;
+      }
       AppLog.e(_logTag, 'load failed', e);
       setState(() {
         _loading = false;
@@ -145,6 +271,46 @@ class _CollectionBrowseRouteState extends State<CollectionBrowseRoute> {
         _error = CatalogErrorMapper.toUserMessage(e);
       });
     }
+  }
+
+  /// Keep collage / seed tile order; refresh fields from [fresh]; append new.
+  List<CatalogProduct> _mergeProductsPreserveOrder({
+    required List<CatalogProduct> seed,
+    required List<CatalogProduct> fresh,
+  }) {
+    if (seed.isEmpty) return fresh;
+    if (fresh.isEmpty) return seed;
+    final byId = <String, CatalogProduct>{
+      for (final p in fresh)
+        if (p.id.trim().isNotEmpty) p.id.trim(): p,
+    };
+    final out = <CatalogProduct>[];
+    final seen = <String>{};
+    for (final s in seed) {
+      final id = s.id.trim();
+      if (id.isEmpty) continue;
+      final updated = byId[id];
+      if (updated != null) {
+        out.add(updated);
+        seen.add(id);
+      }
+    }
+    for (final p in fresh) {
+      final id = p.id.trim();
+      if (id.isEmpty || seen.contains(id)) continue;
+      out.add(p);
+      seen.add(id);
+    }
+    return out;
+  }
+
+  bool _sameProductIdOrder(List<CatalogProduct> a, List<CatalogProduct> b) {
+    if (identical(a, b)) return true;
+    if (a.length != b.length) return false;
+    for (var i = 0; i < a.length; i++) {
+      if (a[i].id.trim() != b[i].id.trim()) return false;
+    }
+    return true;
   }
 
   Set<String> _precisePhotoKeys(CollectionDetail detail) {
@@ -205,6 +371,28 @@ class _CollectionBrowseRouteState extends State<CollectionBrowseRoute> {
             isPrecise: false,
           ),
       ];
+    }
+
+    // Jewel-flow: one tile per product from GET …/products?collectionId=.
+    if (_hasProductTiles) {
+      final tiles = <_BrowseTile>[];
+      for (var i = 0; i < _collectionProducts.length; i++) {
+        final product = _collectionProducts[i];
+        final photo = CatalogUiMapper.catalogProductToPhoto(product);
+        if (photo.url.trim().isEmpty) continue;
+        tiles.add(
+          _BrowseTile(
+            photo: photo,
+            sectionKey: 'main',
+            sectionTitle: collectionName,
+            label: '$collectionName ${tiles.length + 1}',
+            isPrecise: false,
+            importPending: product.importFlags.isImportPending,
+            importDeclined: product.importFlags.isImportDeclined,
+          ),
+        );
+      }
+      return tiles;
     }
 
     if (detail == null) return [];
@@ -332,24 +520,7 @@ class _CollectionBrowseRouteState extends State<CollectionBrowseRoute> {
     }
   }
 
-  static const _months = [
-    'Jan',
-    'Feb',
-    'Mar',
-    'Apr',
-    'May',
-    'Jun',
-    'Jul',
-    'Aug',
-    'Sep',
-    'Oct',
-    'Nov',
-    'Dec',
-  ];
-
-  String _dateLabel(DateTime date) {
-    return '${_months[date.month - 1]} ${date.day}';
-  }
+  String _dateLabel(DateTime date) => formatCatalogDayBucket(date);
 
   void _logTiles(List<_BrowseTile> tiles) {
     final precise = tiles.where((t) => t.isPrecise).length;
@@ -384,29 +555,75 @@ class _CollectionBrowseRouteState extends State<CollectionBrowseRoute> {
   }
 
   Future<void> _openPhoto(CatalogPhoto photo) async {
-    final product = _product ?? widget.product;
+    final collectionProduct = _product ?? widget.product;
     final tiles = _tiles();
-    final feed = <ProductDetailsFeedItem>[
-      for (final tile in tiles)
-        ProductDetailsFeedItem(
-          product: product,
-          imageIndex: _imageIndexFor(tile.photo),
-          path: tile.photo.url,
-        ),
-    ];
-    final tappedIndex = _imageIndexFor(photo);
-    var feedIndex = feed.indexWhere((e) => e.imageIndex == tappedIndex);
-    if (feedIndex < 0) {
-      feedIndex = feed.indexWhere(
-        (e) => e.path.trim() == photo.url.trim(),
-      );
-    }
-    if (feedIndex < 0) feedIndex = 0;
+    final List<ProductDetailsFeedItem> feed;
+    final StoreProduct openProduct;
+    final int tappedIndex;
+    var feedIndex = 0;
 
+    if (_hasProductTiles) {
+      final mapped = [
+        for (final p in _collectionProducts)
+          CatalogUiMapper.catalogProductToStoreProduct(p).copyWith(
+            collectionId:
+                p.collectionId.trim().isNotEmpty
+                    ? p.collectionId
+                    : collectionProduct.id,
+            canEdit: widget.isOwnStore || collectionProduct.canEdit,
+            canDelete: widget.isOwnStore || collectionProduct.canDelete,
+          ),
+      ];
+      feed = [
+        for (final p in mapped)
+          ProductDetailsFeedItem(
+            product: p,
+            imageIndex: 0,
+            path: p.primaryImagePath ?? '',
+          ),
+      ];
+      final photoId = photo.id?.trim() ?? '';
+      feedIndex = mapped.indexWhere((p) => p.id == photoId);
+      if (feedIndex < 0) {
+        feedIndex = feed.indexWhere(
+          (e) => e.path.trim() == photo.url.trim(),
+        );
+      }
+      if (feedIndex < 0) feedIndex = 0;
+      openProduct = mapped[feedIndex];
+      tappedIndex = 0;
+    } else {
+      feed = [
+        for (final tile in tiles)
+          ProductDetailsFeedItem(
+            product: collectionProduct,
+            imageIndex: _imageIndexFor(tile.photo),
+            path: tile.photo.url,
+          ),
+      ];
+      tappedIndex = _imageIndexFor(photo);
+      feedIndex = feed.indexWhere((e) => e.imageIndex == tappedIndex);
+      if (feedIndex < 0) {
+        feedIndex = feed.indexWhere(
+          (e) => e.path.trim() == photo.url.trim(),
+        );
+      }
+      if (feedIndex < 0) feedIndex = 0;
+      openProduct = collectionProduct;
+    }
+
+    // Decode tapped master at full width before details (matches zoom paint key).
+    // ignore: unawaited_futures
+    CatalogImageCache.precacheUrls(
+      [photo.url],
+      decode: true,
+      maxDecode: 1,
+      cacheWidth: CatalogImageCache.fullCacheWidth(),
+    );
     final result = await Navigator.of(context).pushNamed(
       Routes.productDetailsRoute,
       arguments: <String, Object?>{
-        'product': product,
+        'product': openProduct,
         'storeId': widget.storeId,
         'storeName': widget.storeName,
         'storeLink': widget.storeLink,
@@ -426,7 +643,10 @@ class _CollectionBrowseRouteState extends State<CollectionBrowseRoute> {
       }
       if (payload['updated'] == true) {
         if (widget.forcedSingles == null) {
-          await _load();
+          // Details always may pop updated (view/like counts use silent=true).
+          // Never flip the full-screen loader — keep tiles painted.
+          if (payload['silent'] == true) return;
+          await _load(quiet: true);
         } else if (payload.containsKey('id')) {
           setState(() {
             _product = StoreProduct.fromMap(payload);
@@ -435,6 +655,7 @@ class _CollectionBrowseRouteState extends State<CollectionBrowseRoute> {
       }
     }
   }
+
 
   void _toggleSelect(String photoId) {
     setState(() {
@@ -474,13 +695,9 @@ class _CollectionBrowseRouteState extends State<CollectionBrowseRoute> {
       bloc = BulkUploadBloc.fromCollectionDetail(
         detail: detail,
         storeId: widget.storeId,
+        initiallySelectedIds: selectedIds,
       );
-      final known = bloc.state.items.map((item) => item.id).toSet();
-      final validIds = [
-        for (final id in selectedIds)
-          if (known.contains(id)) id,
-      ];
-      if (validIds.isEmpty) {
+      if (bloc.state.selectedCount == 0) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text('Could not match the selected photos for editing.'),
@@ -489,13 +706,15 @@ class _CollectionBrowseRouteState extends State<CollectionBrowseRoute> {
         return;
       }
 
-      bloc.add(BulkUploadSelectionSet(validIds));
-
       final result = await Navigator.of(context).pushNamed(
         Routes.addProductGroupPreviewRoute,
         arguments: <String, Object?>{
           'bloc': bloc,
           'autoOpenEdit': true,
+          if (detail.stockStatus != null)
+            'stockStatus': detail.stockStatus!.apiValue,
+          if (detail.mtoDays != null) 'mtoDays': detail.mtoDays,
+          'isLocked': detail.isLocked,
         },
       );
       if (!mounted) return;
@@ -922,78 +1141,111 @@ class _CollectionBrowseRouteState extends State<CollectionBrowseRoute> {
                     ? 'Collection'
                     : widget.product.title));
 
+    final topPad = ScreenWrapper.statusBarTop(context);
+    const toolbarH = 56.0;
+    final selectSubtitleH =
+        (_selectMode && _canManage) ? 28.0 : 0.0;
+    final headerExtent = topPad + toolbarH + selectSubtitleH;
+
     return ScreenWrapper(
       backgroundColor: AppColors.background,
+      extendBodyBehindBottom: true,
       child: PopScope(
         canPop: false,
         onPopInvokedWithResult: (didPop, result) {
           if (didPop) return;
           _onBack();
         },
-        child: SafeArea(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Padding(
-                padding: AppPadding.screen(top: 8, bottom: 8),
-                child: Row(
-                  children: [
-                    AppBackButton(onPressed: _onBack),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Text(
-                        storeTitle,
-                        style: AppTextStyles.title(),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
+        child: Stack(
+          children: [
+            Positioned.fill(
+              child: _buildBody(topInset: headerExtent),
+            ),
+            const CatalogImageEdgeFades(),
+            Positioned(
+              top: 0,
+              left: 0,
+              right: 0,
+              child: Material(
+                color: Colors.transparent,
+                child: Padding(
+                  padding: EdgeInsets.only(top: topPad),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      SizedBox(
+                        height: toolbarH,
+                        child: Padding(
+                          padding: AppPadding.screenHorizontal,
+                          child: Row(
+                            children: [
+                              AppBackButton(onPressed: _onBack),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: Text(
+                                  storeTitle,
+                                  style: AppTextStyles.title(),
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ),
+                              if (_canManage &&
+                                  !_loading &&
+                                  _error == null) ...[
+                                if (_selectMode) ...[
+                                  _BrowseToolbarAction(
+                                    label: 'Edit',
+                                    enabled:
+                                        _selectedPhotoIds.isNotEmpty && !_busy,
+                                    onTap: _openEditSelected,
+                                  ),
+                                  _BrowseToolbarAction(
+                                    label: 'Ungroup',
+                                    enabled:
+                                        _selectedPhotoIds.isNotEmpty && !_busy,
+                                    onTap: _confirmUngroup,
+                                  ),
+                                  _BrowseToolbarAction(
+                                    label: 'Done',
+                                    enabled: !_busy,
+                                    onTap: () => _setSelectMode(false),
+                                  ),
+                                ] else
+                                  _BrowseToolbarAction(
+                                    label: 'Select',
+                                    enabled: !_busy,
+                                    onTap: () => _setSelectMode(true),
+                                  ),
+                              ],
+                            ],
+                          ),
+                        ),
                       ),
-                    ),
-                    if (_canManage && !_loading && _error == null) ...[
-                      if (_selectMode) ...[
-                        _BrowseToolbarAction(
-                          label: 'Edit',
-                          enabled: _selectedPhotoIds.isNotEmpty && !_busy,
-                          onTap: _openEditSelected,
-                        ),
-                        _BrowseToolbarAction(
-                          label: 'Ungroup',
-                          enabled: _selectedPhotoIds.isNotEmpty && !_busy,
-                          onTap: _confirmUngroup,
-                        ),
-                        _BrowseToolbarAction(
-                          label: 'Done',
-                          enabled: !_busy,
-                          onTap: () => _setSelectMode(false),
-                        ),
-                      ] else
-                        _BrowseToolbarAction(
-                          label: 'Select',
-                          enabled: !_busy,
-                          onTap: () => _setSelectMode(true),
+                      if (_selectMode && _canManage)
+                        Padding(
+                          padding: AppPadding.screen(
+                            bottom: 8,
+                          ),
+                          child: Text(
+                            _busy
+                                ? 'Working…'
+                                : '${_selectedPhotoIds.length} selected',
+                            style: AppTextStyles.caption(),
+                          ),
                         ),
                     ],
-                  ],
-                ),
-              ),
-              if (_selectMode && _canManage)
-                Padding(
-                  padding: AppPadding.screenHorizontal,
-                  child: Text(
-                    _busy
-                        ? 'Working…'
-                        : '${_selectedPhotoIds.length} selected',
-                    style: AppTextStyles.caption(),
                   ),
                 ),
-              Expanded(child: _buildBody()),
-            ],
-          ),
+              ),
+            ),
+          ],
         ),
       ),
     );
   }
 
-  Widget _buildBody() {
+  Widget _buildBody({required double topInset}) {
     if (_loading) {
       return Center(
         child: Text('Loading…', style: AppTextStyles.bodySecondary()),
@@ -1032,6 +1284,7 @@ class _CollectionBrowseRouteState extends State<CollectionBrowseRoute> {
       sections: sections,
       dateLabel: dateLabel,
       crossAxisCount: _crossAxisCount,
+      topInset: topInset,
       selectMode: _selectMode && _canManage,
       selectedIds: _selectedPhotoIds,
       onScaleStart: _onScaleStart,
@@ -1057,6 +1310,8 @@ class _BrowseTile {
     required this.label,
     required this.isPrecise,
     this.subGroupId,
+    this.importPending = false,
+    this.importDeclined = false,
   });
 
   final CatalogPhoto photo;
@@ -1065,6 +1320,12 @@ class _BrowseTile {
   final String label;
   final bool isPrecise;
   final String? subGroupId;
+
+  /// Destination copy awaiting source-owner approval.
+  final bool importPending;
+
+  /// Destination copy declined by source partner.
+  final bool importDeclined;
 }
 
 class _BrowseSection {
@@ -1118,6 +1379,7 @@ class _BrowseGalleryBody extends StatefulWidget {
     required this.onTap,
     required this.onScaleStart,
     required this.onScaleUpdate,
+    this.topInset = 0,
     this.selectMode = false,
     this.selectedIds = const {},
   });
@@ -1125,6 +1387,7 @@ class _BrowseGalleryBody extends StatefulWidget {
   final List<_BrowseSection> sections;
   final String dateLabel;
   final int crossAxisCount;
+  final double topInset;
   final ValueChanged<_BrowseTile> onTap;
   final GestureScaleStartCallback onScaleStart;
   final GestureScaleUpdateCallback onScaleUpdate;
@@ -1229,11 +1492,15 @@ class _BrowseGalleryBodyState extends State<_BrowseGalleryBody> {
           return false;
         },
         child: CustomScrollView(
-          physics: const BouncingScrollPhysics(),
+          physics: const BouncingScrollPhysics(
+            parent: AlwaysScrollableScrollPhysics(),
+          ),
           slivers: [
+            if (widget.topInset > 0)
+              SliverToBoxAdapter(child: SizedBox(height: widget.topInset)),
             SliverToBoxAdapter(
               child: Padding(
-                padding: AppPadding.screen(top: 14, bottom: 8),
+                padding: AppPadding.screen(top: 10, bottom: 8),
                 child: Text(
                   singleSection
                       ? '${widget.dateLabel}  |  ${widget.sections.first.title}'
@@ -1273,7 +1540,6 @@ class _BrowseGalleryBodyState extends State<_BrowseGalleryBody> {
                 }, childCount: widget.sections[i].tiles.length),
               ),
             ],
-            const SliverToBoxAdapter(child: SizedBox(height: 24)),
           ],
         ),
       ),
@@ -1303,7 +1569,43 @@ class _BrowseGalleryTile extends StatelessWidget {
         child: Stack(
           fit: StackFit.expand,
           children: [
-            ProductMediaImage(path: tile.photo.url),
+            ProductMediaImage(
+              path: CatalogResponsiveImage.resolve(
+                masterUrl: tile.photo.url,
+                thumbnailUrl: tile.photo.thumbnailUrl,
+                detailUrl: tile.photo.detailUrl,
+                role: CatalogImageRole.grid,
+              ),
+              thumbhash: tile.photo.thumbhash,
+            ),
+            if (tile.importDeclined || tile.importPending)
+              Positioned(
+                top: 6,
+                left: 6,
+                child: Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 6,
+                    vertical: 3,
+                  ),
+                  decoration: BoxDecoration(
+                    color:
+                        tile.importDeclined
+                            ? AppColors.error.withValues(alpha: 0.92)
+                            : AppColors.warning.withValues(alpha: 0.92),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Text(
+                    tile.importDeclined ? 'Declined' : 'Pending',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: AppTextStyles.caption(
+                      fontSize: 10,
+                      fontWeight: FontWeight.w700,
+                      color: Colors.white,
+                    ),
+                  ),
+                ),
+              ),
             if (tile.isPrecise)
               Positioned(
                 top: selectMode ? null : 6,

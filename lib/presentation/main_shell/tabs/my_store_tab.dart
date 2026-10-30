@@ -22,12 +22,19 @@ class MyStoreTab extends StatefulWidget {
   const MyStoreTab({super.key});
 
   @override
-  State<MyStoreTab> createState() => _MyStoreTabState();
+  State<MyStoreTab> createState() => MyStoreTabState();
 }
 
-class _MyStoreTabState extends State<MyStoreTab> {
+class MyStoreTabState extends State<MyStoreTab> {
   final Set<String> _selectedIds = {};
   bool _selectionMode = false;
+
+  /// Consumes shell system-back while multi-select is active.
+  bool consumeSystemBack() {
+    if (!_selectionMode) return false;
+    _exitSelection();
+    return true;
+  }
 
   void _exitSelection() {
     if (!_selectionMode && _selectedIds.isEmpty) return;
@@ -282,9 +289,10 @@ class _MyStoreTabState extends State<MyStoreTab> {
       },
     );
     if (!context.mounted) return;
-    context.read<StoreProfileBloc>().add(
-      const StoreProfileLoadImportRequestCount(),
-    );
+    // TODO(backend): re-enable with import-requests count when API is live.
+    // context.read<StoreProfileBloc>().add(
+    //   const StoreProfileLoadImportRequestCount(),
+    // );
   }
 
   void _openSettings(BuildContext context) {

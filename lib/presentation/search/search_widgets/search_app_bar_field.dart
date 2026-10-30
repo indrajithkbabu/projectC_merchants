@@ -12,6 +12,8 @@ class SearchAppBarField extends StatelessWidget {
     this.onChanged,
     this.onSubmitted,
     this.onClear,
+    this.onClose,
+    this.alwaysShowClose = false,
     this.showCancel = false,
     this.onCancel,
     this.readOnly = false,
@@ -26,6 +28,13 @@ class SearchAppBarField extends StatelessWidget {
   final ValueChanged<String>? onChanged;
   final ValueChanged<String>? onSubmitted;
   final VoidCallback? onClear;
+
+  /// Called when the trailing close is tapped while the field is empty
+  /// (e.g. dismiss keyboard / collapse wishlist search chrome).
+  final VoidCallback? onClose;
+
+  /// When true, always show the trailing close icon (not only when text ≠ ∅).
+  final bool alwaysShowClose;
   final bool showCancel;
   final VoidCallback? onCancel;
   final bool readOnly;
@@ -37,6 +46,8 @@ class SearchAppBarField extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final hasText = controller.text.isNotEmpty;
+    final showClose = alwaysShowClose || hasText;
     final field = Material(
       color: Colors.transparent,
       child: TextField(
@@ -60,11 +71,17 @@ class SearchAppBarField extends StatelessWidget {
             color: AppColors.textSecondary,
           ),
           suffixIcon:
-              controller.text.isEmpty
+              !showClose
                   ? null
                   : IconButton(
-                    tooltip: 'Clear',
-                    onPressed: onClear,
+                    tooltip: hasText ? 'Clear' : 'Close',
+                    onPressed: () {
+                      if (hasText) {
+                        onClear?.call();
+                      } else {
+                        (onClose ?? onClear)?.call();
+                      }
+                    },
                     icon: Icon(
                       Icons.close_rounded,
                       color: AppColors.textSecondary,

@@ -38,10 +38,12 @@ class StoreGalleryState extends Equatable {
     required this.sections,
     this.storeId,
     this.isOwnStore = false,
-    this.crossAxisCount = 5,
+    this.crossAxisCount = 4,
   });
 
-  static const int minColumns = 4;
+  /// Align with channel Media / profile Gallery pinch (2…9).
+  static const int minColumns = 2;
+  static const int maxColumns = 9;
 
   final List<StoreProduct> products;
   final String storeName;
@@ -99,24 +101,7 @@ class StoreGalleryState extends Equatable {
     ];
   }
 
-  static const _months = [
-    'Jan',
-    'Feb',
-    'Mar',
-    'Apr',
-    'May',
-    'Jun',
-    'Jul',
-    'Aug',
-    'Sep',
-    'Oct',
-    'Nov',
-    'Dec',
-  ];
-
-  static String _dateLabel(DateTime date) {
-    return '${_months[date.month - 1]} ${date.day}';
-  }
+  static String _dateLabel(DateTime date) => formatCatalogDayBucket(date);
 
   /// Flat photo order matching the gallery grid (day → product → images).
   List<ProductDetailsFeedItem> buildPhotoFeed() {

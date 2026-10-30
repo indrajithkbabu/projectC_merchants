@@ -75,19 +75,32 @@ class AddProductGalleryRoute extends StatelessWidget {
                         orElse: () => GalleryImageItem.placeholder(0),
                       ),
                     )
+                    .where((item) => !item.isPlaceholder)
                     .toList();
-            Navigator.of(context).pushNamed(
-              Routes.addProductGroupRoute,
-              arguments: <String, Object?>{
-                'selectedItems': selectedItems,
-                'storeId': state.storeId,
-              },
-            ).then((published) {
+            final paths = [
+              for (final item in selectedItems)
+                if (item.filePath != null && item.filePath!.trim().isNotEmpty)
+                  item.filePath!.trim(),
+            ];
+            if (paths.isEmpty) return;
+            () async {
+              final composed = await Navigator.of(context).pushNamed(
+                Routes.addProductComposeRoute,
+                arguments: <String, Object?>{
+                  'imagePaths': paths,
+                  'storeId': state.storeId,
+                },
+              );
+              if (!context.mounted || composed is! Map) return;
+              final published = await Navigator.of(context).pushNamed(
+                Routes.addProductGroupRoute,
+                arguments: Map<String, Object?>.from(composed),
+              );
               if (!context.mounted) return;
               if (published is Map) {
                 Navigator.of(context).pop(published);
               }
-            });
+            }();
           },
         ),
       ],

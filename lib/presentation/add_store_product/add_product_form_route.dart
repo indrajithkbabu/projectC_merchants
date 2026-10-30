@@ -7,6 +7,7 @@ import 'package:project_c/helper/colors.dart';
 import 'package:project_c/helper/product_image_cropper.dart';
 import 'package:project_c/helper/text_styles.dart';
 import 'package:project_c/helper/widgets/app_back_button.dart';
+import 'package:project_c/helper/widgets/catalog_partial_upload_bar.dart';
 import 'package:project_c/helper/widgets/primary_button.dart';
 import 'package:project_c/helper/widgets/screen_wrapper.dart';
 import 'package:project_c/presentation/add_store_product/add_store_product_widgets/product_form_widgets.dart';
@@ -532,18 +533,33 @@ class _AddProductFormRouteState extends State<AddProductFormRoute> {
                     ),
                   ),
                 ),
-                Padding(
-                  padding: AppPadding.screen(top: 8, bottom: 24),
-                  child: PrimaryButton(
-                    label: isEdit ? 'Save changes' : 'Publish to store',
-                    enabled: state.canPublish,
-                    isLoading: state.isPublishing,
-                    onPressed:
+                if (state.awaitingPartialUploadDecision)
+                  CatalogPartialUploadBar(
+                    successCount: state.pendingUploadSuccesses.length,
+                    failedCount: state.pendingUploadFailedPaths.length,
+                    isBusy: state.isPublishing,
+                    onPublishSuccesses:
                         () => context.read<AddStoreProductBloc>().add(
-                          const AddStoreProductPublishPressed(),
+                          const AddStoreProductProceedPartialUpload(),
                         ),
+                    onRetryFailed:
+                        () => context.read<AddStoreProductBloc>().add(
+                          const AddStoreProductRetryFailedUpload(),
+                        ),
+                  )
+                else
+                  Padding(
+                    padding: AppPadding.screen(top: 8, bottom: 24),
+                    child: PrimaryButton(
+                      label: isEdit ? 'Save changes' : 'Publish to store',
+                      enabled: state.canPublish,
+                      isLoading: state.isPublishing,
+                      onPressed:
+                          () => context.read<AddStoreProductBloc>().add(
+                            const AddStoreProductPublishPressed(),
+                          ),
+                    ),
                   ),
-                ),
               ],
             );
           },

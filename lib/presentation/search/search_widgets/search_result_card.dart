@@ -50,7 +50,10 @@ class SearchResultCard extends StatelessWidget {
                     ),
                   ),
                   if (hasImages)
-                    ProductImageCollage(imagePaths: paths)
+                    ProductImageCollage(
+                      imagePaths: paths,
+                      imageThumbhashes: product.imageThumbhashes,
+                    )
                   else
                     Center(
                       child: Icon(

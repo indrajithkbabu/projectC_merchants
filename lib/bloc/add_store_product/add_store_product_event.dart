@@ -129,6 +129,16 @@ class AddStoreProductPublishPressed extends AddStoreProductEvent {
   const AddStoreProductPublishPressed();
 }
 
+/// Scenario 3: commit only the photos that already uploaded to S3.
+class AddStoreProductProceedPartialUpload extends AddStoreProductEvent {
+  const AddStoreProductProceedPartialUpload();
+}
+
+/// Scenario 3: re-upload paths that failed after silent retries.
+class AddStoreProductRetryFailedUpload extends AddStoreProductEvent {
+  const AddStoreProductRetryFailedUpload();
+}
+
 class AddStoreProductClearPublished extends AddStoreProductEvent {
   const AddStoreProductClearPublished();
 }

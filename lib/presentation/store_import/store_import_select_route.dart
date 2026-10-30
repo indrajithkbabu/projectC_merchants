@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:project_c/bloc/store_import/store_import_bloc.dart';
 import 'package:project_c/helper/app_padding.dart';
+import 'package:project_c/helper/catalog_responsive_image.dart';
 import 'package:project_c/helper/colors.dart';
 import 'package:project_c/helper/product_image.dart';
 import 'package:project_c/helper/text_styles.dart';
@@ -256,7 +257,11 @@ class _ImportProductTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final imagePath = product.primaryImagePath;
+    final master = product.primaryImagePath;
+    final imagePath =
+        master != null && ProductImagePaths.isDisplayable(master)
+            ? product.urlForRole(0, CatalogImageRole.grid)
+            : null;
     final hasImage =
         imagePath != null && ProductImagePaths.isDisplayable(imagePath);
     final gradient = switch (product.toneIndex % 4) {

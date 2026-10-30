@@ -63,13 +63,18 @@ class StoreProfileProductUpdated extends StoreProfileEvent {
   const StoreProfileProductUpdated(
     this.product, {
     this.replacedListingId,
+    this.silent = false,
   });
 
   final StoreProduct product;
   final String? replacedListingId;
 
+  /// When true: no "Product updated." snackbar and no quiet collections refresh
+  /// (used for wishlist like-count bumps).
+  final bool silent;
+
   @override
-  List<Object?> get props => [product, replacedListingId];
+  List<Object?> get props => [product, replacedListingId, silent];
 }
 
 class StoreProfileProductDeleted extends StoreProfileEvent {
@@ -92,12 +97,18 @@ class StoreProfileProductsDeleted extends StoreProfileEvent {
 }
 
 class StoreProfileProductsReplaced extends StoreProfileEvent {
-  const StoreProfileProductsReplaced(this.products);
+  const StoreProfileProductsReplaced(
+    this.products, {
+    this.silent = false,
+  });
 
   final List<StoreProduct> products;
 
+  /// When true: no quiet collections refresh (keeps API like counts).
+  final bool silent;
+
   @override
-  List<Object?> get props => [products];
+  List<Object?> get props => [products, silent];
 }
 
 class StoreProfileProductsImported extends StoreProfileEvent {

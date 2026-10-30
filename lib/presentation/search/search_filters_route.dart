@@ -47,6 +47,7 @@ enum _FilterSection {
   weight,
   size,
   wastage,
+  stock,
   store,
   location,
 }
@@ -60,17 +61,27 @@ class _SearchFiltersRouteState extends State<SearchFiltersRoute> {
   _FilterSection _section = _FilterSection.sort;
 
   bool get _inStore => widget.scope == SearchFilterScope.inStore;
+  bool get _wishlist => widget.scope == SearchFilterScope.wishlist;
 
-  List<_FilterSection> get _sections => [
-    _FilterSection.sort,
-    _FilterSection.category,
-    _FilterSection.metal,
-    _FilterSection.purity,
-    _FilterSection.weight,
-    _FilterSection.size,
-    _FilterSection.wastage,
-    if (!_inStore) ...[_FilterSection.store, _FilterSection.location],
-  ];
+  List<_FilterSection> get _sections =>
+      _wishlist
+          ? const [
+            _FilterSection.sort,
+            _FilterSection.metal,
+            _FilterSection.purity,
+            _FilterSection.store,
+          ]
+          : [
+            _FilterSection.sort,
+            _FilterSection.category,
+            _FilterSection.metal,
+            _FilterSection.purity,
+            _FilterSection.weight,
+            _FilterSection.size,
+            _FilterSection.wastage,
+            _FilterSection.stock,
+            if (!_inStore) ...[_FilterSection.store, _FilterSection.location],
+          ];
 
   @override
   void initState() {
@@ -94,6 +105,7 @@ class _SearchFiltersRouteState extends State<SearchFiltersRoute> {
     _FilterSection.weight => 'Weight',
     _FilterSection.size => 'Size',
     _FilterSection.wastage => 'Wastage',
+    _FilterSection.stock => 'Stock',
     _FilterSection.store => 'Store',
     _FilterSection.location => 'Location',
   };
@@ -107,6 +119,7 @@ class _SearchFiltersRouteState extends State<SearchFiltersRoute> {
     _FilterSection.weight => _selection.weights.length,
     _FilterSection.size => _selection.sizes.length,
     _FilterSection.wastage => _selection.wastages.length,
+    _FilterSection.stock => _selection.stockStatuses.length,
     _FilterSection.store => _selection.stores.length,
     _FilterSection.location => _selection.locations.length,
   };
@@ -283,6 +296,11 @@ class _SearchFiltersRouteState extends State<SearchFiltersRoute> {
       _FilterSection.weight => _catalog.weights,
       _FilterSection.size => _catalog.sizes,
       _FilterSection.wastage => _catalog.wastages,
+      _FilterSection.stock => const [
+        SearchFilterOption(value: 'in', label: 'In stock', count: 1),
+        SearchFilterOption(value: 'out', label: 'Out of stock', count: 1),
+        SearchFilterOption(value: 'mto', label: 'Made to order', count: 1),
+      ],
       _FilterSection.store => _catalog.stores,
       _FilterSection.location => _catalog.locations,
       _FilterSection.sort => const <SearchFilterOption>[],
@@ -294,6 +312,7 @@ class _SearchFiltersRouteState extends State<SearchFiltersRoute> {
       _FilterSection.weight => _selection.weights,
       _FilterSection.size => _selection.sizes,
       _FilterSection.wastage => _selection.wastages,
+      _FilterSection.stock => _selection.stockStatuses,
       _FilterSection.store => _selection.stores,
       _FilterSection.location => _selection.locations,
       _FilterSection.sort => const <String>{},
@@ -368,6 +387,13 @@ class _SearchFiltersRouteState extends State<SearchFiltersRoute> {
                           _selection.wastages,
                           option.value,
                           (n) => _selection = _selection.copyWith(wastages: n),
+                        );
+                      case _FilterSection.stock:
+                        _toggle(
+                          _selection.stockStatuses,
+                          option.value,
+                          (n) =>
+                              _selection = _selection.copyWith(stockStatuses: n),
                         );
                       case _FilterSection.store:
                         _toggle(

@@ -56,30 +56,32 @@ class _ProfileTabState extends State<ProfileTab> {
   }
 
   Future<void> _loadImportRequestCount(String storeId) async {
-    final id = storeId.trim();
-    if (id.isEmpty) return;
-    try {
-      final repo = ServiceLocator.get<ImportRepository>();
-      var pending = 0;
-      String? cursor;
-      do {
-        final page = await repo.listStoreRequests(
-          storeId: id,
-          direction: 'incoming',
-          limit: 50,
-          cursor: cursor,
-        );
-        pending += page.items.where((r) => r.isPending).length;
-        cursor = page.nextCursor;
-      } while (cursor != null && cursor.isNotEmpty);
-      if (!mounted) return;
-      setState(() {
-        _pendingImportCount = pending;
-        _countStoreId = id;
-      });
-    } catch (e) {
-      AppLog.e(_tag, 'Import request count failed', e);
-    }
+    // TODO(backend): re-enable when GET …/stores/:id/import-requests is live.
+    // Endpoint currently 404s after store create / home.
+    // final id = storeId.trim();
+    // if (id.isEmpty) return;
+    // try {
+    //   final repo = ServiceLocator.get<ImportRepository>();
+    //   var pending = 0;
+    //   String? cursor;
+    //   do {
+    //     final page = await repo.listStoreRequests(
+    //       storeId: id,
+    //       direction: 'incoming',
+    //       limit: 50,
+    //       cursor: cursor,
+    //     );
+    //     pending += page.items.where((r) => r.isPending).length;
+    //     cursor = page.nextCursor;
+    //   } while (cursor != null && cursor.isNotEmpty);
+    //   if (!mounted) return;
+    //   setState(() {
+    //     _pendingImportCount = pending;
+    //     _countStoreId = id;
+    //   });
+    // } catch (e) {
+    //   AppLog.e(_tag, 'Import request count failed', e);
+    // }
   }
 
   Future<void> _openImportRequests({

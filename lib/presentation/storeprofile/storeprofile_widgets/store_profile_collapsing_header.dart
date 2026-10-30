@@ -1,351 +1,374 @@
+import 'dart:ui';
+
 import 'package:flutter/material.dart';
 import 'package:project_c/bloc/storeprofile/store_profile_bloc.dart';
+import 'package:project_c/models/store_privacy_mode.dart';
 import 'package:project_c/helper/app_padding.dart';
 import 'package:project_c/helper/colors.dart';
 import 'package:project_c/helper/text_styles.dart';
-import 'package:project_c/helper/widgets/app_back_button.dart';
-import 'package:project_c/models/store_privacy_mode.dart';
-import 'package:project_c/presentation/storeprofile/storeprofile_widgets/store_profile_actions_row.dart';
+import 'package:project_c/helper/widgets/appearance_scope.dart';
 import 'package:project_c/presentation/storeprofile/storeprofile_widgets/store_profile_header_card.dart';
+import 'package:project_c/presentation/storeprofile/storeprofile_widgets/visitor_photo_selection_chrome.dart';
 
-/// Pinned store profile header (listing-first compact bar).
+/// Telegram floating-capsule store profile header (pinned overlay).
 ///
-/// Tap the compact identity opens the Telegram-style store channel screen
-/// ([onOpenStoreInfo]). Expand progress [expandT] is kept for layout math but
-/// Discover/visitor no longer expand in-place.
-class StoreProfileCollapsingHeaderDelegate
-    extends SliverPersistentHeaderDelegate {
-  StoreProfileCollapsingHeaderDelegate({
+/// Three frosted pills over the product grid (not a full-width bar):
+/// back circle · identity (DP + name + followers) · actions.
+/// Actions replace phone/menu with add/import + search (owner/visitor gated).
+class StoreProfileTelegramHeader extends StatelessWidget {
+  const StoreProfileTelegramHeader({
+    super.key,
     required this.state,
-    required this.expandT,
+    required this.topPad,
     required this.onOpenStoreInfo,
     required this.onBack,
     required this.onAddProducts,
     required this.onImport,
-    required this.onSearch,
-    required this.onAddMembers,
-    required this.onCopyStoreLink,
-    this.onManageImages,
-    this.onFollow,
-    this.onUnfollow,
-    this.onToggleNotify,
-    this.onFollowersTap,
-    this.onFollowingTap,
+    required     this.onSearch,
+    this.selectedPhotoCount,
+    this.showSelectionImport = true,
   });
 
   final StoreProfileState state;
-
-  /// Kept at 0 for Discover/visitor (no in-place expand).
-  final double expandT;
+  final double topPad;
   final VoidCallback onOpenStoreInfo;
   final VoidCallback onBack;
   final VoidCallback onAddProducts;
   final VoidCallback onImport;
   final VoidCallback onSearch;
-  final VoidCallback? onAddMembers;
-  final VoidCallback onCopyStoreLink;
-  final VoidCallback? onManageImages;
-  final VoidCallback? onFollow;
-  final VoidCallback? onUnfollow;
-  final VoidCallback? onToggleNotify;
-  final VoidCallback? onFollowersTap;
-  final VoidCallback? onFollowingTap;
 
-  static const _toolbarHeight = 52.0;
-  static const _expandedTopGap = 12.0;
-  /// Fits logo, counts, name, link, privacy pill, members/products row.
-  static const _ownHeaderCardHeightBase = 286.0;
-  /// Compact Add member row (text + light vertical padding).
-  static const _headerCardAddMemberExtra = 30.0;
-  static const _actionsGap = 18.0;
-  static const _actionsHeight = 48.0;
-  static const _toolbarBottomGap = 10.0;
-  static const _compactLogo = 36.0;
+  /// When non-null, visitor photo multi-select chrome: close icon, forward
+  /// (import) action, subtitle shows followers · N selected.
+  final int? selectedPhotoCount;
 
-  /// Visitor: logo, counts, name, subtitle, pill, follow bar.
-  double get _visitorHeaderCardHeight {
-    var h = 300.0;
-    if (state.showVisitorFollowChrome) {
-      h += state.followStatus.isFollowing ? 88.0 : 56.0;
-    }
-    return h;
-  }
+  /// False for accounts with no store of their own (Wishlist only).
+  final bool showSelectionImport;
 
-  double get _headerCardHeight {
-    if (!state.isOwnStore) return _visitorHeaderCardHeight;
-    return _ownHeaderCardHeightBase +
-        (onAddMembers != null ? _headerCardAddMemberExtra : 0);
-  }
+  static const double _pillHeight = 42;
+  static const double _rowPad = 6;
+  static const double toolbarHeight = _pillHeight + _rowPad * 2;
 
-  double get _collapsedExtent => _toolbarHeight + _toolbarBottomGap;
+  /// Total overlay height (status bar + toolbar) for scroll top inset.
+  static double extentFor(double topPad) => topPad + toolbarHeight;
 
-  double get _expandedExtra {
-    final actionsExtra =
-        state.showActionsRow ? (_actionsGap + _actionsHeight) : 0.0;
-    return _expandedTopGap + _headerCardHeight + actionsExtra;
-  }
+  bool get _photoSelecting => selectedPhotoCount != null;
 
-  /// Own store → blue add. Other store (when importable) → blue download.
+  /// Own store → add. Other store when importable → download.
   bool get _showPrimaryAction =>
-      state.isOwnStore || (!state.isOwnStore && state.canImport);
+      !_photoSelecting &&
+      (state.isOwnStore || (!state.isOwnStore && state.canImport));
+
+  bool get _showSearch => !_photoSelecting && !state.isContentLocked;
+
+  /// Browse only — selection mode puts forward inside the identity pill.
+  bool get _showActionsPill =>
+      !_photoSelecting && (_showPrimaryAction || _showSearch);
 
   @override
-  double get minExtent => _collapsedExtent + (_expandedExtra * expandT);
+  Widget build(BuildContext context) {
+    // Rebuild on Day/Night flip (AppColors is static otherwise).
+    AppearanceScope.maybeOf(context);
 
-  @override
-  double get maxExtent => minExtent;
+    // Glassy capsules: translucent fill + backdrop blur; Day keeps a soft border.
+    final night = AppColors.isNight;
+    final pillColor =
+        night
+            ? AppColors.appBar.withValues(alpha: 0.42)
+            : AppColors.surface.withValues(alpha: 0.55);
+    final pillBorder =
+        night
+            ? AppColors.border.withValues(alpha: 0.45)
+            : AppColors.border.withValues(alpha: 0.7);
+    final onPill = night ? AppColors.textOnPrimary : AppColors.textPrimary;
+    final onPillMuted =
+        night
+            ? AppColors.textOnPrimary.withValues(alpha: 0.72)
+            : AppColors.textSecondary;
 
-  @override
-  Widget build(
-    BuildContext context,
-    double shrinkOffset,
-    bool overlapsContent,
-  ) {
-    final t = expandT.clamp(0.0, 1.0);
-    // Stagger fades so compact identity and expanded details cross smoothly.
-    final compactT = Curves.easeInOutCubic.transform(
-      (1.0 - ((t - 0.08) / 0.55).clamp(0.0, 1.0)),
-    );
-    final expandedT = Curves.easeOutCubic.transform(
-      ((t - 0.05) / 0.7).clamp(0.0, 1.0),
-    );
-    final actionsT = Curves.easeOutCubic.transform(
-      ((t - 0.35) / 0.65).clamp(0.0, 1.0),
-    );
-    final detailsHeight = _expandedExtra * t;
-    final showExpanded = detailsHeight > 0.5 && expandedT > 0.02;
-
-    return ColoredBox(
-      color: AppColors.background,
-      child: Stack(
-        clipBehavior: Clip.hardEdge,
-        children: [
-          if (showExpanded)
-            Positioned(
-              top: _toolbarHeight,
-              left: 0,
-              right: 0,
-              height: detailsHeight,
-              child: ClipRect(
-                child: OverflowBox(
-                  alignment: Alignment.topCenter,
-                  minHeight: 0,
-                  maxHeight: _expandedExtra,
-                  child: IgnorePointer(
-                    ignoring: expandedT < 0.05,
-                    child: Opacity(
-                      opacity: expandedT,
-                      child: Padding(
-                        padding: const EdgeInsets.only(top: _expandedTopGap),
-                        child: Column(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            StoreProfileHeaderCard(
-                              state: state,
-                              onAddMembers: onAddMembers,
-                              onCopyStoreLink: onCopyStoreLink,
-                              onToggleDetails: onOpenStoreInfo,
-                              onManageImages: onManageImages,
-                              onFollow: onFollow,
-                              onUnfollow: onUnfollow,
-                              onToggleNotify: onToggleNotify,
-                              onFollowersTap: onFollowersTap,
-                              onFollowingTap: onFollowingTap,
-                            ),
-                            if (state.showActionsRow && actionsT > 0.02) ...[
-                              const SizedBox(height: _actionsGap),
-                              IgnorePointer(
-                                ignoring: actionsT < 0.5,
-                                child: Opacity(
-                                  opacity: actionsT,
-                                  child: StoreProfileActionsRow(
-                                    isOwnStore: state.isOwnStore,
-                                    canImport: state.canImport,
-                                    onAddProducts: onAddProducts,
-                                    onImport: onImport,
+    return Padding(
+      padding: EdgeInsets.only(top: topPad),
+      child: SizedBox(
+        height: toolbarHeight,
+        child: Padding(
+          padding: EdgeInsets.fromLTRB(
+            AppPadding.horizontal,
+            _rowPad,
+            AppPadding.horizontal,
+            _rowPad,
+          ),
+          child: Row(
+            children: [
+              _FrostedPill(
+                color: pillColor,
+                borderColor: pillBorder,
+                height: _pillHeight,
+                child: _PillIconButton(
+                  icon:
+                      _photoSelecting
+                          ? Icons.close_rounded
+                          : Icons.arrow_back_ios_new_rounded,
+                  color: onPill,
+                  size: _photoSelecting ? 20 : 18,
+                  tooltip: _photoSelecting ? 'Close' : 'Back',
+                  onTap: onBack,
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: _FrostedPill(
+                  color: pillColor,
+                  borderColor: pillBorder,
+                  height: _pillHeight,
+                  child: Padding(
+                    padding: EdgeInsets.fromLTRB(
+                      4,
+                      0,
+                      _photoSelecting ? 2 : 12,
+                      0,
+                    ),
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: GestureDetector(
+                            behavior: HitTestBehavior.opaque,
+                            onTap: _photoSelecting ? null : onOpenStoreInfo,
+                            child: Row(
+                              children: [
+                                StoreProfileLogo(
+                                  size: _pillHeight - 8,
+                                  imageUrl: state.coverImageUrl,
+                                  storeName: state.storeName,
+                                ),
+                                const SizedBox(width: 8),
+                                Expanded(
+                                  child: Column(
+                                    mainAxisAlignment: MainAxisAlignment.center,
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      Text(
+                                        state.storeName,
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: AppTextStyles.headline(
+                                          fontSize: 15,
+                                          fontWeight: FontWeight.w600,
+                                          color: onPill,
+                                          height: 1.15,
+                                        ),
+                                      ),
+                                      Row(
+                                        children: [
+                                          if (!_photoSelecting &&
+                                              !state.isOwnStore &&
+                                              state.isPrivateStore) ...[
+                                            Icon(
+                                              Icons.lock_outline_rounded,
+                                              size: 11,
+                                              color: onPillMuted,
+                                            ),
+                                            const SizedBox(width: 3),
+                                          ],
+                                          Flexible(
+                                            child: Text(
+                                              _subtitleLabel(
+                                                followerCount:
+                                                    state.followerCount,
+                                                selectedCount:
+                                                    selectedPhotoCount,
+                                                followLabel:
+                                                    _followLabel(state),
+                                              ),
+                                              maxLines: 1,
+                                              overflow: TextOverflow.ellipsis,
+                                              style: AppTextStyles.caption(
+                                                fontSize: 12,
+                                                color: onPillMuted,
+                                                height: 1.15,
+                                              ),
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ],
                                   ),
                                 ),
-                              ),
-                            ],
-                          ],
+                              ],
+                            ),
+                          ),
                         ),
-                      ),
+                        if (_photoSelecting && showSelectionImport)
+                          IconButton(
+                            onPressed: onImport,
+                            tooltip: 'Import',
+                            padding: EdgeInsets.zero,
+                            visualDensity: VisualDensity.compact,
+                            constraints: const BoxConstraints.tightFor(
+                              width: 40,
+                              height: 42,
+                            ),
+                            splashColor: Colors.transparent,
+                            highlightColor: Colors.transparent,
+                            hoverColor: Colors.transparent,
+                            focusColor: Colors.transparent,
+                            icon: WhatsAppForwardIcon(color: onPill, size: 22),
+                          ),
+                      ],
                     ),
                   ),
                 ),
               ),
-            ),
-          Positioned(
-            top: 0,
-            left: 0,
-            right: 0,
-            height: _toolbarHeight,
-            child: ColoredBox(
-              color: AppColors.background,
-              child: Padding(
-                padding: AppPadding.screenHorizontal,
-                child: Row(
-                  children: [
-                    AppBackButton(onPressed: onBack),
-                    const SizedBox(width: 4),
-                    Expanded(
-                      child: GestureDetector(
-                        onTap: onOpenStoreInfo,
-                        behavior: HitTestBehavior.opaque,
-                        child: IgnorePointer(
-                          ignoring: compactT < 0.05,
-                          child: Opacity(
-                            opacity: compactT,
-                            child: _CompactStoreIdentity(state: state),
-                          ),
+              if (_showActionsPill) ...[
+                const SizedBox(width: 8),
+                _FrostedPill(
+                  color: pillColor,
+                  borderColor: pillBorder,
+                  height: _pillHeight,
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      if (_showPrimaryAction)
+                        _PillIconButton(
+                          icon:
+                              state.isOwnStore
+                                  ? Icons.add_rounded
+                                  : Icons.file_download_outlined,
+                          color: onPill,
+                          size: 22,
+                          tooltip:
+                              state.isOwnStore ? 'Add products' : 'Import',
+                          onTap:
+                              state.isOwnStore ? onAddProducts : onImport,
                         ),
-                      ),
-                    ),
-                    if (_showPrimaryAction)
-                      ClipRect(
-                        child: SizedBox(
-                          // Collapse width with compactT so the icon only shows
-                          // when the header is not expanded (actions row covers it).
-                          width: 40 * compactT.clamp(0.0, 1.0),
-                          child: Align(
-                            alignment: Alignment.centerRight,
-                            child: Opacity(
-                              opacity: compactT,
-                              child: IgnorePointer(
-                                ignoring: compactT < 0.5,
-                                child: _PrimaryToolbarButton(
-                                  icon:
-                                      state.isOwnStore
-                                          ? Icons.add_rounded
-                                          : Icons.file_download_outlined,
-                                  onTap:
-                                      state.isOwnStore
-                                          ? onAddProducts
-                                          : onImport,
-                                ),
-                              ),
-                            ),
-                          ),
-                        ),
-                      ),
-                    if (!state.isContentLocked)
-                      Padding(
-                        padding: const EdgeInsets.only(left: 4),
-                        child: _ToolbarIconButton(
+                      if (_showSearch)
+                        _PillIconButton(
                           icon: Icons.search_rounded,
+                          color: onPill,
+                          size: 22,
+                          tooltip: 'Search',
                           onTap: onSearch,
                         ),
-                      )
-                    else
-                      const SizedBox(width: 8),
-                  ],
+                    ],
+                  ),
                 ),
-              ),
-            ),
+              ],
+            ],
           ),
-        ],
+        ),
       ),
     );
   }
 
-  @override
-  bool shouldRebuild(covariant StoreProfileCollapsingHeaderDelegate oldDelegate) {
-    return oldDelegate.state != state ||
-        oldDelegate.expandT != expandT ||
-        (oldDelegate.onManageImages == null) != (onManageImages == null) ||
-        (oldDelegate.onFollowersTap == null) != (onFollowersTap == null) ||
-        (oldDelegate.onFollowingTap == null) != (onFollowingTap == null);
+  static String _followerLabel(int count) {
+    final n = count < 0 ? 0 : count;
+    if (n == 1) return '1 follower';
+    return '${_formatCount(n)} followers';
+  }
+
+  static String? _followLabel(StoreProfileState state) {
+    if (state.isOwnStore) return null;
+    if (state.followStatus.isFollowing) return 'Following';
+    if (state.followStatus.isPending) return 'Requested';
+    return null;
+  }
+
+  static String _subtitleLabel({
+    required int followerCount,
+    int? selectedCount,
+    String? followLabel,
+  }) {
+    final followers = _followerLabel(followerCount);
+    if (selectedCount != null) {
+      final n = selectedCount < 0 ? 0 : selectedCount;
+      final selected = n == 1 ? '1 selected' : '$n selected';
+      return '$followers · $selected';
+    }
+    final follow = followLabel?.trim() ?? '';
+    if (follow.isEmpty) return followers;
+    return '$followers · $follow';
+  }
+
+  static String _formatCount(int n) {
+    if (n >= 1000000) {
+      final v = n / 1000000;
+      return '${v.toStringAsFixed(v >= 10 ? 0 : 1)}M';
+    }
+    if (n >= 1000) {
+      final v = n / 1000;
+      return '${v.toStringAsFixed(v >= 10 ? 0 : 1)}K';
+    }
+    return '$n';
   }
 }
 
-class _CompactStoreIdentity extends StatelessWidget {
-  const _CompactStoreIdentity({required this.state});
+class _FrostedPill extends StatelessWidget {
+  const _FrostedPill({
+    required this.color,
+    required this.height,
+    required this.child,
+    this.borderColor,
+  });
 
-  final StoreProfileState state;
+  final Color color;
+  final Color? borderColor;
+  final double height;
+  final Widget child;
 
   @override
   Widget build(BuildContext context) {
-    final showLock = !state.isOwnStore && state.isPrivateStore;
-    return Row(
-      children: [
-        if (showLock) ...[
-          Icon(
-            Icons.lock_outline_rounded,
-            size: 18,
-            color: AppColors.textSecondary,
+    final radius = BorderRadius.circular(height / 2);
+    return ClipRRect(
+      borderRadius: radius,
+      child: BackdropFilter(
+        filter: ImageFilter.blur(sigmaX: 18, sigmaY: 18),
+        child: DecoratedBox(
+          decoration: BoxDecoration(
+            color: color,
+            borderRadius: radius,
+            border:
+                borderColor == null
+                    ? null
+                    : Border.all(color: borderColor!, width: 0.8),
           ),
-          const SizedBox(width: 6),
-        ] else ...[
-          StoreProfileLogo(
-            size: StoreProfileCollapsingHeaderDelegate._compactLogo,
-            imageUrl: state.coverImageUrl,
-            storeName: state.storeName,
-          ),
-          const SizedBox(width: 8),
-        ],
-        Expanded(
-          child: Text(
-            state.storeName,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: AppTextStyles.headline(
-              fontSize: 16,
-              fontWeight: FontWeight.w700,
-            ),
+          child: Material(
+            type: MaterialType.transparency,
+            child: SizedBox(height: height, child: child),
           ),
         ),
-        const SizedBox(width: 8),
-      ],
+      ),
     );
   }
 }
 
-/// Blue circular primary action (add products / import).
-class _PrimaryToolbarButton extends StatelessWidget {
-  const _PrimaryToolbarButton({required this.icon, required this.onTap});
+class _PillIconButton extends StatelessWidget {
+  const _PillIconButton({
+    required this.icon,
+    required this.color,
+    required this.onTap,
+    this.size = 22,
+    this.tooltip,
+  });
 
   final IconData icon;
+  final Color color;
   final VoidCallback onTap;
+  final double size;
+  final String? tooltip;
 
   @override
   Widget build(BuildContext context) {
-    return Material(
-      color: AppColors.primary,
-      shape: const CircleBorder(),
-      child: InkWell(
-        onTap: onTap,
-        customBorder: const CircleBorder(),
-        child: SizedBox(
-          width: 36,
-          height: 36,
-          child: Icon(icon, size: 20, color: AppColors.textOnPrimary),
-        ),
-      ),
-    );
-  }
-}
-
-/// Muted circular toolbar action (search).
-class _ToolbarIconButton extends StatelessWidget {
-  const _ToolbarIconButton({required this.icon, required this.onTap});
-
-  final IconData icon;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    return Material(
-      color: AppColors.surfaceSecondary,
-      shape: const CircleBorder(),
-      child: InkWell(
-        onTap: onTap,
-        customBorder: const CircleBorder(),
-        child: SizedBox(
-          width: 36,
-          height: 36,
-          child: Icon(icon, size: 20, color: AppColors.textPrimary),
-        ),
-      ),
+    return IconButton(
+      onPressed: onTap,
+      tooltip: tooltip,
+      padding: EdgeInsets.zero,
+      visualDensity: VisualDensity.compact,
+      constraints: const BoxConstraints.tightFor(width: 40, height: 42),
+      // No Material splash/highlight on frosted pills.
+      splashColor: Colors.transparent,
+      highlightColor: Colors.transparent,
+      hoverColor: Colors.transparent,
+      focusColor: Colors.transparent,
+      icon: Icon(icon, size: size, color: color),
     );
   }
 }

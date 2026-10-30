@@ -9,6 +9,9 @@ import 'package:pro_image_editor/designs/whatsapp/whatsapp.dart';
 import 'package:pro_image_editor/pro_image_editor.dart';
 import 'package:project_c/helper/colors.dart';
 
+/// Which tool to open immediately when the editor lands.
+enum ProductImageEditTool { none, crop, mark, text }
+
 /// Full-screen WhatsApp-style product photo editor (crop, text, draw).
 ///
 /// Pops with the edited file path on Done, or `null` on cancel.
@@ -17,10 +20,12 @@ class ProductImageEditorPage extends StatefulWidget {
     super.key,
     required this.filePath,
     this.title,
+    this.initialTool = ProductImageEditTool.none,
   });
 
   final String filePath;
   final String? title;
+  final ProductImageEditTool initialTool;
 
   @override
   State<ProductImageEditorPage> createState() => _ProductImageEditorPageState();
@@ -29,6 +34,7 @@ class ProductImageEditorPage extends StatefulWidget {
 class _ProductImageEditorPageState extends State<ProductImageEditorPage> {
   final _editorKey = GlobalKey<ProImageEditorState>();
   String? _editedPath;
+  bool _didOpenInitialTool = false;
 
   bool get _useMaterialDesign =>
       Theme.of(context).platform != TargetPlatform.iOS;
@@ -150,7 +156,27 @@ class _ProductImageEditorPageState extends State<ProductImageEditorPage> {
     ];
   }
 
+  void _maybeOpenInitialTool(ProImageEditorState editor) {
+    if (_didOpenInitialTool) return;
+    if (widget.initialTool == ProductImageEditTool.none) return;
+    _didOpenInitialTool = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      switch (widget.initialTool) {
+        case ProductImageEditTool.crop:
+          editor.openCropRotateEditor();
+        case ProductImageEditTool.mark:
+          editor.openPaintEditor();
+        case ProductImageEditTool.text:
+          editor.openTextEditor();
+        case ProductImageEditTool.none:
+          break;
+      }
+    });
+  }
+
   List<Widget> _buildWhatsAppChrome(ProImageEditorState editor) {
+    _maybeOpenInitialTool(editor);
     final title = widget.title?.trim();
     return [
       WhatsAppAppBar(

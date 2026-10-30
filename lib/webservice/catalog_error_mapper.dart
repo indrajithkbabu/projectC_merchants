@@ -163,6 +163,18 @@ class CatalogErrorMapper {
         return 'This store is no longer available.';
       case 'STORE_PRIVATE':
         return 'This store is private. Follow to see products.';
+      case 'CANNOT_REIMPORT_LOCKED_PRODUCT':
+        return 'Exclusive piece — cannot be re-imported.';
+      case 'CANNOT_IMPORT_OWN_PRODUCT':
+        return 'You cannot import from your own store.';
+      case 'STOCK_OVERRIDE_FORBIDDEN_ON_LOCKED':
+        return 'Stock follows the source on locked products.';
+      case 'CANNOT_UNLOCK_LOCKED_PRODUCT':
+        return 'This product is locked by the source and cannot be unlocked.';
+      case 'LOCKED_PRODUCT':
+        return 'This product is locked. Follow the store to view it.';
+      case 'PRODUCT_NOT_FOUND':
+        return 'This product is no longer available.';
       case 'CANNOT_FOLLOW_OWN_STORE':
         return 'You cannot follow your own store.';
       case 'ALREADY_FOLLOWING':

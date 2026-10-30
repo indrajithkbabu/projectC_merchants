@@ -13,6 +13,7 @@ abstract final class ProductImageCropper {
     String path, {
     required BuildContext context,
     String title = 'Edit photo',
+    ProductImageEditTool initialTool = ProductImageEditTool.none,
   }) async {
     final source = path.trim();
     if (source.isEmpty) return null;
@@ -31,6 +32,7 @@ abstract final class ProductImageCropper {
           return ProductImageEditorPage(
             filePath: local.path,
             title: title,
+            initialTool: initialTool,
           );
         },
         transitionsBuilder: (context, animation, secondaryAnimation, child) {

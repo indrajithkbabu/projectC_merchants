@@ -1,5 +1,6 @@
 import 'dart:io';
 
+import 'package:project_c/helper/be_verify.dart';
 import 'package:project_c/models/catalog/catalog_page.dart';
 import 'package:project_c/models/catalog/catalog_store.dart';
 import 'package:project_c/models/catalog/follow_api_models.dart';
@@ -122,6 +123,43 @@ class StoreRequest {
       requiresAuth: true,
     );
     return CatalogStore.fromJson(json ?? const {});
+  }
+
+  /// PATCH `/stores/:storeId/wastage-markup` — store default wastage %.
+  Future<CatalogStore> patchStoreWastageMarkup({
+    required String storeId,
+    required double wastageMarkup,
+  }) async {
+    BeVerify.step(
+      '3b PATCH wastage-markup',
+      detail:
+          'store=${BeVerify.shortId(storeId)} wastageMarkup=$wastageMarkup',
+    );
+    try {
+      final json = await _api.sendJson(
+        method: HttpMethod.patch,
+        path: Endpoints.storeWastageMarkup(storeId),
+        body: {'wastageMarkup': wastageMarkup},
+        requiresAuth: true,
+      );
+      final store = CatalogStore.fromJson(json ?? const {});
+      final returned = store.defaultWastageMarkup;
+      if (returned != null) {
+        BeVerify.ok(
+          'wastage-markup',
+          detail: 'defaultWastageMarkup=$returned',
+        );
+      } else {
+        BeVerify.fail(
+          'wastage-markup response missing defaultWastageMarkup',
+          detail: 'keys check store GET after PATCH',
+        );
+      }
+      return store;
+    } on Object catch (e) {
+      BeVerify.fail('wastage-markup', detail: '$e');
+      rethrow;
+    }
   }
 
   /// POST `/stores/:storeId/follow` — follow or request to follow.

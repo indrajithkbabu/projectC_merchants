@@ -23,16 +23,18 @@ class SearchFilterBar extends StatelessWidget {
   final VoidCallback onOpenAllFilters;
 
   bool get _inStore => scope == SearchFilterScope.inStore;
+  bool get _wishlist => scope == SearchFilterScope.wishlist;
 
   @override
   Widget build(BuildContext context) {
     final groups = <_FilterDropdownSpec>[
-      _FilterDropdownSpec(
-        title: 'Category',
-        options: catalog.categories,
-        selected: selection.categories,
-        onToggle: (next) => onChanged(selection.copyWith(categories: next)),
-      ),
+      if (!_wishlist)
+        _FilterDropdownSpec(
+          title: 'Category',
+          options: catalog.categories,
+          selected: selection.categories,
+          onToggle: (next) => onChanged(selection.copyWith(categories: next)),
+        ),
       _FilterDropdownSpec(
         title: 'Metal',
         options: catalog.metals,
@@ -45,38 +47,51 @@ class SearchFilterBar extends StatelessWidget {
         selected: selection.purities,
         onToggle: (next) => onChanged(selection.copyWith(purities: next)),
       ),
-      _FilterDropdownSpec(
-        title: 'Weight',
-        options: catalog.weights,
-        selected: selection.weights,
-        onToggle: (next) => onChanged(selection.copyWith(weights: next)),
-      ),
-      _FilterDropdownSpec(
-        title: 'Size',
-        options: catalog.sizes,
-        selected: selection.sizes,
-        onToggle: (next) => onChanged(selection.copyWith(sizes: next)),
-      ),
-      _FilterDropdownSpec(
-        title: 'Wastage',
-        options: catalog.wastages,
-        selected: selection.wastages,
-        onToggle: (next) => onChanged(selection.copyWith(wastages: next)),
-      ),
-      if (!_inStore) ...[
+      if (!_wishlist) ...[
+        _FilterDropdownSpec(
+          title: 'Weight',
+          options: catalog.weights,
+          selected: selection.weights,
+          onToggle: (next) => onChanged(selection.copyWith(weights: next)),
+        ),
+        _FilterDropdownSpec(
+          title: 'Size',
+          options: catalog.sizes,
+          selected: selection.sizes,
+          onToggle: (next) => onChanged(selection.copyWith(sizes: next)),
+        ),
+        _FilterDropdownSpec(
+          title: 'Wastage',
+          options: catalog.wastages,
+          selected: selection.wastages,
+          onToggle: (next) => onChanged(selection.copyWith(wastages: next)),
+        ),
+        _FilterDropdownSpec(
+          title: 'Stock',
+          options: const [
+            SearchFilterOption(value: 'in', label: 'In stock', count: 1),
+            SearchFilterOption(value: 'out', label: 'Out of stock', count: 1),
+            SearchFilterOption(value: 'mto', label: 'Made to order', count: 1),
+          ],
+          selected: selection.stockStatuses,
+          onToggle:
+              (next) => onChanged(selection.copyWith(stockStatuses: next)),
+        ),
+      ],
+      if (!_inStore)
         _FilterDropdownSpec(
           title: 'Store',
           options: catalog.stores,
           selected: selection.stores,
           onToggle: (next) => onChanged(selection.copyWith(stores: next)),
         ),
+      if (!_inStore && !_wishlist)
         _FilterDropdownSpec(
           title: 'Location',
           options: catalog.locations,
           selected: selection.locations,
           onToggle: (next) => onChanged(selection.copyWith(locations: next)),
         ),
-      ],
     ];
 
     return SingleChildScrollView(

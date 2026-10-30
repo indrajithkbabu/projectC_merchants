@@ -2,11 +2,20 @@ import 'dart:typed_data';
 
 import 'package:equatable/equatable.dart';
 
+/// Cooperative cancel flag for one [CatalogDirectUploadService] batch.
+class CatalogUploadCancelToken {
+  bool _cancelled = false;
+
+  bool get isCancelled => _cancelled;
+
+  void cancel() => _cancelled = true;
+}
+
 /// One file descriptor sent to `POST .../uploads/presign`.
 class CatalogPresignFile extends Equatable {
   const CatalogPresignFile({
     required this.filename,
-    this.contentType = 'image/jpeg',
+    this.contentType = 'image/webp',
   });
 
   final String filename;
@@ -21,20 +30,34 @@ class CatalogPresignFile extends Equatable {
   List<Object?> get props => [filename, contentType];
 }
 
-/// One pre-signed S3 PUT slot from the presign endpoint.
+/// One pre-signed S3 PUT slot from the sign / presign endpoint.
 class CatalogPresignedUpload extends Equatable {
   const CatalogPresignedUpload({
     required this.key,
     required this.url,
     required this.presignedUrl,
     required this.contentType,
+    this.thumbnailUrl = '',
+    this.detailUrl = '',
+    this.imageId = '',
     this.expiresIn = 900,
   });
 
   final String key;
+
+  /// CDN / public master URL (`publicUrl` on new sign; `url` on legacy presign).
   final String url;
+
+  /// Cloudflare ~320×320 grid variant when BE includes it on sign.
+  final String thumbnailUrl;
+
+  /// Cloudflare ~1080px detail variant when BE includes it on sign.
+  final String detailUrl;
   final String presignedUrl;
   final String contentType;
+
+  /// Pre-allocated image id from `POST /uploads/sign` (required for products/batch).
+  final String imageId;
   final int expiresIn;
 
   factory CatalogPresignedUpload.fromJson(Map<String, dynamic> json) {
@@ -43,19 +66,37 @@ class CatalogPresignedUpload extends Equatable {
         headers is Map
             ? (headers['Content-Type'] as String? ??
                 headers['content-type'] as String? ??
-                'image/jpeg')
-            : 'image/jpeg';
+                'image/webp')
+            : 'image/webp';
     return CatalogPresignedUpload(
       key: json['key'] as String? ?? '',
-      url: json['url'] as String? ?? '',
+      url:
+          (json['publicUrl'] as String?)?.trim().isNotEmpty == true
+              ? (json['publicUrl'] as String).trim()
+              : (json['url'] as String? ?? ''),
+      thumbnailUrl: (json['thumbnailUrl'] as String?)?.trim() ?? '',
+      detailUrl: (json['detailUrl'] as String?)?.trim() ?? '',
       presignedUrl: json['presignedUrl'] as String? ?? '',
       contentType: contentType,
+      imageId:
+          (json['imageId'] as String?)?.trim() ??
+          (json['image_id'] as String?)?.trim() ??
+          '',
       expiresIn: (json['expiresIn'] as num?)?.toInt() ?? 900,
     );
   }
 
   @override
-  List<Object?> get props => [key, url, presignedUrl, contentType, expiresIn];
+  List<Object?> get props => [
+    key,
+    url,
+    thumbnailUrl,
+    detailUrl,
+    presignedUrl,
+    contentType,
+    imageId,
+    expiresIn,
+  ];
 }
 
 class CatalogPresignResult extends Equatable {
@@ -97,7 +138,7 @@ class PreparedCatalogPhoto {
     required this.width,
     required this.height,
     this.thumbhash,
-    this.contentType = 'image/jpeg',
+    this.contentType = 'image/webp',
   });
 
   final String localPath;
@@ -111,6 +152,10 @@ class PreparedCatalogPhoto {
   final String contentType;
 
   String? s3Key;
+  String? imageId;
+  String? publicUrl;
+  String? thumbnailUrl;
+  String? detailUrl;
   String? presignedUrl;
   String? putContentType;
   DateTime? presignedAt;
@@ -126,6 +171,10 @@ class CatalogUploadedPhoto extends Equatable {
     required this.height,
     this.thumbhash,
     this.localPath,
+    this.imageId = '',
+    this.publicUrl = '',
+    this.thumbnailUrl = '',
+    this.detailUrl = '',
   });
 
   final String key;
@@ -138,6 +187,12 @@ class CatalogUploadedPhoto extends Equatable {
   /// Client-only path used to map back to local gallery items (not sent to API).
   final String? localPath;
 
+  /// From `POST /uploads/sign` — used by `POST …/products/batch`.
+  final String imageId;
+  final String publicUrl;
+  final String thumbnailUrl;
+  final String detailUrl;
+
   Map<String, dynamic> toJson() => {
     'key': key,
     if (thumbhash != null && thumbhash!.isNotEmpty) 'thumbhash': thumbhash,
@@ -145,6 +200,7 @@ class CatalogUploadedPhoto extends Equatable {
     'height': height,
     'bytes': bytes,
     'originalName': originalName,
+    if (imageId.trim().isNotEmpty) 'imageId': imageId.trim(),
   };
 
   @override
@@ -156,6 +212,10 @@ class CatalogUploadedPhoto extends Equatable {
     height,
     thumbhash,
     localPath,
+    imageId,
+    publicUrl,
+    thumbnailUrl,
+    detailUrl,
   ];
 }
 
@@ -164,12 +224,18 @@ class CatalogDirectUploadBatchResult {
   const CatalogDirectUploadBatchResult({
     required this.successful,
     required this.failedNames,
+    this.failedPaths = const [],
     this.sessionId = '',
+    this.cancelled = false,
   });
 
   final List<CatalogUploadedPhoto> successful;
   final List<String> failedNames;
+
+  /// Local paths that failed prepare/upload (for Retry Failed).
+  final List<String> failedPaths;
   final String sessionId;
+  final bool cancelled;
 
   bool get hasSuccess => successful.isNotEmpty;
   bool get allFailed => successful.isEmpty;

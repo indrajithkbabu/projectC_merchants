@@ -11,10 +11,11 @@ This file defines what to follow for UI and logic inside `lib/presentation/store
 - Use `AppTextStyles` for text and `AppColors` for color choices.
 - Reuse shared widgets from helper layer before adding local duplicates.
 - Header uses shared `ShellTabTitleBar` (“Stores”, 40px / 22pt, statusBar+8) so
-  it aligns with Contacts / Wishlist on shell tab switches. Trailing: (own store)
-  notification icon → `activity_route` (live `GET /activity` feed + unread
-  badge from `/activity/unread-count`) + overflow `⋮` (**Create group** →
-  snackbar “coming soon”). No brand logo or subtitle under the title.
+  it aligns with Contacts / Wishlist on shell tab switches. Trailing actions are
+  **right-aligned** (Expanded title + trailing): (own store) notification icon
+  → `activity_route` (live `GET /activity` feed + unread badge from
+  `/activity/unread-count`) + overflow `⋮` (**Create group** → snackbar
+  “coming soon”). No brand logo or subtitle under the title.
 - Home search field uses a pill radius (`BorderRadius.circular(32)`) matching
   the floating bottom nav capsule. It is an entry to `global_search_route`
   (product/tag/store Discover). It is read-only on this screen; store-list

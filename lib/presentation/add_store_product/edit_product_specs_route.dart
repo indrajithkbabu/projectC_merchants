@@ -44,6 +44,34 @@ class _EditProductSpecsRouteState extends State<EditProductSpecsRoute> {
 
     final repository = ServiceLocator.get<CollectionRepository>();
     try {
+      // Jewel products: PATCH /products/:id (syncs all photos of the piece).
+      try {
+        final patchBody = spec.toBatchProductJson(
+          stockStatus: 'in',
+          isLocked: false,
+          tags: const [],
+        )
+          ..remove('stock_status')
+          ..remove('is_locked')
+          ..remove('tags')
+          ..remove('mto_days');
+        final catalogProduct = await repository.updateProduct(
+          productId: widget.listingId,
+          body: patchBody,
+        );
+        final product = CatalogUiMapper.catalogProductToStoreProduct(
+          catalogProduct,
+        );
+        if (!mounted) return;
+        Navigator.of(context).pop(<String, Object?>{
+          ...product.toMap(),
+          'revision': widget.revision,
+        });
+        return;
+      } catch (_) {
+        // Fall through to legacy collection PATCH.
+      }
+
       final updated = await repository.updateCollection(
         storeId: widget.storeId,
         listingId: widget.listingId,

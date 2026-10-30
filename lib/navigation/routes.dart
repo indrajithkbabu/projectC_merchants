@@ -16,6 +16,8 @@ class Routes {
   static const String storeImportApprovedRoute = 'store_import_approved_route';
   static const String storeImportRequestsRoute = 'store_import_requests_route';
   static const String addProductGalleryRoute = 'add_product_gallery_route';
+  /// WhatsApp-style edit + title note after gallery pick (before group form).
+  static const String addProductComposeRoute = 'add_product_compose_route';
   static const String addProductGroupRoute = 'add_product_group_route';
   static const String addProductGroupDetailsRoute =
       'add_product_group_details_route';

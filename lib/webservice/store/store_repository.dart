@@ -36,6 +36,11 @@ abstract class StoreRepository {
     required StorePrivacyMode privacy,
   });
 
+  Future<CatalogStore> patchStoreWastageMarkup({
+    required String storeId,
+    required double wastageMarkup,
+  });
+
   Future<FollowActionResult> followStore(String storeId);
 
   Future<FollowActionResult> unfollowStore(String storeId);
@@ -191,6 +196,21 @@ class StoreRepositoryImpl implements StoreRepository {
   }) {
     AppLog.d(_tag, 'patchStorePrivacy store=$storeId privacy=${privacy.apiValue}');
     return _request.patchStorePrivacy(storeId: storeId, privacy: privacy);
+  }
+
+  @override
+  Future<CatalogStore> patchStoreWastageMarkup({
+    required String storeId,
+    required double wastageMarkup,
+  }) {
+    AppLog.d(
+      _tag,
+      'patchStoreWastageMarkup store=$storeId wastage=$wastageMarkup',
+    );
+    return _request.patchStoreWastageMarkup(
+      storeId: storeId,
+      wastageMarkup: wastageMarkup,
+    );
   }
 
   @override
