@@ -40,7 +40,7 @@ class CatalogPresignedUpload extends Equatable {
     this.thumbnailUrl = '',
     this.detailUrl = '',
     this.imageId = '',
-    this.expiresIn = 900,
+    this.expiresIn = 300,
   });
 
   final String key;
@@ -48,7 +48,7 @@ class CatalogPresignedUpload extends Equatable {
   /// CDN / public master URL (`publicUrl` on new sign; `url` on legacy presign).
   final String url;
 
-  /// Cloudflare ~320×320 grid variant when BE includes it on sign.
+  /// Cloudflare ~360×360 grid variant when BE includes it on sign.
   final String thumbnailUrl;
 
   /// Cloudflare ~1080px detail variant when BE includes it on sign.
@@ -58,6 +58,8 @@ class CatalogPresignedUpload extends Equatable {
 
   /// Pre-allocated image id from `POST /uploads/sign` (required for products/batch).
   final String imageId;
+
+  /// Seconds until [presignedUrl] expires (BE guide typically 300).
   final int expiresIn;
 
   factory CatalogPresignedUpload.fromJson(Map<String, dynamic> json) {
@@ -82,7 +84,7 @@ class CatalogPresignedUpload extends Equatable {
           (json['imageId'] as String?)?.trim() ??
           (json['image_id'] as String?)?.trim() ??
           '',
-      expiresIn: (json['expiresIn'] as num?)?.toInt() ?? 900,
+      expiresIn: (json['expiresIn'] as num?)?.toInt() ?? 300,
     );
   }
 
@@ -159,6 +161,9 @@ class PreparedCatalogPhoto {
   String? presignedUrl;
   String? putContentType;
   DateTime? presignedAt;
+
+  /// TTL seconds from last sign slot (`expiresIn`); used for renew timing.
+  int? presignedExpiresIn;
 }
 
 /// Successful direct-to-S3 upload payload for Phase 2 JSON commit.

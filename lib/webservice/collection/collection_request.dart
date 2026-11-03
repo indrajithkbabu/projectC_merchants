@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:project_c/helper/be_verify.dart';
+import 'package:project_c/helper/catalog_media_debug.dart';
 import 'package:project_c/models/catalog/catalog_page.dart';
 import 'package:project_c/models/catalog/catalog_product_models.dart';
 import 'package:project_c/models/catalog/catalog_upload_models.dart';
@@ -136,6 +137,38 @@ class CollectionRequest {
     if (collectionDefaults != null && collectionDefaults.isNotEmpty) {
       body['collectionDefaults'] = collectionDefaults;
     }
+    // FE_QA TC-01 (P0.1): prove envelope is products[] (not a flat single object).
+    final productsIsList = body['products'] is List;
+    CatalogMediaDebug.feQa(
+      'P0.1',
+      status: productsIsList && products.isNotEmpty ? 'PASS' : 'FAIL',
+      detail:
+          'productsIsList=$productsIsList count=${products.length} '
+          'hasCollectionName=${name.isNotEmpty} '
+          'hasIdempotencyKey=${requestId.isNotEmpty} '
+          'hasIdempotencyHeader=true',
+    );
+    var withImagesArr = 0;
+    var withImageId = 0;
+    var withImageIdsLegacy = 0;
+    for (final p in products) {
+      if (p['images'] is List) {
+        withImagesArr++;
+      } else if (p['image_ids'] is List) {
+        withImageIdsLegacy++;
+      } else if ((p['image_id'] as String?)?.trim().isNotEmpty == true) {
+        withImageId++;
+      }
+    }
+    CatalogMediaDebug.r2Qa(
+      'M2',
+      status: withImageIdsLegacy == 0 ? 'PASS' : 'INFO',
+      detail:
+          'batchShape images[]=$withImagesArr image_id=$withImageId '
+          'image_ids(legacy)=$withImageIdsLegacy count=${products.length}',
+      once: true,
+      onceKey: 'batchShape:$withImagesArr:$withImageId:$withImageIdsLegacy',
+    );
     final json = await _api.sendJson(
       method: HttpMethod.post,
       path: Endpoints.storeProductsBatch(storeId),

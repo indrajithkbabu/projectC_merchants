@@ -30,6 +30,15 @@ class CatalogSession {
   Future<void> restore() async {
     tokens = await _storage.readTokens();
     profile = await _storage.readProfile();
+    // Disk → memory so My store / profile paint without cold shimmer after
+    // process death (clear-data still has no files → true cold path).
+    final ownId = profile?.ownStore?.id.trim() ?? '';
+    if (isSignedIn && ownId.isNotEmpty) {
+      await Future.wait([
+        StoreProductsCache.instance.read(ownId),
+        StoreMetaCache.instance.read(ownId),
+      ]);
+    }
     AppLog.d(
       _tag,
       'Restored session signedIn=$isSignedIn onboarding=${profile?.onboarding}',

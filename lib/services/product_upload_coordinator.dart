@@ -33,10 +33,27 @@ class ProductUploadStarted extends ProductUploadEvent {
     required super.storeId,
     required this.title,
     required this.photoCount,
+    this.photos = const [],
   });
 
   final String title;
   final int photoCount;
+
+  /// Collage order for Telegram-style pending tiles (may be empty for legacy).
+  final List<PendingPhotoSlot> photos;
+}
+
+/// Per-photo / commit-phase progress for in-flight create uploads.
+class ProductUploadProgress extends ProductUploadEvent {
+  const ProductUploadProgress({
+    required super.pendingId,
+    required super.storeId,
+    required this.photos,
+    this.isCommitting = false,
+  });
+
+  final List<PendingPhotoSlot> photos;
+  final bool isCommitting;
 }
 
 /// Fired after create returns a listing id — profile must hide that listing
@@ -74,7 +91,7 @@ class ProductUploadFailed extends ProductUploadEvent {
 }
 
 /// Runs create uploads off the add-product screens so UI can return to store
-/// immediately and show a pending shimmer until completion.
+/// immediately and show a Telegram-style pending collage until completion.
 ///
 /// Photos are compressed on-device, uploaded directly to S3 via pre-signed URLs,
 /// then committed as JSON (`photos: [{key, thumbhash, …}]`) — binaries never
@@ -94,6 +111,8 @@ class ProductUploadCoordinator {
   final _controller = StreamController<ProductUploadEvent>.broadcast();
   final Map<String, PendingProductUpload> _active = {};
   final Map<String, CatalogUploadCancelToken> _cancelTokens = {};
+  final Map<String, TitleOnlyUploadRequest> _titleOnlyRequests = {};
+  final Map<String, SpecsUploadRequest> _specsRequests = {};
   static const _tag = 'ProductUploadCoordinator';
   static const _maxPhotoBytes = 500 * 1024 * 1024;
 
@@ -138,19 +157,28 @@ class ProductUploadCoordinator {
     final pendingId = _newId();
     final title =
         request.title.trim().isEmpty ? 'Uploading…' : request.title.trim();
+    final photos = [
+      for (final path in request.imagePaths)
+        if (path.trim().isNotEmpty)
+          PendingPhotoSlot(localPath: path.trim()),
+    ];
     _active[pendingId] = PendingProductUpload(
       id: pendingId,
       storeId: request.storeId,
       title: title,
-      photoCount: request.imagePaths.length,
+      photoCount: photos.length,
+      photos: photos,
     );
+    _titleOnlyRequests[pendingId] = request;
+    _specsRequests.remove(pendingId);
     _cancelTokens[pendingId] = CatalogUploadCancelToken();
     _controller.add(
       ProductUploadStarted(
         pendingId: pendingId,
         storeId: request.storeId,
         title: title,
-        photoCount: request.imagePaths.length,
+        photoCount: photos.length,
+        photos: photos,
       ),
     );
     CatalogMediaDebug.upload(
@@ -171,19 +199,27 @@ class ProductUploadCoordinator {
     final pendingId = _newId();
     final title =
         request.title.trim().isEmpty ? 'Uploading…' : request.title.trim();
+    final orderedPaths = _displayPathsForSpecs(request.items);
+    final photos = [
+      for (final path in orderedPaths) PendingPhotoSlot(localPath: path),
+    ];
     _active[pendingId] = PendingProductUpload(
       id: pendingId,
       storeId: request.storeId,
       title: title,
-      photoCount: request.items.length,
+      photoCount: photos.isNotEmpty ? photos.length : request.items.length,
+      photos: photos,
     );
+    _specsRequests[pendingId] = request;
+    _titleOnlyRequests.remove(pendingId);
     _cancelTokens[pendingId] = CatalogUploadCancelToken();
     _controller.add(
       ProductUploadStarted(
         pendingId: pendingId,
         storeId: request.storeId,
         title: title,
-        photoCount: request.items.length,
+        photoCount: photos.isNotEmpty ? photos.length : request.items.length,
+        photos: photos,
       ),
     );
     CatalogMediaDebug.upload(
@@ -198,6 +234,65 @@ class ProductUploadCoordinator {
     );
     unawaited(_runWithSpecs(pendingId, request));
     return pendingId;
+  }
+
+  /// Re-run a failed create upload (same pending id + original request).
+  bool retryPending(String pendingId) {
+    final id = pendingId.trim();
+    if (id.isEmpty) return false;
+    final titleOnly = _titleOnlyRequests[id];
+    final specs = _specsRequests[id];
+    if (titleOnly == null && specs == null) {
+      AppLog.d(_tag, 'retryPending missing request pending=$id');
+      return false;
+    }
+    final existing = _active[id];
+    if (existing == null) {
+      AppLog.d(_tag, 'retryPending missing active pending=$id');
+      return false;
+    }
+    final resetPhotos = [
+      for (final photo in existing.photos)
+        PendingPhotoSlot(localPath: photo.localPath),
+    ];
+    final reset = PendingProductUpload(
+      id: existing.id,
+      storeId: existing.storeId,
+      title: existing.title,
+      photoCount:
+          resetPhotos.isNotEmpty ? resetPhotos.length : existing.photoCount,
+      photos: resetPhotos,
+    );
+    _active[id] = reset;
+    _cancelTokens[id] = CatalogUploadCancelToken();
+    _controller.add(
+      ProductUploadStarted(
+        pendingId: id,
+        storeId: reset.storeId,
+        title: reset.title,
+        photoCount: reset.photoCount,
+        photos: resetPhotos,
+      ),
+    );
+    CatalogMediaDebug.upload('coordinator retryPending pending=$id');
+    if (titleOnly != null) {
+      CatalogUploadStory.beginPublish(
+        title: reset.title,
+        photoCount: titleOnly.imagePaths.length,
+        storeId: titleOnly.storeId,
+        mode: 'titleOnly-retry',
+      );
+      unawaited(_runTitleOnly(id, titleOnly));
+    } else if (specs != null) {
+      CatalogUploadStory.beginPublish(
+        title: reset.title,
+        photoCount: specs.items.length,
+        storeId: specs.storeId,
+        mode: 'withSpecs-retry',
+      );
+      unawaited(_runWithSpecs(id, specs));
+    }
+    return true;
   }
 
   String _newId() =>
@@ -219,6 +314,191 @@ class ProductUploadCoordinator {
         storeId: storeId,
         listingId: id,
       ),
+    );
+  }
+
+  /// Collage order for specs publish — mirrors [_batchProductsFromSpecs].
+  List<String> _displayPathsForSpecs(List<BulkUploadItem> items) {
+    final paths = <String>[];
+    final used = <String>{};
+
+    void addPath(String raw) {
+      final path = raw.trim();
+      if (path.isEmpty || !used.add(path)) return;
+      paths.add(path);
+    }
+
+    for (final item in items) {
+      if (item.tag == BulkItemTag.group) addPath(item.imagePath);
+    }
+
+    final clusters = <String, List<BulkUploadItem>>{};
+    for (final item in items) {
+      if (item.tag != BulkItemTag.precise &&
+          item.tag != BulkItemTag.standalone) {
+        continue;
+      }
+      clusters.putIfAbsent(_precisionClusterKey(item), () => []).add(item);
+    }
+    for (final entry in clusters.entries) {
+      for (final item in entry.value) {
+        addPath(item.imagePath);
+      }
+    }
+
+    if (paths.isEmpty) {
+      for (final item in items) {
+        addPath(item.imagePath);
+      }
+    }
+    return paths;
+  }
+
+  void _emitProgress(String pendingId, {bool? isCommitting}) {
+    final pending = _active[pendingId];
+    if (pending == null) return;
+    final next =
+        isCommitting == null
+            ? pending
+            : pending.copyWith(isCommitting: isCommitting);
+    _active[pendingId] = next;
+    _controller.add(
+      ProductUploadProgress(
+        pendingId: pendingId,
+        storeId: next.storeId,
+        photos: next.photos,
+        isCommitting: next.isCommitting,
+      ),
+    );
+  }
+
+  void _updatePhotoByPath(
+    String pendingId,
+    String localPath, {
+    PendingPhotoStatus? status,
+    String? displayPath,
+    String? thumbhash,
+    String? publicUrl,
+    String? thumbnailUrl,
+    String? detailUrl,
+  }) {
+    final pending = _active[pendingId];
+    if (pending == null) return;
+    final key = localPath.trim();
+    if (key.isEmpty) return;
+    var changed = false;
+    final nextPhotos = <PendingPhotoSlot>[];
+    for (final photo in pending.photos) {
+      if (photo.localPath.trim() == key) {
+        changed = true;
+        nextPhotos.add(
+          photo.copyWith(
+            status: status,
+            displayPath: displayPath,
+            thumbhash: thumbhash,
+            publicUrl: publicUrl,
+            thumbnailUrl: thumbnailUrl,
+            detailUrl: detailUrl,
+          ),
+        );
+      } else {
+        nextPhotos.add(photo);
+      }
+    }
+    if (!changed) return;
+    _active[pendingId] = pending.copyWith(photos: nextPhotos);
+    _emitProgress(pendingId);
+  }
+
+  void _markCommitting(String pendingId) {
+    _emitProgress(pendingId, isCommitting: true);
+  }
+
+  /// Shared per-photo hooks for [CatalogDirectUploadService.prepareAndUpload].
+  ({
+    void Function(int pathIndex, String localPath) onPreparing,
+    void Function(int pathIndex, PreparedCatalogPhoto photo, String compressedPath)
+        onPrepared,
+    void Function(int pathIndex, PreparedCatalogPhoto photo) onSigned,
+    void Function(int pathIndex, CatalogUploadedPhoto photo) onUploaded,
+    void Function(int pathIndex, String localPath) onFailed,
+  })
+  _photoHooks(String pendingId, List<String> uploadPaths) {
+    String pathAt(int index) {
+      if (index < 0 || index >= uploadPaths.length) return '';
+      return uploadPaths[index].trim();
+    }
+
+    return (
+      onPreparing: (index, localPath) {
+        _updatePhotoByPath(
+          pendingId,
+          localPath.isNotEmpty ? localPath : pathAt(index),
+          status: PendingPhotoStatus.preparing,
+        );
+      },
+      onPrepared: (index, photo, compressedPath) {
+        final path =
+            (photo.localPath.trim().isNotEmpty)
+                ? photo.localPath.trim()
+                : pathAt(index);
+        final preview = compressedPath.trim().isNotEmpty
+            ? compressedPath.trim()
+            : path;
+        _updatePhotoByPath(
+          pendingId,
+          path,
+          status: PendingPhotoStatus.uploading,
+          displayPath: preview,
+          thumbhash: photo.thumbhash,
+        );
+      },
+      onSigned: (index, photo) {
+        final path =
+            (photo.localPath.trim().isNotEmpty)
+                ? photo.localPath.trim()
+                : pathAt(index);
+        final thumb = photo.thumbnailUrl?.trim() ?? '';
+        final detail = photo.detailUrl?.trim() ?? '';
+        final public = photo.publicUrl?.trim() ?? '';
+        // Keep compressed local [displayPath] so the pending collage does not
+        // remount File→Network mid-upload. CDN URLs are seeded for the
+        // published-card swap.
+        _updatePhotoByPath(
+          pendingId,
+          path,
+          status: PendingPhotoStatus.uploading,
+          thumbhash: photo.thumbhash,
+          publicUrl: public,
+          thumbnailUrl: thumb,
+          detailUrl: detail,
+        );
+      },
+      onUploaded: (index, photo) {
+        final path =
+            (photo.localPath?.trim().isNotEmpty == true)
+                ? photo.localPath!.trim()
+                : pathAt(index);
+        final thumb = photo.thumbnailUrl.trim();
+        final detail = photo.detailUrl.trim();
+        final public = photo.publicUrl.trim();
+        _updatePhotoByPath(
+          pendingId,
+          path,
+          status: PendingPhotoStatus.uploaded,
+          thumbhash: photo.thumbhash,
+          publicUrl: public,
+          thumbnailUrl: thumb,
+          detailUrl: detail,
+        );
+      },
+      onFailed: (index, localPath) {
+        _updatePhotoByPath(
+          pendingId,
+          localPath.isNotEmpty ? localPath : pathAt(index),
+          status: PendingPhotoStatus.failed,
+        );
+      },
     );
   }
 
@@ -244,10 +524,20 @@ class ProductUploadCoordinator {
       final description = request.description.trim();
 
       final cancelToken = _cancelTokens[pendingId];
+      final uploadPaths = [
+        for (final path in request.imagePaths)
+          if (path.trim().isNotEmpty) path.trim(),
+      ];
+      final hooks = _photoHooks(pendingId, uploadPaths);
       final batch = await _directUpload.prepareAndUpload(
         storeId: request.storeId,
-        localPaths: request.imagePaths,
+        localPaths: uploadPaths,
         cancelToken: cancelToken,
+        onPhotoPreparing: hooks.onPreparing,
+        onPhotoPrepared: hooks.onPrepared,
+        onPhotoSigned: hooks.onSigned,
+        onPhotoUploaded: hooks.onUploaded,
+        onPhotoFailed: hooks.onFailed,
       );
       if (batch.cancelled) {
         _finishFailure(
@@ -274,6 +564,7 @@ class ProductUploadCoordinator {
         thumbhashYes: thumbYes,
         title: title,
       );
+      _markCommitting(pendingId);
 
       final stockWire = request.stockStatus.apiValue;
       final canBatch = batch.successful.every(
@@ -468,10 +759,20 @@ class ProductUploadCoordinator {
       final description = request.description.trim();
 
       final cancelToken = _cancelTokens[pendingId];
+      final uploadPaths = [
+        for (final item in items)
+          if (item.imagePath.trim().isNotEmpty) item.imagePath.trim(),
+      ];
+      final hooks = _photoHooks(pendingId, uploadPaths);
       final batch = await _directUpload.prepareAndUpload(
         storeId: request.storeId,
-        localPaths: [for (final item in items) item.imagePath],
+        localPaths: uploadPaths,
         cancelToken: cancelToken,
+        onPhotoPreparing: hooks.onPreparing,
+        onPhotoPrepared: hooks.onPrepared,
+        onPhotoSigned: hooks.onSigned,
+        onPhotoUploaded: hooks.onUploaded,
+        onPhotoFailed: hooks.onFailed,
       );
       if (batch.cancelled) {
         _finishFailure(
@@ -498,6 +799,7 @@ class ProductUploadCoordinator {
         thumbhashYes: thumbYes,
         title: groupTitle,
       );
+      _markCommitting(pendingId);
 
       final successfulLocalItems = _itemsForSuccessfulUploads(
         items: items,
@@ -769,7 +1071,7 @@ class ProductUploadCoordinator {
   }
 
   /// One product per photo; Precise/Standalone clusters with 2+ photos →
-  /// `image_ids` (same physical piece).
+  /// guide `images[{image_id, thumbhash, width, height, bytes}]`.
   List<Map<String, dynamic>> _batchProductsFromSpecs({
     required List<BulkUploadItem> items,
     required List<CatalogUploadedPhoto> photos,
@@ -846,19 +1148,29 @@ class ProductUploadCoordinator {
         for (final item in cluster)
           if (photoFor(item) != null) photoFor(item)!,
       ];
-      final imageIds = [
+      final imageMaps = <Map<String, dynamic>>[
         for (final p in clusterPhotos)
-          if (p.imageId.trim().isNotEmpty) p.imageId.trim(),
+          if (p.imageId.trim().isNotEmpty)
+            {
+              'image_id': p.imageId.trim(),
+              if ((p.thumbhash ?? '').trim().isNotEmpty)
+                'thumbhash': p.thumbhash!.trim(),
+              if (p.width > 0) 'width': p.width,
+              if (p.height > 0) 'height': p.height,
+              if (p.bytes > 0) 'bytes': p.bytes,
+            },
       ];
-      if (imageIds.isEmpty) continue;
+      if (imageMaps.isEmpty) continue;
       final spec =
           cluster.first.spec.isValid ? cluster.first.spec : groupSpec;
       final primary = clusterPhotos.first;
       final wire = stockFor(cluster.first);
       products.add(
         spec.toBatchProductJson(
-          imageId: imageIds.length == 1 ? imageIds.first : null,
-          imageIds: imageIds.length > 1 ? imageIds : null,
+          imageId: imageMaps.length == 1
+              ? (imageMaps.first['image_id'] as String?)
+              : null,
+          images: imageMaps.length > 1 ? imageMaps : null,
           stockStatus: wire.stock,
           mtoDays: wire.mto,
           isLocked: wire.locked,
@@ -1078,6 +1390,18 @@ class ProductUploadCoordinator {
       'localMerge=$mergedFromLocal thumbFromSign=$thumbFromSign '
       'detailFromSign=$detailFromSign',
     );
+    CatalogMediaDebug.feQa(
+      'P5.3',
+      status: (mergedFromLocal > 0 || thumbFromSign > 0 || detailFromSign > 0)
+          ? 'INFO'
+          : 'PASS',
+      detail:
+          'localMerge=$mergedFromLocal thumbFromSign=$thumbFromSign '
+          'detailFromSign=$detailFromSign serverHashYES=$serverYes '
+          'product=${product.id}',
+      once: true,
+      onceKey: 'merge:${product.id}',
+    );
     if (serverYes == product.imagePaths.length && product.imagePaths.isNotEmpty) {
       BeVerify.ok('thumbhash from server batch response');
     } else if (mergedFromLocal > 0) {
@@ -1145,6 +1469,8 @@ class ProductUploadCoordinator {
   }) {
     _active.remove(pendingId);
     _cancelTokens.remove(pendingId);
+    _titleOnlyRequests.remove(pendingId);
+    _specsRequests.remove(pendingId);
     // Persist even if store profile is not open so return visits see the product.
     unawaited(_cachePublishedProduct(storeId: storeId, product: product));
     _controller.add(
@@ -1162,8 +1488,25 @@ class ProductUploadCoordinator {
     required String storeId,
     required String message,
   }) {
-    _active.remove(pendingId);
     _cancelTokens.remove(pendingId);
+    final existing = _active[pendingId];
+    if (existing != null) {
+      final failedPhotos = [
+        for (final photo in existing.photos)
+          photo.copyWith(status: PendingPhotoStatus.failed),
+      ];
+      // Keep active + request so the store-profile close icon can retry.
+      _active[pendingId] = existing.copyWith(
+        photos: failedPhotos.isNotEmpty ? failedPhotos : existing.photos,
+        hasFailed: true,
+        failureMessage: message,
+        isCommitting: false,
+        isRevealing: false,
+      );
+    } else {
+      _titleOnlyRequests.remove(pendingId);
+      _specsRequests.remove(pendingId);
+    }
     _controller.add(
       ProductUploadFailed(
         pendingId: pendingId,

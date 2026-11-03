@@ -60,13 +60,16 @@ Common picks:
 
 ### 5) Theme and Colors
 - Use colors from `AppColors` (`lib/helper/colors.dart`). Do not hardcode palette hex in features.
-- Appearance is **Day** (Telegram light) or **Night** (Graphite dark). Source of truth:
+- Appearance preference is **System** / **Day** / **Night**. Painted UI is always
+  Day (Telegram light) or Night (Graphite dark). Source of truth:
   - Palettes: `AppColorPalette.day` / `AppColorPalette.night` in `colors.dart`
   - ThemeData: `AppTheme.light` / `AppTheme.dark` in `app_theme.dart`
   - Preference: `ThemePreferences` (`lib/services/theme_preferences.dart`), persisted in
     `AppSettingsStorage` (survives logout). Settings → Appearance radios write it.
-- `AppColors.bind(appearance)` keeps static getters in sync; `MaterialApp` uses
-  `theme` + `darkTheme` + `themeMode`. Default is Day.
+  - **System** (default) follows the device light/dark setting; Day/Night force a mode.
+- `AppColors.bind(resolvedDayOrNight)` keeps static getters in sync; `MaterialApp` uses
+  `theme` + `darkTheme` + `themeMode` (`ThemeMode.system` when preference is System).
+  `App` listens for platform brightness changes while System is selected.
 - Instant Day/Night refresh: `AppearanceScope` + `AppearanceRebuildGate` in
   `MaterialApp.builder` (`lib/helper/widgets/appearance_scope.dart`) mark the
   navigator subtree dirty so every open screen repaints without remounting routes.
@@ -111,7 +114,7 @@ Common picks:
   - Own store profile: inbox badge → `store_import_requests_route` (accept / reject incoming; outgoing waits on source)
   - Own-store shell: My store gear → `settings_route` (Appearance, View products, screenshots, logout/delete, **Account privacy**, **Import requests**). Profile tab (no-store only) still hosts Create store.
   - Stores home (own store): notification icon → `activity_route`. Store profile (pushed) is Discover-only for owner and visitor (no owner bottom nav). Shell Wishlist + My store tabs; product-details like snack **View** → shell Wishlist via `ShellNav` (quiet refresh).
-  - From another store profile (only if viewer has own store): long-press photos → Import opens Quick upload prefilled (`quick_import_flow`, local session until the import API is wired). Toolbar download still uses `store_import_select_route` -> pending -> approved.
+  - From another store profile (only if viewer has own store): long-press photos → Import opens Quick upload prefilled (`quick_import_flow`). No visitor app-bar download/import icon beside search (browse = search only).
   - `country_picker_route` is opened from phone screen.
 
 ## Floating bottom navigation
@@ -192,8 +195,21 @@ Do not duplicate these widgets inside feature folders.
   — Group mosaics → `thumbnailUrl`; Single → `detailUrl`; Media + Gallery
   (profile / channel / `store_gallery`) pinch 2…9 cols: 6–9 → `thumbnailUrl`,
   2–5 → `detailUrl`; tap / product-details pinch → master `url`.
-  Prod media host is `…/v1/catalog/media/…` (with `cdn-cgi/image/…` variants).
-  ThumbHash is the instant placeholder. Debug: `CatalogMediaDBG`.
+  Session **quality ladder** (`CatalogImageQualityLadder`): after a successful
+  detail/zoom paint, lower-role binds reuse that unlocked tier
+  (thumb→detail→master, never down). Prefetch warm alone does not unlock.
+  Unlocks persist in the app cache dir (survive kill / restart / logout);
+  cleared only when the user clears app cache or app data in device Settings.
+  Prod media host is `media.catly.in` (with `cdn-cgi/image/…` variants).
+  Current BE tiers: thumb `width=360` @ q60 `format=webp`, detail
+  `width=1080` @ q75 `format=webp`, zoom = master `url`. Ladder / QUALITY
+  classify those widths only. ThumbHash is the instant placeholder. Debug:
+  `CatalogMediaDBG`. FE-only review cases: Logcat filter `FE_QA`.
+  R2 responsive low+medium QA: Logcat filter `R2_QA` (L1 CDN tier,
+  M1 presign renew, M2 batch `images[]`, M3 Accept webp).
+  Paint via `ProductMediaImage` / `CatalogImageCache` (not a bare
+  `CachedNetworkImage` sample). Presign renew uses BE `expiresIn`
+  (default 300s) minus 50s buffer.
 - **Country picker package:** `country_picker` (English country names, searchable list).
 - **Font family:** Inter everywhere via `AppTheme` + `AppTextStyles`.
 - **Main horizontal spacing:** 15 via `AppPadding.horizontal`.

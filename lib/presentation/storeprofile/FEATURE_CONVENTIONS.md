@@ -32,9 +32,13 @@ This file defines what to follow for UI and logic inside `lib/presentation/store
   `likeCount: 0` still shows product likes after `products?collectionId=`
   enrich or collection detail. **Wishlist chip** is viewer-private: count of
   embedded products with `wishlisted: true` (API has no public
-  `wishlistCount`). Popping product details after like/wishlist (or when
+  `wishlistCount`).   Popping product details after like/wishlist (or when
   aggregated counts are already > 0) silently updates the grid card via
-  `StoreProfileProductUpdated(silent: true)`. Multi-select wishlist bumps
+  `StoreProfileProductUpdated(silent: true)` **only when the pop id matches
+  an existing top-level listing**. Nested piece ids from collection browse
+  must not insert a new Group card (ghost "Title (1 item)" until refresh).
+  Collection browse must not forward silent member pops to the store grid.
+  Multi-select wishlist bumps
   `wishlistCount` via `VisitorWishlistBatch.applyWishlistCounts`. Do **not**
   show lock / stock chips on product cards outside selection — those live on
   product details only. After visitor **long-press** photo selection, each
@@ -66,12 +70,13 @@ This file defines what to follow for UI and logic inside `lib/presentation/store
 - Toolbar (Telegram flat icons — not phone/menu, not blue chips): **search**
   when content is viewable (opens `store_search_route`; hidden when
   `isContentLocked`). Primary action beside it: own store → **+** (add
-  products); other store when `canImport` → **download** import icon. No
-  gallery or import-requests icons in the app bar. Private visitor shows a
-  small lock beside the follower subtitle.
-- Other-store **Import** uses the toolbar download when `canImport` (older
-  select route). Long-press a photo (store account) starts selection: check
-  circles plus lock / stock / **In Your Store** / **Exclusive** marks.
+  products). Visitor browse has **no** app-bar Import/download icon —
+  Import is long-press selection only. No gallery or import-requests icons
+  in the app bar. Private visitor shows a small lock beside the follower
+  subtitle.
+- Other-store **Import**: long-press a photo (store account) starts
+  selection: check circles plus lock / stock / **In Your Store** /
+  **Exclusive** marks.
   `LOCKED_TIER_MAX` tiles cannot be selected (toast). Bottom dock:
   **Import N** + Wishlist; when any locked are selected, an orange strip above
   the buttons shows `N instant · M need approval` (CTA stays short — no overflow).
@@ -117,30 +122,42 @@ This file defines what to follow for UI and logic inside `lib/presentation/store
     tap opens `follow_requests_route` (Confirm / Delete).
   - Shell My store reuses `StoreMyStoreTab` (hamburger → Settings, no back /
     no day-night toggle; **Import requests** + Share CTAs) with
-    `AppPadding.screen` chrome.
+    `AppPadding.screen` chrome. Mosaic shows **all album frames** from
+    enriched `imagePaths` (cache-first / quiet expand); **Products**
+    count = mosaic cells; listing delete clears every cell for that
+    product.
 - Products + collage images are **cache-first**:
   API responses are written to `StoreProductsCache`, then the UI paints
-  only from that cache. Soft-prefetch warms the first listing stores and
-  store tap; profile joins that warm so landing paints full collages with
-  images already on disk (no shimmer when warm/cached). Cold path (empty
-  cache, no prefetch) still shows shimmer once. After publish / update /
-  delete / import, the mutation result is committed to cache immediately,
-  then a quiet GET refresh rewrites the cache again.
+  only from that cache. Soft-prefetch decode-warms collage tiles ahead of
+  open. Profile emit runs `warmDiskHits` (probe + decode CacheManager
+  files only) **before** paint, then background `precacheUrls` for
+  misses — kill/reopen no longer flashes ThumbHash when bytes are on
+  disk, and emit never blocks on network. Cold path (empty cache, no
+  prefetch) still shows shimmer once. After publish / update / delete /
+  import, the mutation result is committed to cache immediately, then a
+  quiet GET refresh rewrites the cache again.
 - **Create upload UX:** on Publish/Done, upload runs in
   `ProductUploadCoordinator` while the user returns via
   `leaveCreateProductFlow` to Discover `store_profile_route` immediately
   (pushes own-store profile if that route is not on the stack — do not leave
-  the user on shell home alone). Existing products stay painted; only the
-  in-flight listing shows a shimmer slot at the **top** of the product grid
-  (before existing tiles), matching **Group** / **Single** / **Gallery** view.
-  The server listing created mid-upload is **hidden** from the grid (and
-  skipped by prefetch / quiet refresh) until all photo batches finish — avoids
-  partial tiles beside the shimmer. Success → replace shimmer with the product
-  at index 0 (no “Product published” snack). Partial photo failures may still
-  snack.
+  the user on shell home alone). Existing products stay painted; the in-flight
+  listing shows a **Telegram-style pending card** at the **top** of the product
+  grid (Group / Single / Gallery): collage of local → compressed WebP previews
+  in **commit order**. While upload/commit runs: per-photo **loader** — never a
+  check before the API response. When commit succeeds: stagger **checks
+  one-by-one** (others stay loading) with a bubble tick sound per check
+  (`UiSounds` / `assets/sounds/ui_pop.mp3`), then swap to the real
+  product (`isRevealing` + `StoreProfilePendingRevealFinished`). On full
+  upload/commit **failure**: keep the collage with **close** icons
+  (`hasFailed`); **tap** retries via `StoreProfilePendingUploadRetry` /
+  `ProductUploadCoordinator.retryPending`. In-flight tiles use
+  `AbsorbPointer`. CDN URLs are seeded during S3 PUT so the success swap does
+  not blank-flash. Mid-upload server listing stays **hidden** until finalize.
+  Success is silent; failure may snack and leave a retryable pending card.
   Quiet refresh / listCollections stay **newest-first** so the new tile does
   not jump after upload. Pending uploads live on the coordinator singleton,
-  so leave/return still shows the correct shimmer until the upload finishes.
+  so leave/return still shows the correct pending collage until the upload
+  finishes.
 - Network media uses `CachedNetworkImageProvider` with a **file-based**
   `CacheManager` (`JsonCacheInfoRepository` — no sqflite) + `gaplessPlayback`
   so disk cache works without MissingPluginException and rebuilds do not flicker.
@@ -174,10 +191,21 @@ This file defines what to follow for UI and logic inside `lib/presentation/store
   `id`. Single / Gallery / browse share `formatCatalogDayBucket` (Today /
   Yesterday / month day). Group uses the same `StoreProduct.createdAt` for
   ordering consistency when switching view modes.
-- Own-store product delete: long-press a product to enter selection mode
-  (single or multi), then Delete on the selection bar. Confirm dialog →
-  `StoreProfileProductsDeleted` (sequential `DELETE .../collections/:id`).
-  Per-card close/delete icon is removed. Not available on other stores.
+- Own-store product delete: long-press a **product card** to enter listing
+  selection mode (single or multi), then Delete on the selection bar. Confirm
+  dialog → `StoreProfileProductsDeleted` (sequential
+  `DELETE .../collections/:id`). Per-card close/delete icon is removed. Not
+  available on other stores.
+- Own-store **item** delete: long-press a **collage / gallery photo** (or a
+  My Store mosaic cell) to enter photo selection (`productId|imageIndex`
+  keys, check badges). Further taps toggle items across listings. Selection
+  bar Delete → confirm → `StoreProfileItemsDeleted` which resolves nested
+  CatalogProduct ids via `DELETE /products/:id`, legacy `img_*` via
+  `POST …/photos/delete`, and whole-listing when every frame is selected.
+  Collage cards strip deleted frames in place; when a listing is emptied the
+  collection is deleted too and quiet refresh **omits** cover-only empty
+  collections (no ghost tile in My Store / Discover). Visitor Import /
+  Wishlist photo select is unchanged.
 - Store showcase images (1–5): loaded via `GET /stores/:id` into `coverImageUrl` /
   `storeImages`. Own-store logo camera opens `store_images_manager_sheet` — same
   carousel bottomsheet pattern as group photo preview (`ProductImageCarousel` +
@@ -206,7 +234,8 @@ This file defines what to follow for UI and logic inside `lib/presentation/store
   2 → `detailUrl`; 3–4 → left hero master, stacked `thumbnailUrl`; 5–9 →
   2-column rows `detailUrl`, 3-column rows thumb; 10+ (3×3 pages) → all
   thumb. Tap still opens master. Prefer BE variants on
-  `media.catly.in` (thumb ~240 @ q40 / detail ~720 @ q70 / master). FE CDN
+  `media.catly.in` (thumb ~360 @ q60 webp / detail ~1080 @ q75 webp /
+  master). FE CDN
   synth is **disabled** — missing BE fields fall back to master and log a GAP
   (restore commented `synthesize` in `catalog_responsive_image.dart` if needed).
   ThumbHash is an instant **placeholder** (RGBA blur via
@@ -216,7 +245,9 @@ This file defines what to follow for UI and logic inside `lib/presentation/store
   / browse photo taps still `precacheUrls(decode: true, fullCacheWidth)` on
   the **master** for product-details pinch. API `quality: low` still gates
   deep zoom on product details.
-- **Temp media debug logs:** filter console / Logcat by `CatalogMediaDBG`
+- **Temp media debug logs:** filter console / Logcat by `CatalogMediaDBG`;
+  R2 low+medium QA filter **`R2_QA`** (`L1` CDN, `M1` presign renew,
+  `M2` batch `images[]`, `M3` Accept webp)
   (`lib/helper/catalog_media_debug.dart`) — phases `STEP` / `UPLOAD` /
   `RENDER` / `WARM` / `API` / `GAP` (STEP covers sign → R2 PUT → batch →
   render URL role). Plain-English upload walkthrough: filter
@@ -232,9 +263,16 @@ This file defines what to follow for UI and logic inside `lib/presentation/store
   - **Single** / **Gallery**: opens `product_details_route` with Telegram-style
     photo transition (`TelegramPhotoPageRoute`: flyer from cell `sourceRect`
     to centered contain frame, dimmed grid behind, then details fade-in).
-    Pass `imageIndex`, `photoSourceRect` / `photoPath` / optional
-    `photoThumbhash`, + flat `galleryFeed`. Swipe-down pops; close shrinks
-    back into the cell. Same `deleted` / `updated` pop handling as browse.
+    Enriched collage cards resolve the tapped cell via `photoAssetIds` to the
+    nested jewel (`CatalogUiMapper.resolveCollageTap`) so details is not the
+    parent listing / wrong feed slot. Pass local `imageIndex`,
+    `photoSourceRect` / `photoPath` / optional `photoThumbhash`, + flat
+    `galleryFeed` (expanded per jewel) only when
+    `StoreGalleryState.resolveOpenFeed` finds the tapped **master path**
+    (path-first; never land on feed[0] of another listing). Group/Single
+    grids paint `productsForMedia` (same source as the open feed).
+    Swipe-down pops; close shrinks back into the cell. Same `deleted` /
+    `updated` pop handling as browse.
 - Optional route arg `focusProductId` (legacy / deep-link highlight; product
   details no longer offers a store-name chevron)
   scrolls to that listing and draws a primary (blue) border around its group
@@ -262,9 +300,13 @@ This file defines what to follow for UI and logic inside `lib/presentation/store
     multi-select in one collage creates multiple wishlist rows). No
     optimistic counts / success snackbar; busy shows a spinner on Wishlist.
     **Import** still unwired.
-  - Own-store long-press product selection / Delete is unchanged.
+  - Own-store long-press product (listing) selection / Delete is unchanged;
+    own-store photo long-press uses item delete (see above), not Import.
 - Do not show add-product / team CTAs on other stores. Product details receive `isOwnStore` so own-store originals can edit even when list permissions omit `edit`. Selection delete is gated by `isOwnStore`.
-- Import is gated by `viewerHasOwnStore` (session `ownStoreId`): hide Import CTAs and refuse `_openImport` / import probe until the user has created a store (Profile tab **Create store** → `store_setup_route` → team → store listing).
+- Import is gated by `viewerHasOwnStore` (session `ownStoreId`): hide Import
+  CTAs (selection forward + dock) / import probe until the user has created a
+  store (Profile tab **Create store** → `store_setup_route` → team → store
+  listing).
 - Opening the gallery also passes `isOwnStore` so details opened from a photo keep the same edit gate.
 - **Add products** / app-bar **+** opens one Telegram-style
   `ProductGalleryPicker` **bottomsheet** (`includeCamera: true`,
@@ -317,7 +359,7 @@ This file defines what to follow for UI and logic inside `lib/presentation/store
   Legacy photo tiles keep a flat collection `galleryFeed` + `imageIndex`.
   Returning from details: `silent` count pops are no-op on browse (no loader);
   real edits refresh with `_load(quiet: true)` so tiles stay visible.
-- Own store only: **Select** → **Edit** / **Ungroup** (or Done).
+- Own store only: **Select** → **Edit** / **Ungroup** / **Delete** (or Done).
   - **Edit**: opens refine preview for the selection (auto-opens single/multi
     details). Save uses PATCH collection + create/update sub-groups, then refresh.
   - **Ungroup**: selection must share one source (main or the same sub-group).
@@ -325,6 +367,9 @@ This file defines what to follow for UI and logic inside `lib/presentation/store
     `POST .../photos/move`, then refresh. New collection requires ≥1 photo left
     in the source collection. Popping browse after a new-collection move returns
     `refreshCollections` / `newCollectionId` so store profile reloads the product grid.
+  - **Delete**: removes selected jewel products (`DELETE /products/:id`) or
+    legacy photos (`POST …/photos/delete`). Selecting every tile deletes the
+    collection and pops `{deleted: true}` so the store grid drops the listing.
 - Browse shows all singles (no collage cap). Loading / error use `AppTextStyles`.
 
 ## Route and Navigation Notes

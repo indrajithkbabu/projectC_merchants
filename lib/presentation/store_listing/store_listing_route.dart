@@ -14,6 +14,7 @@ import 'package:project_c/helper/widgets/shell_tab_title_bar.dart';
 import 'package:project_c/models/store_channel.dart';
 import 'package:project_c/navigation/routes.dart';
 import 'package:project_c/services/store_products_prefetcher.dart';
+import 'package:project_c/presentation/store_listing/store_listing_widgets/store_listing_empty.dart';
 import 'package:project_c/presentation/store_listing/store_listing_widgets/store_listing_shimmer.dart';
 import 'package:project_c/presentation/store_listing/store_listing_widgets/store_listing_tile.dart';
 import 'package:project_c/webservice/notification/activity_repository.dart';
@@ -218,115 +219,44 @@ class _StoreListingRouteState extends State<StoreListingRoute> {
                     children: [
                       ShellTabTitleBar(
                         title: 'Stores',
-                        trailing: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            BlocBuilder<
-                              AccountProfileBloc,
-                              AccountProfileState
-                            >(
-                              buildWhen:
-                                  (prev, curr) =>
-                                      prev.profile?.ownStore?.id !=
-                                      curr.profile?.ownStore?.id,
-                              builder: (context, profileState) {
-                                final hasStore =
-                                    (profileState.profile?.ownStore?.id
-                                                .trim() ??
-                                            '')
-                                        .isNotEmpty;
-                                if (!hasStore) {
-                                  return const SizedBox.shrink();
-                                }
-                                return Padding(
-                                  padding: const EdgeInsets.only(right: 4),
-                                  child: SizedBox(
-                                    width: 40,
-                                    height: ShellTabTitleBar.rowHeight,
-                                    child: IconButton(
-                                      tooltip: 'Activity',
-                                      padding: EdgeInsets.zero,
-                                      constraints: const BoxConstraints(
-                                        minWidth: 40,
-                                        minHeight: ShellTabTitleBar.rowHeight,
-                                      ),
-                                      onPressed: _openActivity,
-                                      icon: Badge(
-                                        isLabelVisible: _activityUnread > 0,
-                                        smallSize: 8,
-                                        backgroundColor: AppColors.error,
-                                        child: Icon(
-                                          Icons.notifications_none_rounded,
-                                          size: 24,
-                                          color: AppColors.textPrimary,
-                                        ),
-                                      ),
-                                    ),
-                                  ),
-                                );
-                              },
-                            ),
-                            Theme(
-                              data: Theme.of(context).copyWith(
-                                splashFactory: NoSplash.splashFactory,
-                                highlightColor: Colors.transparent,
-                                splashColor: Colors.transparent,
-                              ),
-                              child: PopupMenuButton<_StoresOverflowAction>(
-                                tooltip: 'More',
+                        trailing: BlocBuilder<
+                          AccountProfileBloc,
+                          AccountProfileState
+                        >(
+                          buildWhen:
+                              (prev, curr) =>
+                                  prev.profile?.ownStore?.id !=
+                                  curr.profile?.ownStore?.id,
+                          builder: (context, profileState) {
+                            final hasStore =
+                                (profileState.profile?.ownStore?.id.trim() ??
+                                        '')
+                                    .isNotEmpty;
+                            if (!hasStore) return const SizedBox.shrink();
+                            return SizedBox(
+                              width: 40,
+                              height: ShellTabTitleBar.rowHeight,
+                              child: IconButton(
+                                tooltip: 'Activity',
                                 padding: EdgeInsets.zero,
                                 constraints: const BoxConstraints(
-                                  minWidth: 24,
+                                  minWidth: 40,
                                   minHeight: ShellTabTitleBar.rowHeight,
                                 ),
-                                offset: const Offset(0, 36),
-                                elevation: 0,
-                                shadowColor: Colors.transparent,
-                                surfaceTintColor: Colors.transparent,
-                                color: AppColors.surface,
-                                shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(12),
-                                  side: BorderSide(color: AppColors.border),
-                                ),
-                                // `child` (not `icon`) avoids IconButton’s 48dp
-                                // inset so the ⋮ aligns with screen padding like
-                                // the title.
-                                child: SizedBox(
-                                  width: 24,
-                                  height: ShellTabTitleBar.rowHeight,
-                                  child: Align(
-                                    alignment: Alignment.centerRight,
-                                    child: Icon(
-                                      Icons.more_vert_rounded,
-                                      size: 24,
-                                      color: AppColors.textPrimary,
-                                    ),
+                                onPressed: _openActivity,
+                                icon: Badge(
+                                  isLabelVisible: _activityUnread > 0,
+                                  smallSize: 8,
+                                  backgroundColor: AppColors.error,
+                                  child: Icon(
+                                    Icons.notifications_none_rounded,
+                                    size: 24,
+                                    color: AppColors.textPrimary,
                                   ),
                                 ),
-                                onSelected: (action) {
-                                  if (action ==
-                                      _StoresOverflowAction.createGroup) {
-                                    ScaffoldMessenger.of(context).showSnackBar(
-                                      const SnackBar(
-                                        content: Text('coming soon'),
-                                      ),
-                                    );
-                                  }
-                                },
-                                itemBuilder:
-                                    (menuContext) => [
-                                      PopupMenuItem(
-                                        value:
-                                            _StoresOverflowAction.createGroup,
-                                        child: Text(
-                                          'Create group',
-                                          style: AppTextStyles.body(),
-                                        ),
-                                      ),
-                                    ],
                               ),
-                            ),
-                          ],
+                            );
+                          },
                         ),
                       ),
                       const SizedBox(height: 12),
@@ -404,14 +334,9 @@ class _StoreListingRouteState extends State<StoreListingRoute> {
                                     SizedBox(
                                       height:
                                           MediaQuery.sizeOf(context).height *
-                                          0.22,
+                                          0.18,
                                     ),
-                                    Center(
-                                      child: Text(
-                                        'No stores found',
-                                        style: AppTextStyles.bodySecondary(),
-                                      ),
-                                    ),
+                                    const StoreListingEmpty(),
                                   ],
                                 ))
                             : ListView.builder(
@@ -447,5 +372,3 @@ class _StoreListingRouteState extends State<StoreListingRoute> {
     );
   }
 }
-
-enum _StoresOverflowAction { createGroup }

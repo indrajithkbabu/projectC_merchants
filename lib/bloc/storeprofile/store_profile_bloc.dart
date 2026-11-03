@@ -9,6 +9,7 @@ import 'package:project_c/helper/app_log.dart';
 import 'package:project_c/helper/catalog_ui_mapper.dart';
 import 'package:project_c/helper/device_contact_names.dart';
 import 'package:project_c/helper/import_qa.dart';
+import 'package:project_c/helper/owner_item_delete.dart';
 import 'package:project_c/helper/product_image.dart';
 import 'package:project_c/models/catalog/collection_models.dart';
 import 'package:project_c/models/catalog/follow_api_models.dart';
@@ -128,10 +129,12 @@ class StoreProfileBloc extends Bloc<StoreProfileEvent, StoreProfileState> {
                      : (cachedMeta?.followStatus ?? StoreFollowStatus.none),
              currentUserId:
                  (session ?? ServiceLocator.get<CatalogSession>()).profile?.id,
-             isLoadingProducts:
-                 initialCanView &&
-                 gatedProducts.isEmpty &&
-                 activeUploads.isEmpty,
+             // Do not assume cold shimmer on process restart — memory is empty
+             // but disk may still have the grid. LoadCollections sets shimmer
+             // only after a confirmed disk+warm miss (clear-data / first open).
+             isLoadingProducts: false,
+             productsResolved:
+                 gatedProducts.isNotEmpty || activeUploads.isNotEmpty,
              isLoadingMembers: own,
              isLoadingStoreMeta: cachedMeta == null,
              // Survive leave/return while create upload is still in flight.
@@ -144,6 +147,7 @@ class StoreProfileBloc extends Bloc<StoreProfileEvent, StoreProfileState> {
     on<StoreProfileProductUpdated>(_onProductUpdated);
     on<StoreProfileProductDeleted>(_onProductDeleted);
     on<StoreProfileProductsDeleted>(_onProductsDeleted);
+    on<StoreProfileItemsDeleted>(_onItemsDeleted);
     on<StoreProfileProductsReplaced>(_onProductsReplaced);
     on<StoreProfileProductsImported>(_onProductsImported);
     on<StoreProfileImportPressed>(_onImportPressed);
@@ -160,8 +164,11 @@ class StoreProfileBloc extends Bloc<StoreProfileEvent, StoreProfileState> {
     on<StoreProfileDeleteImageRequested>(_onDeleteImageRequested);
     on<StoreProfileProbeImportAvailability>(_onProbeImportAvailability);
     on<StoreProfilePendingUploadStarted>(_onPendingUploadStarted);
+    on<StoreProfilePendingUploadProgress>(_onPendingUploadProgress);
     on<StoreProfilePendingUploadSucceeded>(_onPendingUploadSucceeded);
+    on<StoreProfilePendingRevealFinished>(_onPendingRevealFinished);
     on<StoreProfilePendingUploadFailed>(_onPendingUploadFailed);
+    on<StoreProfilePendingUploadRetry>(_onPendingUploadRetry);
     on<StoreProfileHideInFlightListing>(_onHideInFlightListing);
     on<StoreProfileFollowPressed>(_onFollowPressed);
     on<StoreProfileUnfollowPressed>(_onUnfollowPressed);
@@ -191,12 +198,22 @@ class StoreProfileBloc extends Bloc<StoreProfileEvent, StoreProfileState> {
   final ProductUploadCoordinator _uploadCoordinator;
   StreamSubscription<ProductUploadEvent>? _uploadSub;
   final Set<String> _finishedUploadIds = <String>{};
+
+  /// Commit succeeded — product held until pending collage finishes tick reveal.
+  final Map<String, ({StoreProduct product, String? partialMessage})>
+  _pendingReveals = {};
   static const _tag = 'StoreProfileBloc';
 
   void _onUploadCoordinatorEvent(ProductUploadEvent event) {
     if (event.storeId != state.storeId) return;
     switch (event) {
-      case ProductUploadStarted(:final pendingId, :final storeId, :final title, :final photoCount):
+      case ProductUploadStarted(
+        :final pendingId,
+        :final storeId,
+        :final title,
+        :final photoCount,
+        :final photos,
+      ):
         add(
           StoreProfilePendingUploadStarted(
             PendingProductUpload(
@@ -204,7 +221,20 @@ class StoreProfileBloc extends Bloc<StoreProfileEvent, StoreProfileState> {
               storeId: storeId,
               title: title,
               photoCount: photoCount,
+              photos: photos,
             ),
+          ),
+        );
+      case ProductUploadProgress(
+        :final pendingId,
+        :final photos,
+        :final isCommitting,
+      ):
+        add(
+          StoreProfilePendingUploadProgress(
+            pendingId: pendingId,
+            photos: photos,
+            isCommitting: isCommitting,
           ),
         );
       case ProductUploadListingBound(:final pendingId, :final listingId):
@@ -257,7 +287,9 @@ class StoreProfileBloc extends Bloc<StoreProfileEvent, StoreProfileState> {
   ) async {
     final storeId = state.storeId;
     if (storeId.isEmpty || storeId == 'my_store' || storeId == 'other_store') {
-      emit(state.copyWith(isLoadingProducts: false));
+      emit(
+        state.copyWith(isLoadingProducts: false, productsResolved: true),
+      );
       return;
     }
     if (!state.isOwnStore && !state.canViewContent) {
@@ -266,12 +298,14 @@ class StoreProfileBloc extends Bloc<StoreProfileEvent, StoreProfileState> {
           products: const [],
           clearProductsDetailed: true,
           isLoadingProducts: false,
+          productsResolved: true,
         ),
       );
       return;
     }
 
-    // Disk/memory first — UI always paints from cache.
+    // Disk/memory first — restart paints from disk without shimmer.
+    // Do not set isLoadingProducts until disk+warm both miss (true cold).
     final disk = await StoreProductsCache.instance.read(storeId);
     if (emit.isDone) return;
     if (disk != null && disk.isNotEmpty) {
@@ -279,6 +313,7 @@ class StoreProfileBloc extends Bloc<StoreProfileEvent, StoreProfileState> {
         emit,
         storeId,
         isLoadingProducts: false,
+        productsResolved: true,
       );
       if (!state.isOwnStore && state.canImport) {
         add(const StoreProfileProbeImportAvailability());
@@ -297,6 +332,7 @@ class StoreProfileBloc extends Bloc<StoreProfileEvent, StoreProfileState> {
         storeId,
         fallback: warm,
         isLoadingProducts: false,
+        productsResolved: true,
       );
       if (!state.isOwnStore && state.canImport) {
         add(const StoreProfileProbeImportAvailability());
@@ -305,12 +341,24 @@ class StoreProfileBloc extends Bloc<StoreProfileEvent, StoreProfileState> {
       return;
     }
 
-    // True cold path (no prefetch, empty cache) — shimmer once.
-    emit(state.copyWith(isLoadingProducts: true, clearError: true));
+    // True cold path (clear data / first open) — view-mode shimmer once.
+    emit(
+      state.copyWith(
+        isLoadingProducts: true,
+        productsResolved: false,
+        clearError: true,
+      ),
+    );
     try {
       final products = await _fetchEnrichedProducts(storeId);
       if (emit.isDone) return;
-      await _commitProducts(emit, storeId, products, isLoadingProducts: false);
+      await _commitProducts(
+        emit,
+        storeId,
+        products,
+        isLoadingProducts: false,
+        productsResolved: true,
+      );
       AppLog.d(_tag, 'Loaded ${products.length} collections (cold load)');
       if (!state.isOwnStore && state.canImport) {
         add(const StoreProfileProbeImportAvailability());
@@ -324,6 +372,7 @@ class StoreProfileBloc extends Bloc<StoreProfileEvent, StoreProfileState> {
             products: const [],
             clearProductsDetailed: true,
             isLoadingProducts: false,
+            productsResolved: true,
             clearError: true,
           ),
         );
@@ -332,6 +381,7 @@ class StoreProfileBloc extends Bloc<StoreProfileEvent, StoreProfileState> {
       emit(
         state.copyWith(
           isLoadingProducts: false,
+          productsResolved: true,
           errorMessage: CatalogErrorMapper.toUserMessage(e),
         ),
       );
@@ -351,7 +401,12 @@ class StoreProfileBloc extends Bloc<StoreProfileEvent, StoreProfileState> {
       final products = await _fetchEnrichedProducts(storeId);
       if (emit.isDone) return;
       final previous = state.products;
-      final visible = _withoutInFlightUploads(products);
+      // Drop cover-only empties that slipped through enrich (no displayable
+      // frames) so item-delete cannot resurrect ghost tiles after refresh.
+      final visible = [
+        for (final p in _withoutInFlightUploads(products))
+          if (p.imagePaths.any(ProductImagePaths.isDisplayable)) p,
+      ];
       await StoreProductsCache.instance.write(storeId, visible);
       final cached =
           StoreProductsCache.instance.readMemory(storeId) ?? visible;
@@ -389,12 +444,13 @@ class StoreProfileBloc extends Bloc<StoreProfileEvent, StoreProfileState> {
               ? summaries.length
               : i + concurrency;
       final chunk = summaries.sublist(i, end);
-      products.addAll(
-        await Future.wait([
-          for (final summary in chunk)
-            _productFromSummary(storeId: storeId, summary: summary),
-        ]),
-      );
+      final chunkProducts = await Future.wait([
+        for (final summary in chunk)
+          _productFromSummary(storeId: storeId, summary: summary),
+      ]);
+      for (final product in chunkProducts) {
+        if (product != null) products.add(product);
+      }
     }
     // listCollections is oldest-first; grid must show newest upload first.
     final ordered = _newestFirst(products);
@@ -419,11 +475,39 @@ class StoreProfileBloc extends Bloc<StoreProfileEvent, StoreProfileState> {
     ];
   }
 
-  /// Precache visible collage tiles (not every photo in every listing).
+  List<String> _gridTileUrls(List<StoreProduct> products) => [
+    // Album frames use up to 9 cells per listing on the first collage page.
+    for (final product in products) ...product.imagePaths.take(9),
+  ];
+
+  /// Full disk + decode warm (prefetch / cold fetch — may hit network).
   Future<void> _precacheGridTiles(List<StoreProduct> products) {
-    return CatalogImageCache.precacheUrls([
-      for (final product in products) ...product.imagePaths.take(4),
-    ]);
+    CatalogImageCache.ensureCatalogMemoryBudget();
+    return CatalogImageCache.precacheUrls(
+      _gridTileUrls(products),
+      decode: true,
+      maxDecode: CatalogImageCache.defaultMaxDecode,
+      cacheWidth: CatalogImageCache.gridCacheWidth(),
+    );
+  }
+
+  /// Reopen-safe: decode only CacheManager hits, then background-fill misses.
+  Future<void> _warmGridTilesBeforePaint(List<StoreProduct> products) async {
+    final urls = _gridTileUrls(products);
+    if (urls.isEmpty) return;
+    await CatalogImageCache.warmDiskHits(
+      urls,
+      maxDecode: CatalogImageCache.defaultMaxDecode,
+      cacheWidth: CatalogImageCache.gridCacheWidth(),
+    );
+    unawaited(
+      CatalogImageCache.precacheUrls(
+        urls,
+        decode: true,
+        maxDecode: CatalogImageCache.defaultMaxDecode,
+        cacheWidth: CatalogImageCache.gridCacheWidth(),
+      ),
+    );
   }
 
   bool _sameGridVisual(List<StoreProduct> a, List<StoreProduct> b) {
@@ -448,7 +532,8 @@ class StoreProfileBloc extends Bloc<StoreProfileEvent, StoreProfileState> {
     return true;
   }
 
-  Future<StoreProduct> _productFromSummary({
+  /// Null = omit from grid (empty collection after item delete — no cover ghost).
+  Future<StoreProduct?> _productFromSummary({
     required String storeId,
     required CollectionSummary summary,
   }) async {
@@ -469,14 +554,22 @@ class StoreProfileBloc extends Bloc<StoreProfileEvent, StoreProfileState> {
             products: page.items,
           );
         }
-        // Empty products → cover-only for true singles / empty groups.
-        if (summary.photoCount <= 1) return cover;
+        // No first-class products — fall through to collection detail.
+        // Do not return cover-only here: stale photoCount after deleting the
+        // last item would resurrect a ghost tile in My Store / Discover.
+        if (summary.photoCount <= 0) {
+          AppLog.d(
+            _tag,
+            'Skip empty collection ${summary.id} (products=0 photoCount=0)',
+          );
+          return null;
+        }
       } catch (e) {
         AppLog.d(
           _tag,
           'products?collectionId enrich miss id=${summary.id} err=$e',
         );
-        if (summary.photoCount <= 1) return cover;
+        if (summary.photoCount <= 0) return null;
       }
 
       final detail = await _collectionRepository.fetchCollection(
@@ -484,6 +577,17 @@ class StoreProfileBloc extends Bloc<StoreProfileEvent, StoreProfileState> {
         listingId: summary.id,
       );
       final detailed = CatalogUiMapper.detailToProduct(detail);
+      // Empty detail (and no embedded products) → omit cover ghost.
+      final hasDisplayable = detailed.imagePaths.any(
+        (p) => ProductImagePaths.isDisplayable(p),
+      );
+      if (!hasDisplayable) {
+        AppLog.d(
+          _tag,
+          'Skip empty collection ${summary.id} (detail has no displayable photos)',
+        );
+        return null;
+      }
       // Keep list-cover URL first so primary tile stays cache-stable.
       // Rotate all parallel photo arrays together (paths/ids/hashes/quality).
       final coverUrl = cover.primaryImagePath?.trim() ?? '';
@@ -518,6 +622,7 @@ class StoreProfileBloc extends Bloc<StoreProfileEvent, StoreProfileState> {
       );
     } catch (e) {
       AppLog.e(_tag, 'Collection detail enrich failed id=${summary.id}', e);
+      if (summary.photoCount <= 0) return null;
       return cover;
     }
   }
@@ -528,6 +633,7 @@ class StoreProfileBloc extends Bloc<StoreProfileEvent, StoreProfileState> {
     String storeId,
     List<StoreProduct> products, {
     bool isLoadingProducts = false,
+    bool productsResolved = true,
     String? infoMessage,
     bool clearDeletingProductId = false,
     bool clearError = false,
@@ -539,6 +645,7 @@ class StoreProfileBloc extends Bloc<StoreProfileEvent, StoreProfileState> {
       storeId,
       fallback: products,
       isLoadingProducts: isLoadingProducts,
+      productsResolved: productsResolved,
       infoMessage: infoMessage,
       clearDeletingProductId: clearDeletingProductId,
       clearError: clearError,
@@ -551,6 +658,7 @@ class StoreProfileBloc extends Bloc<StoreProfileEvent, StoreProfileState> {
     String storeId, {
     List<StoreProduct>? fallback,
     bool isLoadingProducts = false,
+    bool? productsResolved,
     String? infoMessage,
     bool clearDeletingProductId = false,
     bool clearError = false,
@@ -563,11 +671,18 @@ class StoreProfileBloc extends Bloc<StoreProfileEvent, StoreProfileState> {
     final visible = List<StoreProduct>.from(_withoutInFlightUploads(cached))
       ..sort((a, b) => b.id.compareTo(a.id));
     if (emit.isDone) return;
+    // Probe+decode disk hits before emit so reopen doesn't flash ThumbHash
+    // when CacheManager already has the files (session maps clear on kill).
+    if (visible.isNotEmpty) {
+      await _warmGridTilesBeforePaint(visible);
+      if (emit.isDone) return;
+    }
     emit(
       state.copyWith(
         products: visible,
         productsDetailed: visible,
         isLoadingProducts: isLoadingProducts,
+        productsResolved: productsResolved,
         infoMessage: infoMessage,
         clearDeletingProductId: clearDeletingProductId,
         clearError: clearError,
@@ -620,6 +735,20 @@ class StoreProfileBloc extends Bloc<StoreProfileEvent, StoreProfileState> {
     final follow =
         state.isOwnStore ? StoreFollowStatus.self : cached.followStatus;
     final nextProductCount = cached.productCount ?? state.apiProductCount;
+    // Unlocking with an empty grid: mark unresolved so UI stays blank (not
+    // false empty). Shimmer only after LoadCollections confirms disk+warm miss.
+    final newlyUnlocked = canView && !state.canViewContent;
+    final unlockingEmpty =
+        newlyUnlocked &&
+        state.products.isEmpty &&
+        state.pendingUploads.isEmpty;
+    final isLoadingProducts = !canView ? false : state.isLoadingProducts;
+    final productsResolved =
+        !canView
+            ? true
+            : unlockingEmpty
+            ? false
+            : state.productsResolved;
     emit(
       state.copyWith(
         isLoadingStoreMeta: isLoadingStoreMeta,
@@ -640,7 +769,8 @@ class StoreProfileBloc extends Bloc<StoreProfileEvent, StoreProfileState> {
         infoMessage: infoMessage,
         products: canView ? state.products : const [],
         clearProductsDetailed: !canView,
-        isLoadingProducts: canView ? state.isLoadingProducts : false,
+        isLoadingProducts: isLoadingProducts,
+        productsResolved: productsResolved,
       ),
     );
   }
@@ -1287,7 +1417,13 @@ class StoreProfileBloc extends Bloc<StoreProfileEvent, StoreProfileState> {
       }
       next.add(product);
     }
-    if (!replaced) next.insert(0, updated);
+    // Silent pops often carry a nested product id (details from collection
+    // browse). Never invent a new top-level listing for those — that showed
+    // as a ghost "Title (1 item)" card until the next collections refresh.
+    if (!replaced) {
+      if (event.silent) return;
+      next.insert(0, updated);
+    }
     final storeId = state.storeId;
     if (storeId.isEmpty || storeId == 'my_store' || storeId == 'other_store') {
       emit(
@@ -1317,12 +1453,22 @@ class StoreProfileBloc extends Bloc<StoreProfileEvent, StoreProfileState> {
     final productId = event.productId.trim();
     if (productId.isEmpty || state.deletingProductId != null) return;
 
-    List<StoreProduct> without(List<StoreProduct> source) =>
+    final storeId = state.storeId;
+    final nestedStripped = OwnerItemDelete.stripDeletedIds(
+      products: state.products,
+      deletedIds: {productId},
+    );
+    final wasNested =
+        nestedStripped.length != state.products.length ||
+        !_sameProductIds(nestedStripped, state.products);
+    final isListing =
+        state.products.any((p) => p.id.trim() == productId);
+
+    List<StoreProduct> withoutListing(List<StoreProduct> source) =>
         source.where((p) => p.id != productId).toList();
 
-    final storeId = state.storeId;
     if (storeId.isEmpty || storeId == 'my_store' || storeId == 'other_store') {
-      final next = without(state.products);
+      final next = wasNested ? nestedStripped : withoutListing(state.products);
       emit(
         state.copyWith(
           products: next,
@@ -1335,29 +1481,88 @@ class StoreProfileBloc extends Bloc<StoreProfileEvent, StoreProfileState> {
 
     emit(state.copyWith(deletingProductId: productId, clearError: true));
     try {
-      await _collectionRepository.deleteCollection(
-        storeId: storeId,
-        listingId: productId,
-      );
-      AppLog.d(_tag, 'Deleted collection $productId');
+      // Nested jewel (or details already deleted): prefer product delete.
+      if (wasNested && !isListing) {
+        try {
+          await _collectionRepository.deleteProduct(productId: productId);
+          AppLog.d(_tag, 'Deleted nested product $productId');
+        } on CatalogApiException catch (e) {
+          final gone =
+              e.statusCode == 404 ||
+              e.code == 'PRODUCT_NOT_FOUND' ||
+              e.code == 'NOT_FOUND' ||
+              e.code == 'COLLECTION_NOT_FOUND';
+          if (!gone) rethrow;
+          AppLog.d(_tag, 'Nested product $productId already gone');
+        }
+        // Last item in a collage → remove the empty parent collection.
+        for (final parent in state.products) {
+          final had =
+              parent.photoAssetIds.any((id) => id.trim() == productId);
+          if (!had) continue;
+          final still =
+              nestedStripped.any((p) => p.id == parent.id);
+          if (still) continue;
+          try {
+            await _collectionRepository.deleteCollection(
+              storeId: storeId,
+              listingId: parent.id,
+            );
+            AppLog.d(_tag, 'Deleted emptied parent listing ${parent.id}');
+          } catch (e) {
+            AppLog.e(_tag, 'Empty parent delete failed ${parent.id}', e);
+          }
+        }
+        await _commitProducts(
+          emit,
+          storeId,
+          nestedStripped,
+          infoMessage: 'Product deleted.',
+          clearDeletingProductId: true,
+        );
+        add(const StoreProfileQuietRefreshCollections());
+        return;
+      }
+
+      // Whole listing / collection.
+      try {
+        await _collectionRepository.deleteProduct(productId: productId);
+        AppLog.d(_tag, 'Deleted product $productId');
+      } on CatalogApiException catch (e) {
+        final missingProduct =
+            e.statusCode == 404 ||
+            e.code == 'PRODUCT_NOT_FOUND' ||
+            e.code == 'NOT_FOUND';
+        if (!missingProduct) rethrow;
+        await _collectionRepository.deleteCollection(
+          storeId: storeId,
+          listingId: productId,
+        );
+        AppLog.d(_tag, 'Deleted collection $productId (product 404 fallback)');
+      }
       await _commitProducts(
         emit,
         storeId,
-        without(state.products),
+        withoutListing(state.products),
         infoMessage: 'Product deleted.',
         clearDeletingProductId: true,
       );
       add(const StoreProfileQuietRefreshCollections());
     } catch (e) {
-      AppLog.e(_tag, 'Delete collection failed', e);
+      AppLog.e(_tag, 'Delete product/collection failed', e);
       final alreadyGone =
           e is CatalogApiException &&
-          (e.statusCode == 404 || e.code == 'COLLECTION_NOT_FOUND');
+          (e.statusCode == 404 ||
+              e.code == 'COLLECTION_NOT_FOUND' ||
+              e.code == 'PRODUCT_NOT_FOUND' ||
+              e.code == 'NOT_FOUND');
       if (alreadyGone) {
+        final next =
+            wasNested ? nestedStripped : withoutListing(state.products);
         await _commitProducts(
           emit,
           storeId,
-          without(state.products),
+          next,
           infoMessage: 'Product deleted.',
           clearDeletingProductId: true,
         );
@@ -1371,6 +1576,15 @@ class StoreProfileBloc extends Bloc<StoreProfileEvent, StoreProfileState> {
         ),
       );
     }
+  }
+
+  bool _sameProductIds(List<StoreProduct> a, List<StoreProduct> b) {
+    if (a.length != b.length) return false;
+    for (var i = 0; i < a.length; i++) {
+      if (a[i].id != b[i].id) return false;
+      if (a[i].imagePaths.length != b[i].imagePaths.length) return false;
+    }
+    return true;
   }
 
   Future<void> _onProductsDeleted(
@@ -1466,6 +1680,244 @@ class StoreProfileBloc extends Bloc<StoreProfileEvent, StoreProfileState> {
     }
   }
 
+  Future<void> _onItemsDeleted(
+    StoreProfileItemsDeleted event,
+    Emitter<StoreProfileState> emit,
+  ) async {
+    final keys =
+        event.photoKeys
+            .map((e) => e.trim())
+            .where((e) => e.isNotEmpty)
+            .toSet();
+    if (keys.isEmpty || state.deletingProductId != null) return;
+
+    final storeId = state.storeId;
+    final products = state.productsForMedia.isNotEmpty
+        ? state.productsForMedia
+        : state.products;
+
+    Map<String, String> targets;
+    try {
+      targets = await OwnerItemDelete.resolveTargets(
+        photoKeys: keys,
+        products: products,
+        storeId: storeId,
+        collections: _collectionRepository,
+      );
+    } catch (e) {
+      AppLog.e(_tag, 'Resolve item delete targets failed', e);
+      emit(
+        state.copyWith(
+          errorMessage: CatalogErrorMapper.toUserMessage(e),
+        ),
+      );
+      return;
+    }
+    if (targets.isEmpty) {
+      emit(
+        state.copyWith(
+          errorMessage: 'Could not resolve selected items.',
+        ),
+      );
+      return;
+    }
+
+    // Group legacy photo ids by listing; product deletes are per-id.
+    final productIds = <String>{};
+    final legacyByListing = <String, Set<String>>{};
+    final listingIdsTouched = <String>{};
+    for (final entry in targets.entries) {
+      final id = entry.key.trim();
+      final listingId = entry.value.trim();
+      if (id.isEmpty || listingId.isEmpty) continue;
+      listingIdsTouched.add(listingId);
+      if (OwnerItemDelete.isLegacyPhotoId(id)) {
+        legacyByListing.putIfAbsent(listingId, () => <String>{}).add(id);
+      } else {
+        productIds.add(id);
+      }
+    }
+
+    // Listings where every frame is selected → delete whole collection.
+    final deleteWholeListings = <String>{};
+    final byId = {for (final p in products) p.id: p};
+    for (final listingId in listingIdsTouched) {
+      final card = byId[listingId];
+      if (card == null) continue;
+      final selectedKeysForListing = keys.where(
+        (k) => k.startsWith('$listingId|'),
+      );
+      final selectedIndexes = <int>{
+        for (final k in selectedKeysForListing)
+          int.tryParse(k.substring(listingId.length + 1)) ?? -1,
+      }..removeWhere((i) => i < 0);
+      final frameCount = card.imagePaths.isEmpty ? 1 : card.imagePaths.length;
+      if (selectedIndexes.length >= frameCount) {
+        deleteWholeListings.add(listingId);
+      }
+    }
+
+    if (storeId.isEmpty || storeId == 'my_store' || storeId == 'other_store') {
+      final next = OwnerItemDelete.stripDeletedIds(
+        products: state.products,
+        deletedIds: {...productIds, ...deleteWholeListings},
+      );
+      emit(
+        state.copyWith(
+          products: next,
+          productsDetailed: next,
+          infoMessage:
+              keys.length == 1
+                  ? 'Item deleted.'
+                  : '${keys.length} items deleted.',
+        ),
+      );
+      return;
+    }
+
+    var failed = 0;
+    final deletedIds = <String>{...deleteWholeListings};
+
+    for (final listingId in deleteWholeListings) {
+      emit(state.copyWith(deletingProductId: listingId, clearError: true));
+      try {
+        await _collectionRepository.deleteCollection(
+          storeId: storeId,
+          listingId: listingId,
+        );
+        AppLog.d(_tag, 'Deleted whole listing $listingId (all items selected)');
+      } catch (e) {
+        AppLog.e(_tag, 'Whole listing delete failed for $listingId', e);
+        final gone =
+            e is CatalogApiException &&
+            (e.statusCode == 404 || e.code == 'COLLECTION_NOT_FOUND');
+        if (!gone) failed++;
+      }
+    }
+
+    for (final productId in productIds) {
+      if (deleteWholeListings.contains(targets[productId])) continue;
+      emit(state.copyWith(deletingProductId: productId, clearError: true));
+      try {
+        await _collectionRepository.deleteProduct(productId: productId);
+        deletedIds.add(productId);
+        AppLog.d(_tag, 'Deleted item product $productId');
+      } on CatalogApiException catch (e) {
+        final gone =
+            e.statusCode == 404 ||
+            e.code == 'PRODUCT_NOT_FOUND' ||
+            e.code == 'NOT_FOUND';
+        if (gone) {
+          deletedIds.add(productId);
+        } else {
+          AppLog.e(_tag, 'Item product delete failed for $productId', e);
+          failed++;
+        }
+      } catch (e) {
+        AppLog.e(_tag, 'Item product delete failed for $productId', e);
+        failed++;
+      }
+    }
+
+    for (final entry in legacyByListing.entries) {
+      final listingId = entry.key;
+      if (deleteWholeListings.contains(listingId)) continue;
+      final photoIds = entry.value.toList(growable: false);
+      if (photoIds.isEmpty) continue;
+      emit(state.copyWith(deletingProductId: listingId, clearError: true));
+      try {
+        await _collectionRepository.deletePhotos(
+          storeId: storeId,
+          listingId: listingId,
+          photoIds: photoIds,
+        );
+        deletedIds.addAll(photoIds);
+        AppLog.d(
+          _tag,
+          'Deleted ${photoIds.length} photos from listing $listingId',
+        );
+      } catch (e) {
+        AppLog.e(_tag, 'Photo delete failed for $listingId', e);
+        failed++;
+      }
+    }
+
+    // If deleting nested items emptied a listing, drop the collection too.
+    for (final listingId in listingIdsTouched) {
+      if (deleteWholeListings.contains(listingId)) continue;
+      final card = byId[listingId];
+      if (card == null) continue;
+      final emptied = OwnerItemDelete.isListingEmptied(card, deletedIds);
+      final strippedAway = !OwnerItemDelete.stripDeletedIds(
+        products: [card],
+        deletedIds: deletedIds,
+      ).any((p) => p.id == listingId);
+      if (!emptied && !strippedAway) continue;
+
+      emit(state.copyWith(deletingProductId: listingId, clearError: true));
+      // Always drop from local grid even if collection delete fails — quiet
+      // refresh will omit empty collections (photoCount==0 / no products).
+      deletedIds.add(listingId);
+      try {
+        await _collectionRepository.deleteCollection(
+          storeId: storeId,
+          listingId: listingId,
+        );
+        AppLog.d(_tag, 'Deleted emptied listing $listingId');
+      } catch (e) {
+        AppLog.e(_tag, 'Empty listing delete failed for $listingId', e);
+        final gone =
+            e is CatalogApiException &&
+            (e.statusCode == 404 || e.code == 'COLLECTION_NOT_FOUND');
+        if (!gone) failed++;
+      }
+    }
+
+    // Also force-drop whole listings selected in full (API may have failed).
+    deletedIds.addAll(deleteWholeListings);
+
+    final next = OwnerItemDelete.stripDeletedIds(
+      products: state.products,
+      deletedIds: deletedIds,
+    );
+    // Also strip from detailed albums when present.
+    final nextDetailed =
+        state.productsDetailed.isEmpty
+            ? next
+            : OwnerItemDelete.stripDeletedIds(
+              products: state.productsDetailed,
+              deletedIds: deletedIds,
+            );
+
+    await StoreProductsCache.instance.write(storeId, nextDetailed);
+    final info =
+        deletedIds.isEmpty
+            ? null
+            : (deletedIds.length <= 1
+                ? 'Item deleted.'
+                : '${deletedIds.length} items deleted.');
+    final err =
+        failed == 0
+            ? null
+            : (deletedIds.isEmpty
+                ? 'Could not delete items.'
+                : 'Some items could not be deleted.');
+    emit(
+      state.copyWith(
+        products: next,
+        productsDetailed: nextDetailed,
+        clearDeletingProductId: true,
+        clearInfoMessage: info == null,
+        clearError: err == null,
+        infoMessage: info,
+        errorMessage: err,
+      ),
+    );
+    if (deletedIds.isNotEmpty) {
+      add(const StoreProfileQuietRefreshCollections());
+    }
+  }
+
   Future<void> _onProductsReplaced(
     StoreProfileProductsReplaced event,
     Emitter<StoreProfileState> emit,
@@ -1549,15 +2001,46 @@ class StoreProfileBloc extends Bloc<StoreProfileEvent, StoreProfileState> {
     final pending = event.pending;
     if (pending.storeId != state.storeId) return;
     // Upload may finish before this event is handled — ignore stale starts.
+    // Retry clears this id first; success keeps it finished.
     if (_finishedUploadIds.contains(pending.id)) return;
-    final exists = state.pendingUploads.any((p) => p.id == pending.id);
-    if (exists) return;
+    final index = state.pendingUploads.indexWhere((p) => p.id == pending.id);
+    if (index >= 0) {
+      // Retry / re-seed — replace the failed or stale tile in place.
+      final next = [...state.pendingUploads];
+      next[index] = pending;
+      emit(state.copyWith(pendingUploads: next, clearError: true));
+      return;
+    }
     emit(
       state.copyWith(
         pendingUploads: [pending, ...state.pendingUploads],
         clearError: true,
       ),
     );
+  }
+
+  void _onPendingUploadProgress(
+    StoreProfilePendingUploadProgress event,
+    Emitter<StoreProfileState> emit,
+  ) {
+    if (_finishedUploadIds.contains(event.pendingId)) return;
+    final index = state.pendingUploads.indexWhere(
+      (p) => p.id == event.pendingId,
+    );
+    if (index < 0) return;
+    final current = state.pendingUploads[index];
+    // Commit already landed — ignore late S3 progress during tick reveal.
+    if (current.isRevealing) return;
+    final updated = current.copyWith(
+      photos: event.photos,
+      photoCount:
+          event.photos.isNotEmpty ? event.photos.length : current.photoCount,
+      isCommitting: event.isCommitting,
+    );
+    if (updated == current) return;
+    final next = [...state.pendingUploads];
+    next[index] = updated;
+    emit(state.copyWith(pendingUploads: next));
   }
 
   void _onHideInFlightListing(
@@ -1591,21 +2074,78 @@ class StoreProfileBloc extends Bloc<StoreProfileEvent, StoreProfileState> {
     Emitter<StoreProfileState> emit,
   ) async {
     _finishedUploadIds.add(event.pendingId);
-    final nextPending =
-        state.pendingUploads.where((p) => p.id != event.pendingId).toList();
     final published = event.product.copyWith(
       canEdit: event.product.canEdit || state.isOwnStore,
       canDelete: event.product.canDelete || state.isOwnStore,
     );
+    final partial =
+        event.partialMessage?.trim().isNotEmpty == true
+            ? event.partialMessage!.trim()
+            : null;
+
+    final index = state.pendingUploads.indexWhere(
+      (p) => p.id == event.pendingId,
+    );
+    // No pending tile (left mid-flight) — commit product immediately.
+    if (index < 0) {
+      await _finalizePublishedUpload(
+        emit,
+        pendingId: event.pendingId,
+        published: published,
+        partialMessage: partial,
+      );
+      return;
+    }
+
+    // Hold product; UI staggers checks one-by-one, then reveal-finished.
+    _pendingReveals[event.pendingId] = (
+      product: published,
+      partialMessage: partial,
+    );
+    final current = state.pendingUploads[index];
+    if (current.isRevealing) return;
+    final next = [...state.pendingUploads];
+    next[index] = current.copyWith(isRevealing: true, isCommitting: false);
+    emit(state.copyWith(pendingUploads: next));
+  }
+
+  Future<void> _onPendingRevealFinished(
+    StoreProfilePendingRevealFinished event,
+    Emitter<StoreProfileState> emit,
+  ) async {
+    final held = _pendingReveals.remove(event.pendingId);
+    if (held == null) {
+      // Reveal already finalized or success never held — drop pending only.
+      final nextPending =
+          state.pendingUploads.where((p) => p.id != event.pendingId).toList();
+      if (nextPending.length != state.pendingUploads.length) {
+        emit(state.copyWith(pendingUploads: nextPending));
+      }
+      return;
+    }
+    await _finalizePublishedUpload(
+      emit,
+      pendingId: event.pendingId,
+      published: held.product,
+      partialMessage: held.partialMessage,
+    );
+  }
+
+  Future<void> _finalizePublishedUpload(
+    Emitter<StoreProfileState> emit, {
+    required String pendingId,
+    required StoreProduct published,
+    String? partialMessage,
+  }) async {
+    final nextPending =
+        state.pendingUploads.where((p) => p.id != pendingId).toList();
     final withoutDup =
         state.products.where((p) => p.id != published.id).toList();
     final next = [published, ...withoutDup];
     // Success is silent (product appears in grid). Only surface partial
     // upload failures (e.g. some photos failed).
     final partial =
-        event.partialMessage?.trim().isNotEmpty == true
-            ? event.partialMessage!.trim()
-            : null;
+        partialMessage?.trim().isNotEmpty == true ? partialMessage!.trim() : null;
 
     final storeId = state.storeId;
     if (storeId.isEmpty || storeId == 'my_store' || storeId == 'other_store') {
@@ -1633,16 +2173,83 @@ class StoreProfileBloc extends Bloc<StoreProfileEvent, StoreProfileState> {
     StoreProfilePendingUploadFailed event,
     Emitter<StoreProfileState> emit,
   ) {
-    _finishedUploadIds.add(event.pendingId);
+    _pendingReveals.remove(event.pendingId);
+    // Do not mark finished — user can tap close icon to retry.
+    final index = state.pendingUploads.indexWhere(
+      (p) => p.id == event.pendingId,
+    );
+    final fromCoord = _uploadCoordinator
+        .pendingForStore(state.storeId)
+        .where((p) => p.id == event.pendingId)
+        .toList();
+    final failed =
+        fromCoord.isNotEmpty
+            ? fromCoord.first
+            : (index >= 0
+                ? state.pendingUploads[index].copyWith(
+                  hasFailed: true,
+                  failureMessage: event.message,
+                  isRevealing: false,
+                  isCommitting: false,
+                  photos: [
+                    for (final photo in state.pendingUploads[index].photos)
+                      photo.copyWith(status: PendingPhotoStatus.failed),
+                  ],
+                )
+                : null);
+    if (failed == null) {
+      emit(state.copyWith(errorMessage: event.message));
+      return;
+    }
+    final next = [...state.pendingUploads];
+    if (index >= 0) {
+      next[index] = failed;
+    } else {
+      next.insert(0, failed);
+    }
     emit(
       state.copyWith(
-        pendingUploads:
-            state.pendingUploads
-                .where((p) => p.id != event.pendingId)
-                .toList(),
+        pendingUploads: next,
         errorMessage: event.message,
       ),
     );
+  }
+
+  void _onPendingUploadRetry(
+    StoreProfilePendingUploadRetry event,
+    Emitter<StoreProfileState> emit,
+  ) {
+    final id = event.pendingId.trim();
+    if (id.isEmpty) return;
+    _finishedUploadIds.remove(id);
+    _pendingReveals.remove(id);
+    final ok = _uploadCoordinator.retryPending(id);
+    if (!ok) {
+      emit(
+        state.copyWith(
+          errorMessage: 'Could not retry upload. Try publishing again.',
+        ),
+      );
+      return;
+    }
+    // Optimistic UI — loaders again until coordinator Started/Progress lands.
+    final index = state.pendingUploads.indexWhere((p) => p.id == id);
+    if (index < 0) return;
+    final current = state.pendingUploads[index];
+    final resetPhotos = [
+      for (final photo in current.photos)
+        PendingPhotoSlot(localPath: photo.localPath),
+    ];
+    final next = [...state.pendingUploads];
+    next[index] = PendingProductUpload(
+      id: current.id,
+      storeId: current.storeId,
+      title: current.title,
+      photoCount:
+          resetPhotos.isNotEmpty ? resetPhotos.length : current.photoCount,
+      photos: resetPhotos,
+    );
+    emit(state.copyWith(pendingUploads: next, clearError: true));
   }
 
   @override

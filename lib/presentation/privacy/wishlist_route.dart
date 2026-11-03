@@ -138,6 +138,7 @@ class _WishlistRouteState extends State<WishlistRoute>
 
   @override
   void dispose() {
+    CatalogImageCache.cancelOffscreenWarm(reason: 'wishlistDispose');
     WidgetsBinding.instance.removeObserver(this);
     _imeDismissUnfocusTimer?.cancel();
     _suppressScrollCollapseTimer?.cancel();

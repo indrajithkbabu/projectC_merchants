@@ -30,6 +30,8 @@ class ProductImageCollage extends StatelessWidget {
     this.thumbhashOnly = false,
     this.gap = 1.2,
     this.tileBorderRadius = 3,
+    this.layoutIdentity,
+    this.cellOverlayBuilder,
     this.onImageTap,
     this.onImageLongPress,
     this.onAlbumPageChanged,
@@ -47,6 +49,14 @@ class ProductImageCollage extends StatelessWidget {
   });
 
   final List<String> imagePaths;
+
+  /// When set, [AnimatedSwitcher] keys off this instead of path joins so
+  /// mid-upload URL/path swaps (local → compressed → CDN) do not remount
+  /// the collage and flicker.
+  final String? layoutIdentity;
+
+  /// Optional per-cell overlay (e.g. Telegram upload check / loader).
+  final Widget Function(int index)? cellOverlayBuilder;
 
   /// Parallel to [imagePaths] — base64 ThumbHash placeholders when present.
   final List<String> imageThumbhashes;
@@ -106,10 +116,11 @@ class ProductImageCollage extends StatelessWidget {
     }
 
     final paths = imagePaths;
-    final signature = paths.join('|');
+    final identity = layoutIdentity?.trim() ?? '';
+    final signature = identity.isNotEmpty ? identity : paths.join('|');
 
     return AnimatedSwitcher(
-      duration: const Duration(milliseconds: 280),
+      duration: Duration(milliseconds: identity.isNotEmpty ? 0 : 280),
       switchInCurve: Curves.easeOut,
       switchOutCurve: Curves.easeIn,
       layoutBuilder: (currentChild, previousChildren) {
@@ -136,6 +147,7 @@ class ProductImageCollage extends StatelessWidget {
           imageImportStocks: imageImportStocks,
           imageImportPending: imageImportPending,
           imageImportDeclined: imageImportDeclined,
+          cellOverlayBuilder: cellOverlayBuilder,
           child: _CollageBody(
             paths: paths,
             thumbhashes: imageThumbhashes,
@@ -165,6 +177,7 @@ class _CollageInteraction extends InheritedWidget {
     required this.imageImportStocks,
     required this.imageImportPending,
     required this.imageImportDeclined,
+    this.cellOverlayBuilder,
     required super.child,
   });
 
@@ -182,6 +195,7 @@ class _CollageInteraction extends InheritedWidget {
   final List<bool> imageImportPending;
   final List<bool> imageImportDeclined;
   final void Function(int index)? onImageLongPress;
+  final Widget Function(int index)? cellOverlayBuilder;
 
   bool isImportPendingAt(int index) {
     if (index < 0 || index >= imageImportPending.length) return false;
@@ -215,6 +229,7 @@ class _CollageInteraction extends InheritedWidget {
   bool updateShouldNotify(_CollageInteraction oldWidget) {
     return selectionMode != oldWidget.selectionMode ||
         onImageLongPress != oldWidget.onImageLongPress ||
+        cellOverlayBuilder != oldWidget.cellOverlayBuilder ||
         showImportStatus != oldWidget.showImportStatus ||
         importLocked != oldWidget.importLocked ||
         importStock != oldWidget.importStock ||
@@ -677,11 +692,15 @@ class _ImageCell extends StatelessWidget {
       );
     }
 
-    if (selectionMode || hasImportTag) {
+    final uploadOverlay = interaction?.cellOverlayBuilder?.call(index);
+    final needsStack =
+        selectionMode || hasImportTag || uploadOverlay != null;
+    if (needsStack) {
       image = Stack(
         fit: StackFit.expand,
         children: [
           image,
+          if (uploadOverlay != null) uploadOverlay,
           if (importDeclined)
             const Positioned(
               top: 6,

@@ -8,9 +8,36 @@ import 'package:project_c/helper/widgets/app_back_button.dart';
 import 'package:project_c/models/store_product.dart';
 import 'package:project_c/presentation/privacy/privacy_widgets/follow_requests_banner.dart';
 import 'package:project_c/presentation/store_import/quick_import_flow.dart';
+import 'package:project_c/models/product_view_mode.dart';
+import 'package:project_c/presentation/storeprofile/storeprofile_widgets/store_product_grid_shimmer.dart';
 import 'package:project_c/presentation/storeprofile/storeprofile_widgets/store_profile_header_card.dart';
 import 'package:project_c/presentation/storeprofile/storeprofile_widgets/store_visitor_follow_bar.dart';
 import 'package:share_plus/share_plus.dart';
+
+/// One My-store mosaic cell (listing + absolute [imageIndex] in imagePaths).
+class MyStorePhotoCell {
+  const MyStorePhotoCell({required this.product, required this.imageIndex});
+
+  final StoreProduct product;
+  final int imageIndex;
+}
+
+/// Flatten every displayable frame across listings (cache-first albums).
+///
+/// Listings with no displayable frames are omitted (avoids empty ghost tiles
+/// after deleting every item in a product). Pending uploads use their own
+/// shimmer row, not this mosaic.
+List<MyStorePhotoCell> myStorePhotoCells(List<StoreProduct> products) {
+  final cells = <MyStorePhotoCell>[];
+  for (final product in products) {
+    final paths = product.imagePaths;
+    for (var i = 0; i < paths.length; i++) {
+      if (!ProductImagePaths.isDisplayable(paths[i])) continue;
+      cells.add(MyStorePhotoCell(product: product, imageIndex: i));
+    }
+  }
+  return cells;
+}
 
 /// Owner "My store" tab — Instagram-style profile (walkthrough screen 03).
 class StoreMyStoreTab extends StatelessWidget {
@@ -27,6 +54,8 @@ class StoreMyStoreTab extends StatelessWidget {
     this.onOpenSettings,
     this.showBack = true,
     this.bottomInset = 0,
+    this.selectedProductIds = const {},
+    this.selectedPhotoKeys = const {},
   });
 
   final StoreProfileState state;
@@ -35,14 +64,22 @@ class StoreMyStoreTab extends StatelessWidget {
   final VoidCallback onFollowingTap;
   /// Opens import-requests inbox (replaces former Edit store CTA).
   final VoidCallback onOpenImportRequests;
-  final void Function(StoreProduct product) onProductTap;
-  final ValueChanged<StoreProduct>? onProductLongPress;
+  final void Function(StoreProduct product, int imageIndex) onProductTap;
+  /// Long-press a mosaic cell → `(product, imageIndex)` for item select.
+  final void Function(StoreProduct product, int imageIndex)? onProductLongPress;
   final VoidCallback? onOpenFollowRequests;
   /// When set (shell My store tab), shows a hamburger that opens Settings.
   final VoidCallback? onOpenSettings;
   /// Hide back when hosted as a shell tab (no stack to pop).
   final bool showBack;
   final double bottomInset;
+  /// Listing ids selected for multi-delete (legacy whole-product highlight).
+  final Set<String> selectedProductIds;
+  /// Photo keys `"listingId|imageIndex"` for per-item multi-delete.
+  final Set<String> selectedPhotoKeys;
+
+  static String photoKey(String productId, int imageIndex) =>
+      '$productId|$imageIndex';
 
   String get _logoUrl {
     final cover = state.coverImageUrl.trim();
@@ -68,7 +105,9 @@ class StoreMyStoreTab extends StatelessWidget {
   Widget build(BuildContext context) {
     final showBanner =
         state.showFollowRequestsBanner && onOpenFollowRequests != null;
-    final products = state.products;
+    // Prefer enriched albums (full imagePaths); fall back to cover list.
+    final products = state.productsForMedia;
+    final photoCells = myStorePhotoCells(products);
     final serverPending = state.pendingImportRequestCount;
 
     return CustomScrollView(
@@ -108,7 +147,8 @@ class StoreMyStoreTab extends StatelessWidget {
                         ),
                         const SizedBox(height: 8),
                         StoreVisitorCountsRow(
-                          productCount: state.productCount,
+                          // Match mosaic: every displayable album frame.
+                          productCount: photoCells.length,
                           followerCount: state.followerCount,
                           followingCount: state.followingCount,
                           onFollowersTap: onFollowersTap,
@@ -165,20 +205,15 @@ class StoreMyStoreTab extends StatelessWidget {
             ],
           ),
         ),
-        if (state.isLoadingProducts && products.isEmpty)
-          const SliverToBoxAdapter(
-            child: Padding(
-              padding: EdgeInsets.symmetric(vertical: 48),
-              child: Center(
-                child: SizedBox(
-                  width: 28,
-                  height: 28,
-                  child: CircularProgressIndicator(strokeWidth: 2.4),
-                ),
-              ),
-            ),
+        if (state.showProductGridShimmer)
+          const StoreProductGridShimmer(
+            viewMode: ProductViewMode.gallery,
+            galleryColumns: 3,
+            itemCount: 12,
           )
-        else if (products.isEmpty)
+        else if (!state.productsResolved && photoCells.isEmpty)
+          const SliverToBoxAdapter(child: SizedBox.shrink())
+        else if (state.showProductGridEmpty)
           SliverToBoxAdapter(
             child: Padding(
               padding: const EdgeInsets.symmetric(vertical: 48),
@@ -190,6 +225,8 @@ class StoreMyStoreTab extends StatelessWidget {
               ),
             ),
           )
+        else if (photoCells.isEmpty)
+          const SliverToBoxAdapter(child: SizedBox.shrink())
         else
           SliverPadding(
             padding: EdgeInsets.only(bottom: bottomInset + 8),
@@ -201,17 +238,26 @@ class StoreMyStoreTab extends StatelessWidget {
               ),
               delegate: SliverChildBuilderDelegate(
                 (context, index) {
-                  final product = products[index];
+                  final cell = photoCells[index];
+                  final key = photoKey(cell.product.id, cell.imageIndex);
+                  final selected =
+                      selectedPhotoKeys.contains(key) ||
+                      selectedProductIds.contains(cell.product.id);
                   return _MyStoreProductTile(
-                    product: product,
-                    onTap: () => onProductTap(product),
+                    product: cell.product,
+                    imageIndex: cell.imageIndex,
+                    selected: selected,
+                    onTap: () => onProductTap(cell.product, cell.imageIndex),
                     onLongPress:
                         onProductLongPress == null
                             ? null
-                            : () => onProductLongPress!(product),
+                            : () => onProductLongPress!(
+                              cell.product,
+                              cell.imageIndex,
+                            ),
                   );
                 },
-                childCount: products.length,
+                childCount: photoCells.length,
               ),
             ),
           ),
@@ -323,27 +369,40 @@ class _GreyActionButton extends StatelessWidget {
 class _MyStoreProductTile extends StatelessWidget {
   const _MyStoreProductTile({
     required this.product,
+    required this.imageIndex,
     required this.onTap,
     this.onLongPress,
+    this.selected = false,
   });
 
   final StoreProduct product;
+  final int imageIndex;
   final VoidCallback onTap;
   final VoidCallback? onLongPress;
+  final bool selected;
 
   @override
   Widget build(BuildContext context) {
-    final master = product.primaryImagePath?.trim() ?? '';
+    final safeIndex =
+        imageIndex < 0
+            ? 0
+            : (imageIndex >= product.imagePaths.length ? 0 : imageIndex);
+    final master =
+        product.imagePaths.isEmpty
+            ? ''
+            : product.imagePaths[safeIndex].trim();
     final url =
         master.isEmpty
             ? ''
-            : product.urlForRole(0, CatalogImageRole.grid);
+            : product.urlForRole(safeIndex, CatalogImageRole.grid);
     return Material(
       color: AppColors.surfaceSecondary,
       child: InkWell(
         onTap: onTap,
         onLongPress: onLongPress,
-        child:
+        child: Stack(
+          fit: StackFit.expand,
+          children: [
             url.isEmpty
                 ? Center(
                   child: Icon(
@@ -354,7 +413,7 @@ class _MyStoreProductTile extends StatelessWidget {
                 )
                 : ProductMediaImage(
                   path: url,
-                  thumbhash: product.thumbhashAt(0),
+                  thumbhash: product.thumbhashAt(safeIndex),
                   fit: BoxFit.cover,
                   error: Center(
                     child: Icon(
@@ -364,6 +423,15 @@ class _MyStoreProductTile extends StatelessWidget {
                     ),
                   ),
                 ),
+            if (selected)
+              DecoratedBox(
+                decoration: BoxDecoration(
+                  border: Border.all(color: AppColors.primary, width: 2.5),
+                  color: AppColors.primary.withValues(alpha: 0.18),
+                ),
+              ),
+          ],
+        ),
       ),
     );
   }

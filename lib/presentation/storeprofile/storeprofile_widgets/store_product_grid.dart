@@ -24,6 +24,7 @@ class StoreProductGrid extends StatelessWidget {
     this.viewMode = ProductViewMode.group,
     this.selectionMode = false,
     this.photoSelectionMode = false,
+    this.showPhotoImportStatus = false,
     this.selectedIds = const {},
     this.selectedPhotoKeys = const {},
     this.deletingProductIds = const {},
@@ -56,8 +57,11 @@ class StoreProductGrid extends StatelessWidget {
   /// Own-store whole-product selection.
   final bool selectionMode;
 
-  /// Visitor photo multi-select (Telegram checks on collage cells).
+  /// Photo multi-select (Telegram checks on collage cells).
   final bool photoSelectionMode;
+
+  /// Visitor-only lock/stock marks while [photoSelectionMode] is on.
+  final bool showPhotoImportStatus;
   final Set<String> selectedIds;
 
   /// Keys `"productId|imageIndex"` for visitor photo selection.
@@ -127,6 +131,7 @@ class StoreProductGrid extends StatelessWidget {
           product: product,
           selectionMode: selectionMode,
           photoSelectionMode: photoSelectionMode,
+          showPhotoImportStatus: showPhotoImportStatus,
           selectedPhotoIndexes: selectedPhotos,
           isSelected: selected,
           isFocused: focused,
@@ -157,10 +162,17 @@ class StoreProductGrid extends StatelessWidget {
     );
   }
 
-  Widget buildSliver({bool isLoading = false}) {
+  Widget buildSliver({
+    bool isLoading = false,
+    bool productsResolved = true,
+  }) {
     if (products.isEmpty) {
       if (isLoading) {
-        return const StoreProductGridShimmer();
+        return StoreProductGridShimmer(viewMode: viewMode);
+      }
+      // Disk hydrate after restart — blank, not shimmer / false empty.
+      if (!productsResolved) {
+        return const SliverToBoxAdapter(child: SizedBox.shrink());
       }
       return SliverFillRemaining(
         hasScrollBody: false,
@@ -323,6 +335,7 @@ class _ProductCard extends StatefulWidget {
     required this.product,
     this.selectionMode = false,
     this.photoSelectionMode = false,
+    this.showPhotoImportStatus = false,
     this.selectedPhotoIndexes = const {},
     this.isSelected = false,
     this.isFocused = false,
@@ -337,6 +350,7 @@ class _ProductCard extends StatefulWidget {
   final StoreProduct product;
   final bool selectionMode;
   final bool photoSelectionMode;
+  final bool showPhotoImportStatus;
   final Set<int> selectedPhotoIndexes;
   final bool isSelected;
   final bool isFocused;
@@ -491,9 +505,9 @@ class _ProductCardState extends State<_ProductCard> {
                 imageThumbhashes: product.imageThumbhashes,
                 tileBorderRadius: large ? 3.5 : 2.5,
                 selectionMode: widget.photoSelectionMode,
-                // Lock / out-of-stock only while long-press selection is on
-                // (details show the same chrome). Pending tags stay always-on.
-                showImportStatus: widget.photoSelectionMode,
+                // Lock / out-of-stock only for visitor import selection.
+                // Pending tags stay always-on. Owner item-delete skips these.
+                showImportStatus: widget.showPhotoImportStatus,
                 importLocked: product.isLocked,
                 importStock: product.stockStatus,
                 importAlreadyImported: product.isAlreadyImported,

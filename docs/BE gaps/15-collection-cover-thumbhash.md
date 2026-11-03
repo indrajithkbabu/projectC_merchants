@@ -86,8 +86,8 @@ set:
 {
   "cover": {
     "url": "…/v1/catalog/media/catalog/products/…/img_….webp",
-    "thumbnailUrl": "…/v1/catalog/media/cdn-cgi/image/width=320,…/catalog/products/…/img_….webp",
-    "detailUrl": "…/v1/catalog/media/cdn-cgi/image/width=1080,…/catalog/products/…/img_….webp",
+    "thumbnailUrl": "…/cdn-cgi/image/width=360,height=360,fit=cover,quality=60,format=webp/…/img_….webp",
+    "detailUrl": "…/cdn-cgi/image/width=1080,fit=scale-down,quality=75,format=webp/…/img_….webp",
     "thumbhash": "<same base64 as primary product image when client supplied one>"
   }
 }
@@ -119,6 +119,6 @@ Inherit from the primary product photo whenever that photo has a non-empty `thum
 
 FE short logs truncate paths. Please confirm full `cover.thumbnailUrl` / product `thumbnailUrl` contain:
 
-`/v1/catalog/media/cdn-cgi/image/width=320…`
+`/cdn-cgi/image/width=360…`
 
 and are not identical to master `url`. Paint already works on `api.bullionare.com`; this is only to confirm resize variants are real.

@@ -72,6 +72,7 @@ dependencies:
   google_api_availability: ^5.0.1
   firebase_app_installations: ^0.4.4
   visibility_detector: ^0.4.0+2
+  audioplayers: ^6.5.1
 
 dev_dependencies:
   flutter_test:
@@ -113,6 +114,7 @@ flutter:
 
   assets:
     - assets/icons/app_logo.png
+    - assets/sounds/ui_pop.mp3
 
   # An image asset can refer to one or more resolution-specific "variants", see
   # https://flutter.dev/to/resolution-aware-images

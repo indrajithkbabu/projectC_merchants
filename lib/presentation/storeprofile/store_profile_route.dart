@@ -10,6 +10,7 @@ import 'package:project_c/di/service_locator.dart';
 import 'package:project_c/helper/app_padding.dart';
 import 'package:project_c/helper/catalog_media_debug.dart';
 import 'package:project_c/helper/catalog_responsive_image.dart';
+import 'package:project_c/helper/catalog_ui_mapper.dart';
 import 'package:project_c/helper/colors.dart';
 import 'package:project_c/helper/import_qa.dart';
 import 'package:project_c/helper/product_gallery_picker.dart';
@@ -55,9 +56,10 @@ class StoreProfileRoute extends StatefulWidget {
 
 class _StoreProfileRouteState extends State<StoreProfileRoute> {
   final Set<String> _selectedIds = {};
-  /// Visitor multi-select: `"productId|imageIndex"`.
+  /// Photo multi-select: `"productId|imageIndex"` (owner delete / visitor import).
   final Set<String> _selectedPhotoKeys = {};
   bool _selectionMode = false;
+  /// True while selecting collage/gallery photos (owner or visitor).
   bool _visitorPhotoSelecting = false;
   bool _visitorWishlistBusy = false;
   final GlobalKey _focusProductKey = GlobalKey();
@@ -387,7 +389,8 @@ class _StoreProfileRouteState extends State<StoreProfileRoute> {
     }
 
     // Wait for first products paint before burning restore attempts.
-    if (state.isLoadingProducts && state.products.isEmpty) {
+    if (state.products.isEmpty &&
+        (!state.productsResolved || state.isLoadingProducts)) {
       StoreProfileScrollCache.log('wait — products still loading');
       return;
     }
@@ -593,8 +596,13 @@ class _StoreProfileRouteState extends State<StoreProfileRoute> {
     });
   }
 
-  void _enterVisitorPhotoSelection(StoreProduct product, int imageIndex) {
-    if (product.importSelectionBlocked) {
+  void _enterVisitorPhotoSelection(
+    StoreProduct product,
+    int imageIndex, {
+    required bool isOwnStore,
+  }) {
+    // Visitors cannot re-import exclusive pieces; owners may still delete them.
+    if (!isOwnStore && product.importSelectionBlocked) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text('Exclusive piece — cannot be re-imported'),
@@ -626,9 +634,14 @@ class _StoreProfileRouteState extends State<StoreProfileRoute> {
     });
   }
 
-  void _toggleVisitorPhoto(StoreProduct product, int imageIndex) {
+  void _toggleVisitorPhoto(
+    StoreProduct product,
+    int imageIndex, {
+    required bool isOwnStore,
+  }) {
     final key = StoreProductGrid.photoKey(product.id, imageIndex);
-    if (!_selectedPhotoKeys.contains(key) &&
+    if (!isOwnStore &&
+        !_selectedPhotoKeys.contains(key) &&
         product.importSelectionBlocked) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
@@ -648,6 +661,46 @@ class _StoreProfileRouteState extends State<StoreProfileRoute> {
         _selectedPhotoKeys.add(key);
       }
     });
+  }
+
+  Future<void> _confirmDeleteSelectedItems(BuildContext context) async {
+    final count = _selectedPhotoKeys.length;
+    if (count == 0) return;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) {
+        return AlertDialog(
+          backgroundColor: AppColors.surface,
+          title: Text(
+            count == 1 ? 'Delete item?' : 'Delete $count items?',
+            style: AppTextStyles.headline(fontSize: 18),
+          ),
+          content: Text(
+            count == 1
+                ? 'This removes the selected item from your store. The rest of the product stays.'
+                : 'This removes the selected items from your store. Remaining items in each product stay.',
+            style: AppTextStyles.body(),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(false),
+              child: Text('Cancel', style: AppTextStyles.button()),
+            ),
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(true),
+              child: Text(
+                'Delete',
+                style: AppTextStyles.button(color: AppColors.error),
+              ),
+            ),
+          ],
+        );
+      },
+    );
+    if (!context.mounted || confirmed != true) return;
+    final keys = _selectedPhotoKeys.toList();
+    _exitSelection();
+    context.read<StoreProfileBloc>().add(StoreProfileItemsDeleted(keys));
   }
 
   Future<void> _addProducts(BuildContext context) async {
@@ -783,13 +836,19 @@ class _StoreProfileRouteState extends State<StoreProfileRoute> {
     Rect? sourceRect,
     ProductViewMode? viewMode,
   }) async {
-    StoreProduct media = product;
+    StoreProduct listing = product;
     for (final p in state.productsForMedia) {
       if (p.id == product.id) {
-        media = p;
+        listing = p;
         break;
       }
     }
+
+    // Collage albums store CatalogProduct ids in photoAssetIds — open that
+    // jewel (local album index), not the parent listing / wrong feed slot.
+    final resolved = CatalogUiMapper.resolveCollageTap(listing, imageIndex);
+    final media = resolved.product;
+    final openIndex = resolved.imageIndex;
 
     final galleryState = StoreGalleryState(
       products: state.productsForMedia,
@@ -799,20 +858,31 @@ class _StoreProfileRouteState extends State<StoreProfileRoute> {
       isOwnStore: state.isOwnStore,
       sections: StoreGalleryState.buildSections(state.productsForMedia),
     );
-    final feed = galleryState.buildPhotoFeed();
-    final feedIndex = galleryState.feedIndexFor(
-      productId: media.id,
-      imageIndex: imageIndex,
-    );
-
     final paths = ProductImagePaths.displayable(media.imagePaths);
     final safeIndex =
-        imageIndex < 0
+        openIndex < 0
             ? 0
-            : (imageIndex >= media.imagePaths.length ? 0 : imageIndex);
+            : (openIndex >= media.imagePaths.length ? 0 : openIndex);
     final masterAt =
-        media.imagePaths.isEmpty ? '' : media.imagePaths[safeIndex];
+        media.imagePaths.isEmpty ? '' : media.imagePaths[safeIndex].trim();
+    // Prefer resolved jewel master for feed match (listing absolute can miss
+    // when expand drops empty-id frames / cover-first reorders).
+    final tapPath =
+        masterAt.isNotEmpty
+            ? masterAt
+            : (listing.imagePaths.isEmpty ||
+                    imageIndex < 0 ||
+                    imageIndex >= listing.imagePaths.length
+                ? ''
+                : listing.imagePaths[imageIndex].trim());
+    final openFeed = galleryState.resolveOpenFeed(
+      productId: media.id,
+      imageIndex: openIndex,
+      path: tapPath,
+    );
     // Flyer matches painted tile (Group/Single per-cell size; Gallery=cols).
+    // Paint roles use the listing collage layout (absolute cell), not the
+    // sliced jewel album size — keeps Telegram flyer size consistent.
     final mode = viewMode ?? _activeViewMode ?? ProductViewMode.gallery;
     final paintRole = () {
       if (mode == ProductViewMode.gallery) {
@@ -821,10 +891,10 @@ class _StoreProfileRouteState extends State<StoreProfileRoute> {
         );
       }
       final displayIndexes = <int>[
-        for (var i = 0; i < media.imagePaths.length; i++)
-          if (ProductImagePaths.isDisplayable(media.imagePaths[i])) i,
+        for (var i = 0; i < listing.imagePaths.length; i++)
+          if (ProductImagePaths.isDisplayable(listing.imagePaths[i])) i,
       ];
-      final collageIndex = displayIndexes.indexOf(safeIndex);
+      final collageIndex = displayIndexes.indexOf(imageIndex);
       return CatalogResponsiveImage.roleForCollageCell(
         imageCount: displayIndexes.length,
         imageIndex: collageIndex < 0 ? 0 : collageIndex,
@@ -850,6 +920,21 @@ class _StoreProfileRouteState extends State<StoreProfileRoute> {
         url: masterPath,
         paintedUrl: photoPath,
       );
+      // Tap opens master details — unlock so Group/Single tiles rebind after pop
+      // (Telegram flyer may still paint the thumb during the transition).
+      CatalogImageQualityLadder.unlockMaster(
+        masterPath,
+        reason: 'tap_open_details',
+      );
+      // Decode at ladder boost width (detailCacheWidth) so return paint hits
+      // the same ImageCache key as ProductMediaImage upgrade tiles.
+      // ignore: unawaited_futures
+      CatalogImageCache.precacheUrls(
+        [masterPath],
+        decode: true,
+        maxDecode: 1,
+        cacheWidth: CatalogImageCache.detailCacheWidth(),
+      );
     }
 
     final result = await Navigator.of(context).pushNamed(
@@ -860,9 +945,13 @@ class _StoreProfileRouteState extends State<StoreProfileRoute> {
         'storeLink': state.storeLink,
         'storeId': state.storeId,
         'isOwnStore': state.isOwnStore,
-        'imageIndex': imageIndex,
-        'galleryFeed': feed,
-        'galleryFeedIndex': feedIndex,
+        'imageIndex': openIndex,
+        // Omit store-wide feed when the tapped master isn't in it — otherwise
+        // details lands on feed[0] (another listing) while the flyer is correct.
+        if (openFeed.useFeed) ...{
+          'galleryFeed': openFeed.feed,
+          'galleryFeedIndex': openFeed.index,
+        },
         if (sourceRect != null &&
             photoPath != null &&
             photoPath.trim().isNotEmpty) ...{
@@ -873,7 +962,13 @@ class _StoreProfileRouteState extends State<StoreProfileRoute> {
         },
       },
     );
-    if (!context.mounted || result is! Map) return;
+    if (!context.mounted) return;
+
+    // Always rebind collage URLs so ladder.master replaces thumb on the tapped
+    // cell — plain back often returns null (no bloc update / no rebuild).
+    setState(() {});
+
+    if (result is! Map) return;
 
     final payload = Map<String, Object?>.from(result);
     if (payload['deleted'] == true) {
@@ -900,10 +995,13 @@ class _StoreProfileRouteState extends State<StoreProfileRoute> {
     var product = incoming;
     if (silent) {
       // Keep collage / title from the grid card; only bump count badges.
+      // Nested piece ids (opened from collection browse) are not listings —
+      // skip so Group does not gain a ghost 1-item card.
       final products = context.read<StoreProfileBloc>().state.products;
+      StoreProduct? matched;
       for (final p in products) {
         if (p.id == incoming.id) {
-          product = p.copyWith(
+          matched = p.copyWith(
             likeCount: incoming.likeCount,
             viewCount: incoming.viewCount ?? p.viewCount,
             wishlistCount: incoming.wishlistCount,
@@ -914,6 +1012,8 @@ class _StoreProfileRouteState extends State<StoreProfileRoute> {
           break;
         }
       }
+      if (matched == null) return;
+      product = matched;
     }
     context.read<StoreProfileBloc>().add(
       StoreProfileProductUpdated(
@@ -1027,38 +1127,6 @@ class _StoreProfileRouteState extends State<StoreProfileRoute> {
     );
   }
 
-  void _openImport(BuildContext context, StoreProfileState state) {
-    if (!state.canImport) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Create your store before importing products.'),
-        ),
-      );
-      return;
-    }
-    if (state.isOwnStore) {
-      Navigator.of(context).pushNamed(Routes.storeListingRoute);
-      return;
-    }
-    Navigator.of(context)
-        .pushNamed(
-          Routes.storeImportSelectRoute,
-          arguments: <String, Object?>{
-            'storeId': state.storeId,
-            'storeName': state.storeName,
-            'storeLink': state.storeLink,
-            'products': state.productsForMedia,
-            'avatarColor': state.avatarColor,
-          },
-        )
-        .then((_) {
-          if (!context.mounted) return;
-          context.read<StoreProfileBloc>().add(
-            const StoreProfileProbeImportAvailability(),
-          );
-        });
-  }
-
   void _onProductInteraction(
     BuildContext context,
     StoreProfileState state,
@@ -1068,7 +1136,11 @@ class _StoreProfileRouteState extends State<StoreProfileRoute> {
     Rect? sourceRect,
   }) {
     if (_visitorPhotoSelecting) {
-      _toggleVisitorPhoto(product, imageIndex);
+      _toggleVisitorPhoto(
+        product,
+        imageIndex,
+        isOwnStore: state.isOwnStore,
+      );
       return;
     }
     if (_selectionMode) {
@@ -1118,18 +1190,9 @@ class _StoreProfileRouteState extends State<StoreProfileRoute> {
   }) {
     if (state.isContentLocked) {
       if (state.isLoadingStoreMeta) {
-        return const SliverToBoxAdapter(
-          child: Padding(
-            padding: EdgeInsets.symmetric(vertical: 48),
-            child: Center(
-              child: SizedBox(
-                width: 28,
-                height: 28,
-                child: CircularProgressIndicator(strokeWidth: 2.4),
-              ),
-            ),
-          ),
-        );
+        // Meta disk/network hydrate — blank (restart must not cold-shimmer).
+        // Private gate appears once meta confirms lock.
+        return const SliverToBoxAdapter(child: SizedBox.shrink());
       }
       return SliverToBoxAdapter(
         child: StorePrivateContentGate(
@@ -1140,8 +1203,10 @@ class _StoreProfileRouteState extends State<StoreProfileRoute> {
     }
 
     final canSelect = state.isOwnStore;
-    final canVisitorPhotoSelect =
-        !state.isOwnStore && !state.isContentLocked;
+    // Owner: long-press a photo to multi-select items for delete.
+    // Visitor: long-press a photo to import / wishlist.
+    final canPhotoSelect =
+        state.isOwnStore || (!state.isOwnStore && !state.isContentLocked);
     final deletingId = state.deletingProductId;
     final deletingIds =
         deletingId == null || deletingId.isEmpty
@@ -1161,7 +1226,8 @@ class _StoreProfileRouteState extends State<StoreProfileRoute> {
         viewMode == ProductViewMode.gallery
             ? StoreProductGallerySliver(
               products: state.productsForMedia,
-              isLoading: state.isLoadingProducts && pending.isEmpty,
+              isLoading: state.showProductGridShimmer,
+              productsResolved: state.productsResolved,
               selectionMode: _selectionMode && !_visitorPhotoSelecting,
               photoSelectionMode: _visitorPhotoSelecting,
               selectedIds: _selectedIds,
@@ -1183,21 +1249,33 @@ class _StoreProfileRouteState extends State<StoreProfileRoute> {
               onProductLongPress:
                   canSelect ? (product) => _enterSelection(product) : null,
               onImageLongPress:
-                  canVisitorPhotoSelect
+                  canPhotoSelect
                       ? (product, imageIndex) {
                         if (_visitorPhotoSelecting) {
-                          _toggleVisitorPhoto(product, imageIndex);
+                          _toggleVisitorPhoto(
+                            product,
+                            imageIndex,
+                            isOwnStore: state.isOwnStore,
+                          );
                         } else {
-                          _enterVisitorPhotoSelection(product, imageIndex);
+                          _enterVisitorPhotoSelection(
+                            product,
+                            imageIndex,
+                            isOwnStore: state.isOwnStore,
+                          );
                         }
                       }
                       : null,
             )
             : StoreProductGrid(
-              products: state.products,
+              // Same source as Gallery / open-feed expand — avoid index drift
+              // between painted collage cells and productsForMedia.
+              products: state.productsForMedia,
               viewMode: viewMode,
               selectionMode: _selectionMode && !_visitorPhotoSelecting,
               photoSelectionMode: _visitorPhotoSelecting,
+              showPhotoImportStatus:
+                  _visitorPhotoSelecting && !state.isOwnStore,
               selectedIds: _selectedIds,
               selectedPhotoKeys: _selectedPhotoKeys,
               deletingProductIds: deletingIds,
@@ -1223,24 +1301,37 @@ class _StoreProfileRouteState extends State<StoreProfileRoute> {
               onProductLongPress:
                   canSelect ? (product) => _enterSelection(product) : null,
               onImageLongPress:
-                  canVisitorPhotoSelect
+                  canPhotoSelect
                       ? (product, imageIndex) {
                         if (_visitorPhotoSelecting) {
-                          _toggleVisitorPhoto(product, imageIndex);
+                          _toggleVisitorPhoto(
+                            product,
+                            imageIndex,
+                            isOwnStore: state.isOwnStore,
+                          );
                         } else {
-                          _enterVisitorPhotoSelection(product, imageIndex);
+                          _enterVisitorPhotoSelection(
+                            product,
+                            imageIndex,
+                            isOwnStore: state.isOwnStore,
+                          );
                         }
                       }
                       : null,
             ).buildSliver(
-              isLoading: state.isLoadingProducts && pending.isEmpty,
+              isLoading: state.showProductGridShimmer,
+              productsResolved: state.productsResolved,
             );
 
     if (pending.isEmpty) return productsSliver;
 
     return SliverMainAxisGroup(
       slivers: [
-        PendingUploadsSliver(pending: pending, viewMode: viewMode),
+        PendingUploadsSliver(
+          pending: pending,
+          viewMode: viewMode,
+          galleryCrossAxisCount: galleryColumns.round().clamp(2, 9),
+        ),
         if (viewMode != ProductViewMode.gallery)
           const SliverToBoxAdapter(child: SizedBox(height: 10)),
         productsSliver,
@@ -1309,6 +1400,8 @@ class _StoreProfileRouteState extends State<StoreProfileRoute> {
                       prev.productsDetailed != curr.productsDetailed ||
                       prev.pendingUploads != curr.pendingUploads ||
                       prev.isLoadingProducts != curr.isLoadingProducts ||
+                      prev.productsResolved != curr.productsResolved ||
+                      prev.isLoadingStoreMeta != curr.isLoadingStoreMeta ||
                       prev.isOwnStore != curr.isOwnStore ||
                       prev.canViewContent != curr.canViewContent ||
                       prev.followStatus != curr.followStatus ||
@@ -1439,16 +1532,21 @@ class _StoreProfileRouteState extends State<StoreProfileRoute> {
   }) {
     final topPad = ScreenWrapper.statusBarTop(context);
     final headerExtent = StoreProfileTelegramHeader.extentFor(topPad);
-    // Owner delete selection bar sits under the Telegram header.
+    // Owner delete selection bar sits under the Telegram header
+    // (whole-product select OR photo-item select).
     // Visitor photo select uses the header itself (close · DP · count).
     const selectionBarBlock = 56.0;
+    final showOwnerSelectionBar =
+        state.isOwnStore &&
+        ((_selectionMode && !_visitorPhotoSelecting) ||
+            _visitorPhotoSelecting);
     final scrollTop =
-        headerExtent +
-        (_selectionMode && !_visitorPhotoSelecting ? selectionBarBlock : 0);
+        headerExtent + (showOwnerSelectionBar ? selectionBarBlock : 0);
     // Prefer viewPadding — body extends under the home indicator.
     final safeBottom = MediaQuery.viewPaddingOf(context).bottom;
     // Visitor photo select → Import / Wishlist dock (hides Follow while active).
-    final showVisitorActionDock = _visitorPhotoSelecting;
+    final showVisitorActionDock =
+        _visitorPhotoSelecting && !state.isOwnStore;
     const visitorActionDockHeight = 52.0;
     // Visitor not following → glassy Follow / Requested dock at bottom.
     final showFollowDock =
@@ -1509,13 +1607,11 @@ class _StoreProfileRouteState extends State<StoreProfileRoute> {
             onOpenStoreInfo: () => _openStoreChannel(context, state),
             onBack: () => _goHome(context),
             onAddProducts: () => _addProducts(context),
-            // Selection: forward (= Import). Browse: toolbar download import.
-            onImport:
-                _visitorPhotoSelecting
-                    ? () => _onVisitorSelectionImport(state)
-                    : () => _openImport(context, state),
+            // Selection-mode forward only (no visitor browse toolbar Import).
+            onImport: () => _onVisitorSelectionImport(state),
             onSearch: () => _openStoreSearch(context, state),
-            showSelectionImport: state.canImport,
+            // Never offer Import while owning this store (item delete instead).
+            showSelectionImport: state.canImport && !state.isOwnStore,
           ),
         ),
         if (_selectionMode && !_visitorPhotoSelecting)
@@ -1538,7 +1634,29 @@ class _StoreProfileRouteState extends State<StoreProfileRoute> {
               ),
             ),
           ),
-        if (_visitorPhotoSelecting)
+        // Owner photo multi-select → Delete selected items (not whole listing).
+        if (_visitorPhotoSelecting && state.isOwnStore)
+          Positioned(
+            top: headerExtent,
+            left: 0,
+            right: 0,
+            child: Material(
+              color: AppColors.background.withValues(alpha: 0.96),
+              child: Padding(
+                padding: AppPadding.screenHorizontal,
+                child: _SelectionBar(
+                  count: _selectedPhotoKeys.length,
+                  selectLabel: 'Select items',
+                  onCancel: _exitSelection,
+                  onDelete:
+                      _selectedPhotoKeys.isEmpty
+                          ? null
+                          : () => _confirmDeleteSelectedItems(context),
+                ),
+              ),
+            ),
+          ),
+        if (_visitorPhotoSelecting && !state.isOwnStore)
           Builder(
             builder: (context) {
               final split = visitorImportSelectionSplit(
@@ -1846,11 +1964,13 @@ class _SelectionBar extends StatelessWidget {
     required this.count,
     required this.onCancel,
     required this.onDelete,
+    this.selectLabel = 'Select products',
   });
 
   final int count;
   final VoidCallback onCancel;
   final VoidCallback? onDelete;
+  final String selectLabel;
 
   @override
   Widget build(BuildContext context) {
@@ -1858,7 +1978,7 @@ class _SelectionBar extends StatelessWidget {
       padding: const EdgeInsets.only(bottom: 8),
       child: DecoratedBox(
         decoration: BoxDecoration(
-      color: AppColors.surfaceSecondary,
+          color: AppColors.surfaceSecondary,
           borderRadius: BorderRadius.circular(12),
         ),
         child: Padding(
@@ -1874,9 +1994,7 @@ class _SelectionBar extends StatelessWidget {
               ),
               Expanded(
                 child: Text(
-                  count == 0
-                      ? 'Select products'
-                      : '$count selected',
+                  count == 0 ? selectLabel : '$count selected',
                   textAlign: TextAlign.center,
                   style: AppTextStyles.body(fontWeight: FontWeight.w600),
                 ),

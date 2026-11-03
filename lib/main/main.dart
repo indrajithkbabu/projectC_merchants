@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:project_c/di/service_locator.dart';
 import 'package:project_c/firebase_options.dart';
 import 'package:project_c/helper/app_log.dart';
+import 'package:project_c/helper/catalog_responsive_image.dart';
 import 'package:project_c/helper/colors.dart';
 import 'package:project_c/main/app.dart';
 import 'package:project_c/services/push_notification_service.dart';
@@ -21,7 +22,9 @@ Future<void> defaultMain(Flavor flavor) async {
 
   ServiceLocator.configureDependencies();
   await ServiceLocator.get<ThemePreferences>().load();
-  AppColors.bind(ServiceLocator.get<ThemePreferences>().appearance);
+  // Quality ladder unlocks (survive kill/logout; cleared with OS app cache/data).
+  await CatalogImageQualityLadder.ensureLoaded();
+  AppColors.bind(ServiceLocator.get<ThemePreferences>().resolvedAppearance);
   configureSystemUi();
 
   try {

@@ -55,6 +55,7 @@ class ServiceLocator {
     );
     final productDetailsPreferences = ProductDetailsPreferences(
       storage: appSettings,
+      
     );
     final searchRecentPreferences = SearchRecentPreferences(
       storage: appSettings,

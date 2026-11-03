@@ -1,4 +1,5 @@
 import 'package:equatable/equatable.dart';
+import 'package:project_c/helper/catalog_media_debug.dart';
 import 'package:project_c/models/bulk_upload.dart';
 import 'package:project_c/models/catalog/catalog_stock_status.dart';
 import 'package:project_c/models/catalog/collection_specifications.dart';
@@ -345,15 +346,42 @@ class CollectionSummary extends Equatable {
     final perms = json['permissions'];
     final rawSpecs = json['specifications'];
     final rawMainCover = json['mainGroupCover'];
-    // New storefront shape uses `coverImage` + `productCount`.
+    // P5.1 — prefer `cover`; soft-fallback to legacy `coverImage`.
+    final hasCover = json.containsKey('cover');
+    final hasCoverImage = json.containsKey('coverImage');
+    final coverSource =
+        hasCover
+            ? 'cover'
+            : (hasCoverImage ? 'coverImage' : 'none');
     final rawCover =
-        json['coverImage'] ?? json['cover'] ?? const <String, dynamic>{};
+        (hasCover ? json['cover'] : null) ??
+        (hasCoverImage ? json['coverImage'] : null) ??
+        const <String, dynamic>{};
     final coverMap =
         rawCover is Map<String, dynamic>
             ? rawCover
             : rawCover is Map
             ? Map<String, dynamic>.from(rawCover)
             : const <String, dynamic>{};
+    // FE_QA / FE_PENDING P5.1 — which cover field BE sent.
+    CatalogMediaDebug.feQa(
+      'P5.1',
+      status: coverSource == 'cover' ? 'PASS' : 'INFO',
+      detail:
+          'coverSource=$coverSource hasCover=$hasCover '
+          'hasCoverImage=$hasCoverImage',
+      once: true,
+      onceKey: 'coverSource:$coverSource',
+    );
+    CatalogMediaDebug.fePending(
+      'P5.1',
+      status: coverSource == 'cover' ? 'PASS' : 'INFO',
+      detail:
+          'coverSource=$coverSource preferCover=true '
+          'legacyFallback=${coverSource == 'coverImage'}',
+      once: true,
+      onceKey: 'coverSource:$coverSource',
+    );
     final productCount =
         (json['productCount'] as num?)?.toInt() ??
         (json['photoCount'] as num?)?.toInt() ??

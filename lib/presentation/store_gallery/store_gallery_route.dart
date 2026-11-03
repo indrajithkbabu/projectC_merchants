@@ -4,6 +4,7 @@ import 'package:project_c/bloc/store_gallery/store_gallery_bloc.dart';
 import 'package:project_c/helper/app_padding.dart';
 import 'package:project_c/helper/catalog_media_debug.dart';
 import 'package:project_c/helper/catalog_responsive_image.dart';
+import 'package:project_c/helper/catalog_ui_mapper.dart';
 import 'package:project_c/helper/colors.dart';
 import 'package:project_c/helper/text_styles.dart';
 import 'package:project_c/helper/widgets/app_back_button.dart';
@@ -31,16 +32,33 @@ class StoreGalleryRoute extends StatelessWidget {
     StoreProduct product,
     int imageIndex,
   ) async {
-    final feed = state.buildPhotoFeed();
-    final feedIndex = state.feedIndexFor(
-      productId: product.id,
-      imageIndex: imageIndex,
+    final resolved = CatalogUiMapper.resolveCollageTap(product, imageIndex);
+    final media = resolved.product;
+    final openIndex = resolved.imageIndex;
+    final safeIndex =
+        openIndex < 0
+            ? 0
+            : (openIndex >= media.imagePaths.length ? 0 : openIndex);
+    final masterAt =
+        media.imagePaths.isEmpty ? '' : media.imagePaths[safeIndex].trim();
+    final tapPath =
+        masterAt.isNotEmpty
+            ? masterAt
+            : (product.imagePaths.isEmpty ||
+                    imageIndex < 0 ||
+                    imageIndex >= product.imagePaths.length
+                ? ''
+                : product.imagePaths[imageIndex].trim());
+    final openFeed = state.resolveOpenFeed(
+      productId: media.id,
+      imageIndex: openIndex,
+      path: tapPath,
     );
     final paintRole = CatalogResponsiveImage.roleForMediaColumns(
       state.crossAxisCount,
     );
-    final paintPath = product.urlForRole(imageIndex, paintRole);
-    final masterPath = product.urlForRole(imageIndex, CatalogImageRole.zoom);
+    final paintPath = media.urlForRole(openIndex, paintRole);
+    final masterPath = media.urlForRole(openIndex, CatalogImageRole.zoom);
     CatalogMediaDebug.qualityTapOpen(
       from: 'store_gallery cols=${state.crossAxisCount}',
       role: CatalogImageRole.zoom,
@@ -50,14 +68,16 @@ class StoreGalleryRoute extends StatelessWidget {
     final result = await Navigator.of(context).pushNamed(
       Routes.productDetailsRoute,
       arguments: <String, Object?>{
-        'product': product,
+        'product': media,
         'storeName': state.storeName,
         'storeLink': state.storeLink,
         'storeId': state.storeId,
         'isOwnStore': state.isOwnStore,
-        'imageIndex': imageIndex,
-        'galleryFeed': feed,
-        'galleryFeedIndex': feedIndex,
+        'imageIndex': openIndex,
+        if (openFeed.useFeed) ...{
+          'galleryFeed': openFeed.feed,
+          'galleryFeedIndex': openFeed.index,
+        },
       },
     );
     if (!context.mounted || result is! Map) return;

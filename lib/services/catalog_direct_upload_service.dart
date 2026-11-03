@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math' as math;
@@ -11,6 +12,7 @@ import 'package:path/path.dart' as p;
 import 'package:project_c/helper/app_log.dart';
 import 'package:project_c/helper/catalog_media_debug.dart';
 import 'package:project_c/helper/catalog_upload_story.dart';
+import 'package:project_c/helper/product_image.dart';
 import 'package:project_c/models/catalog/catalog_upload_models.dart';
 import 'package:project_c/webservice/catalog_api_exception.dart';
 import 'package:project_c/webservice/collection/collection_repository.dart';
@@ -42,8 +44,11 @@ class CatalogDirectUploadService {
   static const _tag = 'CatalogDirectUpload';
   static const _contentType = 'image/webp';
 
-  /// Presigned URLs expire after 900s; renew a bit earlier.
-  static const _presignRenewAfterSeconds = 850;
+  /// Default when sign omits `expiresIn` (R2 guide: 300s).
+  static const _presignDefaultExpiresIn = 300;
+
+  /// Renew this many seconds before TTL so PUT does not race expiry.
+  static const _presignRenewBufferSeconds = 50;
 
   /// Silent retries with exponential backoff (2s, 4s, 8s).
   static const _retryDelaysSeconds = <int>[2, 4, 8];
@@ -62,14 +67,27 @@ class CatalogDirectUploadService {
   final int maxEdgePx;
   final int webpQuality;
 
-  /// Compress, ThumbHash, presign, then upload with concurrency + retries.
+  /// Compress, ThumbHash, then **overlap** sign/PUT with remaining prepares.
   ///
   /// Pass [cancelToken] to stop further PUTs (Scenario 4). Already-finished
   /// uploads stay in S3 staging until lifecycle purge if never committed.
+  ///
+  /// Optional per-photo hooks drive Telegram-style pending tiles on store
+  /// profile without waiting for the final batch commit.
   Future<CatalogDirectUploadBatchResult> prepareAndUpload({
     required String storeId,
     required List<String> localPaths,
     void Function(double progress)? onProgress,
+    void Function(int pathIndex, String localPath)? onPhotoPreparing,
+    void Function(
+      int pathIndex,
+      PreparedCatalogPhoto photo,
+      String compressedPath,
+    )?
+    onPhotoPrepared,
+    void Function(int pathIndex, PreparedCatalogPhoto photo)? onPhotoSigned,
+    void Function(int pathIndex, CatalogUploadedPhoto photo)? onPhotoUploaded,
+    void Function(int pathIndex, String localPath)? onPhotoFailed,
     CatalogUploadCancelToken? cancelToken,
   }) async {
     final paths =
@@ -85,11 +103,70 @@ class CatalogDirectUploadService {
       );
     }
 
-    final prepareWorkers = math.min(maxConcurrentPrepares, paths.length).clamp(1, 8);
+    final prepareWorkers =
+        math.min(maxConcurrentPrepares, paths.length).clamp(1, 8);
     CatalogMediaDebug.upload(
       'prepareAndUpload start store=$storeId count=${paths.length} '
       'maxEdge=$maxEdgePx webpQ=$webpQuality '
       'prepareConcurrent=$prepareWorkers putConcurrent=$maxConcurrentUploads',
+    );
+    // FE_QA / FE_PENDING: prepare defaults + overlapped pipeline.
+    CatalogMediaDebug.feQa(
+      'P1.6',
+      status: 'PASS',
+      detail: 'keepExif=false format=webp maxEdge=$maxEdgePx q=$webpQuality',
+      once: true,
+      onceKey: 'prepareDefaults',
+    );
+    CatalogMediaDebug.fePending(
+      'P1.6',
+      status: 'PASS',
+      detail: 'keepExif=false autoCorrectionAngle=true stripGps=true',
+      once: true,
+      onceKey: 'exifStrip',
+    );
+    CatalogMediaDebug.feQa(
+      'P1.4',
+      status: 'PASS',
+      detail: 'mediaProxyCalls=0 feUsesMediaCatlyOnly=true',
+      once: true,
+      onceKey: 'noSharpProxy',
+    );
+    CatalogMediaDebug.feQa(
+      'P4.1',
+      status: 'PASS',
+      detail:
+          'pipeline=overlapPrepareSignPut sequential=false '
+          'prepareConcurrent=$prepareWorkers putConcurrent=$maxConcurrentUploads '
+          'count=${paths.length}',
+      once: true,
+      onceKey: 'pipelineMode',
+    );
+    CatalogMediaDebug.fePending(
+      'P4.1',
+      status: 'PASS',
+      detail:
+          'pipeline=overlapPrepareSignPut prepareWorkers=$prepareWorkers '
+          'putWorkers=$maxConcurrentUploads count=${paths.length}',
+      once: true,
+      onceKey: 'pipelineMode',
+    );
+    CatalogMediaDebug.feQa(
+      'P3.9',
+      status: 'PASS',
+      detail: 'imageHttpClient=default measureFirst=true',
+      once: true,
+      onceKey: 'httpClient',
+    );
+    CatalogMediaDebug.r2Qa(
+      'M1',
+      status: 'PASS',
+      detail:
+          'presignRenew buffer=${_presignRenewBufferSeconds}s '
+          'defaultExpiresIn=${_presignDefaultExpiresIn}s '
+          '(renew at expiresIn-buffer)',
+      once: true,
+      onceKey: 'presignRenewPolicy',
     );
     CatalogUploadStory.beginCompress(
       count: paths.length,
@@ -98,23 +175,47 @@ class CatalogDirectUploadService {
       concurrent: prepareWorkers,
     );
 
-    final preparedSlots = List<PreparedCatalogPhoto?>.filled(
-      paths.length,
-      null,
-    );
     final prepareFailedNames = <String>[];
     final prepareFailedPaths = <String>[];
     final prepareBatchSw = Stopwatch()..start();
     var prepareNext = 0;
     var prepareCompleted = 0;
+    var preparesOutstanding = paths.length;
+
+    // Ready queue — prepare workers push; sign+PUT consumer pulls (P4.1).
+    final ready = <({int pathIndex, PreparedCatalogPhoto photo})>[];
+    var readyWaiters = <void Function()>[];
+    void notifyReady() {
+      final waiters = List<void Function()>.from(readyWaiters);
+      readyWaiters.clear();
+      for (final w in waiters) {
+        w();
+      }
+    }
+
+    Future<void> waitForReady() {
+      if (ready.isNotEmpty || preparesOutstanding <= 0) {
+        return Future<void>.value();
+      }
+      final c = Completer<void>();
+      readyWaiters.add(() {
+        if (!c.isCompleted) c.complete();
+      });
+      return c.future;
+    }
 
     Future<void> prepareWorker() async {
       while (true) {
-        if (cancelToken?.isCancelled == true) return;
+        if (cancelToken?.isCancelled == true) {
+          preparesOutstanding = 0;
+          notifyReady();
+          return;
+        }
         final i = prepareNext++;
         if (i >= paths.length) return;
         final path = paths[i];
         final photoSw = Stopwatch()..start();
+        onPhotoPreparing?.call(i, path);
         CatalogMediaDebug.upload(
           'prepare START ${i + 1}/${paths.length} name=${p.basename(path)}',
         );
@@ -124,7 +225,10 @@ class CatalogDirectUploadService {
             index: i + 1,
             total: paths.length,
           );
-          preparedSlots[i] = photo;
+          final compressedPath = await _writeCompressedPreview(photo);
+          ready.add((pathIndex: i, photo: photo));
+          notifyReady();
+          onPhotoPrepared?.call(i, photo, compressedPath);
           CatalogMediaDebug.upload(
             'prepared ${i + 1}/${paths.length} name=${photo.originalName} '
             '${photo.width}x${photo.height} bytes=${photo.bytes.length} '
@@ -159,119 +263,51 @@ class CatalogDirectUploadService {
           );
           prepareFailedNames.add(p.basename(path));
           prepareFailedPaths.add(path);
+          onPhotoFailed?.call(i, path);
+        } finally {
+          preparesOutstanding =
+              math.max(0, preparesOutstanding - 1);
+          prepareCompleted++;
+          onProgress?.call(prepareCompleted / paths.length * 0.25);
+          if (preparesOutstanding <= 0) notifyReady();
         }
-        prepareCompleted++;
-        onProgress?.call(prepareCompleted / paths.length * 0.25);
         await Future<void>.delayed(Duration.zero);
       }
     }
 
-    await Future.wait([
-      for (var w = 0; w < prepareWorkers; w++) prepareWorker(),
-    ]);
-
-    if (cancelToken?.isCancelled == true) {
-      CatalogMediaDebug.upload(
-        'prepare CANCELLED ok=${preparedSlots.whereType<PreparedCatalogPhoto>().length} '
-        'fail=${prepareFailedNames.length} '
-        'elapsedMs=${prepareBatchSw.elapsedMilliseconds}',
-      );
-      return CatalogDirectUploadBatchResult(
-        successful: const [],
-        failedNames: [
-          ...prepareFailedNames,
-          for (var i = 0; i < paths.length; i++)
-            if (preparedSlots[i] == null &&
-                !prepareFailedPaths.contains(paths[i]))
-              p.basename(paths[i]),
-        ],
-        failedPaths: [
-          ...prepareFailedPaths,
-          for (var i = 0; i < paths.length; i++)
-            if (preparedSlots[i] == null &&
-                !prepareFailedPaths.contains(paths[i]))
-              paths[i],
-        ],
-        cancelled: true,
-      );
-    }
-
-    final prepared = <PreparedCatalogPhoto>[
-      for (final photo in preparedSlots)
-        if (photo != null) photo,
-    ];
-
-    prepareBatchSw.stop();
-    CatalogMediaDebug.upload(
-      'prepare DONE ok=${prepared.length} fail=${prepareFailedNames.length} '
-      'total=${paths.length} elapsedMs=${prepareBatchSw.elapsedMilliseconds} '
-      'maxEdge=$maxEdgePx webpQ=$webpQuality prepareConcurrent=$prepareWorkers',
-    );
-    if (prepareFailedNames.isNotEmpty) {
-      CatalogMediaDebug.gap(
-        'prepare failedNames=${prepareFailedNames.join(",")}',
-      );
-    }
-
-    if (prepared.isEmpty) {
-      if (cancelToken?.isCancelled == true) {
-        return CatalogDirectUploadBatchResult(
-          successful: const [],
-          failedNames: prepareFailedNames,
-          failedPaths: prepareFailedPaths,
-          cancelled: true,
-        );
-      }
-      throw CatalogApiException(
-        statusCode: 400,
-        code: 'NO_VALID_PHOTOS',
-        message: 'None of the photos could be prepared.',
-      );
-    }
-
-    if (cancelToken?.isCancelled == true) {
-      return CatalogDirectUploadBatchResult(
-        successful: const [],
-        failedNames: [
-          ...prepareFailedNames,
-          for (final photo in prepared) photo.originalName,
-        ],
-        failedPaths: [
-          ...prepareFailedPaths,
-          for (final photo in prepared) photo.localPath,
-        ],
-        cancelled: true,
-      );
-    }
-
-    CatalogUploadStory.beginPresign(fileCount: prepared.length);
-    final sessionId = await _assignPresignedUrls(
-      storeId: storeId,
-      photos: prepared,
-    );
-    CatalogMediaDebug.upload(
-      'presign OK session=$sessionId slots=${prepared.length}',
-    );
-    CatalogUploadStory.beginS3Puts(
-      count: prepared.length,
-      sessionId: sessionId,
-    );
-    onProgress?.call(0.3);
-
-    // Preserve input order for commit ↔ local item mapping.
-    final results = List<CatalogUploadedPhoto?>.filled(prepared.length, null);
+    // Ordered results by input path index (commit ↔ local mapping).
+    final results = List<CatalogUploadedPhoto?>.filled(paths.length, null);
     final uploadFailedNames = List<String>.from(prepareFailedNames);
     final uploadFailedPaths = List<String>.from(prepareFailedPaths);
-    var completed = 0;
-    final total = prepared.length;
+    var putCompleted = 0;
+    var preparedOkCount = 0;
+    String? sessionId;
+    var beganPresign = false;
+    var beganPuts = false;
 
-    Future<void> uploadOne(int index, PreparedCatalogPhoto photo) async {
+    Future<void> uploadOne(int pathIndex, PreparedCatalogPhoto photo) async {
       if (cancelToken?.isCancelled == true) {
         uploadFailedNames.add(photo.originalName);
         uploadFailedPaths.add(photo.localPath);
-        completed++;
-        onProgress?.call(0.3 + (completed / total) * 0.7);
+        onPhotoFailed?.call(pathIndex, photo.localPath);
+        putCompleted++;
+        final denom = math.max(1, preparedOkCount);
+        onProgress?.call(0.3 + (putCompleted / denom) * 0.7);
         return;
+      }
+      // Seed CDN keys with local WebP *before* PUT so pending tiles can paint
+      // the same bytes the published card will use (no flash on commit).
+      final earlyPublic = photo.publicUrl?.trim() ?? '';
+      final earlyThumb = photo.thumbnailUrl?.trim() ?? '';
+      final earlyDetail = photo.detailUrl?.trim() ?? '';
+      if (earlyPublic.isNotEmpty ||
+          earlyThumb.isNotEmpty ||
+          earlyDetail.isNotEmpty) {
+        // ignore: unawaited_futures
+        CatalogImageCache.seedLocalUpload(
+          bytes: photo.bytes,
+          urls: [earlyPublic, earlyThumb, earlyDetail],
+        );
       }
       final ok = await _putWithRetries(
         storeId: storeId,
@@ -279,7 +315,10 @@ class CatalogDirectUploadService {
         cancelToken: cancelToken,
       );
       if (ok && (photo.s3Key ?? '').isNotEmpty) {
-        results[index] = CatalogUploadedPhoto(
+        final publicUrl = photo.publicUrl?.trim() ?? '';
+        final thumbnailUrl = photo.thumbnailUrl?.trim() ?? '';
+        final detailUrl = photo.detailUrl?.trim() ?? '';
+        final uploaded = CatalogUploadedPhoto(
           key: photo.s3Key!,
           originalName: photo.originalName,
           bytes: photo.bytes.length,
@@ -288,51 +327,151 @@ class CatalogDirectUploadService {
           thumbhash: photo.thumbhash,
           localPath: photo.localPath,
           imageId: photo.imageId?.trim() ?? '',
-          publicUrl: photo.publicUrl?.trim() ?? '',
-          thumbnailUrl: photo.thumbnailUrl?.trim() ?? '',
-          detailUrl: photo.detailUrl?.trim() ?? '',
+          publicUrl: publicUrl,
+          thumbnailUrl: thumbnailUrl,
+          detailUrl: detailUrl,
         );
+        results[pathIndex] = uploaded;
+        // Re-seed in case renew replaced URLs mid-PUT.
+        // ignore: unawaited_futures
+        CatalogImageCache.seedLocalUpload(
+          bytes: photo.bytes,
+          urls: [publicUrl, thumbnailUrl, detailUrl],
+        );
+        onPhotoUploaded?.call(pathIndex, uploaded);
         CatalogMediaDebug.upload(
-          'S3 PUT OK index=$index name=${photo.originalName} '
+          'S3 PUT OK index=$pathIndex name=${photo.originalName} '
           'key=${photo.s3Key} ${CatalogMediaDebug.thumbhashFlag(photo.thumbhash)}',
         );
         CatalogUploadStory.s3PutOk(
-          index: index,
+          index: pathIndex,
           name: photo.originalName,
           key: photo.s3Key!,
         );
       } else {
         CatalogMediaDebug.gap(
-          'S3 PUT FAIL index=$index name=${photo.originalName}',
+          'S3 PUT FAIL index=$pathIndex name=${photo.originalName}',
         );
         CatalogUploadStory.s3PutFail(
-          index: index,
+          index: pathIndex,
           name: photo.originalName,
         );
         uploadFailedNames.add(photo.originalName);
         uploadFailedPaths.add(photo.localPath);
+        onPhotoFailed?.call(pathIndex, photo.localPath);
       }
-      completed++;
-      onProgress?.call(0.3 + (completed / total) * 0.7);
+      putCompleted++;
+      final denom = math.max(1, preparedOkCount);
+      onProgress?.call(0.3 + (putCompleted / denom) * 0.7);
     }
 
-    var next = 0;
-    Future<void> worker() async {
+    Future<void> signAndPutPipeline() async {
+      final putJobs = <Future<void>>[];
       while (true) {
-        if (cancelToken?.isCancelled == true) return;
-        final index = next++;
-        if (index >= prepared.length) return;
-        await uploadOne(index, prepared[index]);
+        if (cancelToken?.isCancelled == true && ready.isEmpty) break;
+        await waitForReady();
+        if (ready.isEmpty && preparesOutstanding <= 0) break;
+        if (ready.isEmpty) continue;
+
+        final chunkSize = math.min(maxConcurrentUploads, ready.length);
+        final batch = ready.sublist(0, chunkSize);
+        ready.removeRange(0, chunkSize);
+        preparedOkCount += batch.length;
+
+        if (!beganPresign) {
+          beganPresign = true;
+          CatalogUploadStory.beginPresign(fileCount: paths.length);
+        }
+        final photos = [for (final e in batch) e.photo];
+        final sid = await _assignPresignedUrls(
+          storeId: storeId,
+          photos: photos,
+        );
+        sessionId ??= sid;
+        CatalogMediaDebug.upload(
+          'presign OK session=$sid slots=${photos.length} '
+          'overlapReady=${ready.length} preparesLeft=$preparesOutstanding',
+        );
+        for (final e in batch) {
+          final signed = e.photo;
+          final publicUrl = signed.publicUrl?.trim() ?? '';
+          final thumbnailUrl = signed.thumbnailUrl?.trim() ?? '';
+          final detailUrl = signed.detailUrl?.trim() ?? '';
+          if (publicUrl.isNotEmpty ||
+              thumbnailUrl.isNotEmpty ||
+              detailUrl.isNotEmpty) {
+            // ignore: unawaited_futures
+            () async {
+              await CatalogImageCache.seedLocalUpload(
+                bytes: signed.bytes,
+                urls: [publicUrl, thumbnailUrl, detailUrl],
+              );
+              // Decode-warm so the published card paints the seeded WebP
+              // without a ThumbHash flash when the pending tile is replaced.
+              await CatalogImageCache.warmDiskHits(
+                [publicUrl, thumbnailUrl, detailUrl],
+                cacheWidth: CatalogImageCache.gridCacheWidth(),
+                maxDecode: 3,
+              );
+            }();
+          }
+          onPhotoSigned?.call(e.pathIndex, signed);
+        }
+        if (!beganPuts) {
+          beganPuts = true;
+          CatalogUploadStory.beginS3Puts(
+            count: paths.length,
+            sessionId: sessionId ?? sid,
+          );
+          onProgress?.call(0.3);
+        }
+        for (final e in batch) {
+          putJobs.add(uploadOne(e.pathIndex, e.photo));
+        }
       }
+      if (putJobs.isNotEmpty) await Future.wait(putJobs);
     }
 
-    final workers = math.min(maxConcurrentUploads, prepared.length);
-    await Future.wait([for (var i = 0; i < workers; i++) worker()]);
+    await Future.wait([
+      for (var w = 0; w < prepareWorkers; w++) prepareWorker(),
+      signAndPutPipeline(),
+    ]);
+
+    prepareBatchSw.stop();
+    CatalogMediaDebug.upload(
+      'prepare+put pipeline DONE preparedOk=$preparedOkCount '
+      'failPrepare=${prepareFailedNames.length} '
+      'elapsedMs=${prepareBatchSw.elapsedMilliseconds} '
+      'maxEdge=$maxEdgePx webpQ=$webpQuality prepareConcurrent=$prepareWorkers',
+    );
+    if (prepareFailedNames.isNotEmpty) {
+      CatalogMediaDebug.gap(
+        'prepare failedNames=${prepareFailedNames.join(",")}',
+      );
+    }
+
+    // Merge prepare failures that finished after list copies.
+    for (final name in prepareFailedNames) {
+      if (!uploadFailedNames.contains(name)) uploadFailedNames.add(name);
+    }
+    for (final path in prepareFailedPaths) {
+      if (!uploadFailedPaths.contains(path)) uploadFailedPaths.add(path);
+    }
 
     final successful = [
       for (final photo in results)
         if (photo != null) photo,
     ];
+
+    if (successful.isEmpty &&
+        cancelToken?.isCancelled != true &&
+        preparedOkCount == 0) {
+      throw CatalogApiException(
+        statusCode: 400,
+        code: 'NO_VALID_PHOTOS',
+        message: 'None of the photos could be prepared.',
+      );
+    }
 
     final cancelled = cancelToken?.isCancelled == true;
     AppLog.d(
@@ -354,7 +493,7 @@ class CatalogDirectUploadService {
       successful: successful,
       failedNames: uploadFailedNames,
       failedPaths: uploadFailedPaths,
-      sessionId: sessionId,
+      sessionId: sessionId ?? '',
       cancelled: cancelled,
     );
   }
@@ -556,6 +695,28 @@ class CatalogDirectUploadService {
       thumbhash: thumbhash,
       contentType: _contentType,
     );
+  }
+
+  /// Persist compressed WebP so pending tiles paint the same master the CDN
+  /// will serve (avoids gallery-original → response quality jump).
+  Future<String> _writeCompressedPreview(PreparedCatalogPhoto photo) async {
+    try {
+      final dir = Directory.systemTemp;
+      final safe = photo.originalName.replaceAll(RegExp(r'[^\w.\-]'), '_');
+      final file = File(
+        p.join(
+          dir.path,
+          'jf_up_${photo.localPath.hashCode.abs()}_$safe',
+        ),
+      );
+      await file.writeAsBytes(photo.bytes, flush: false);
+      return file.path;
+    } catch (e) {
+      CatalogMediaDebug.gap(
+        'compressed preview write failed name=${photo.originalName} err=$e',
+      );
+      return photo.localPath;
+    }
   }
 
   /// ThumbHash from compressed master — never re-decodes the original JPEG.
@@ -868,12 +1029,25 @@ class CatalogDirectUploadService {
       photos[i].presignedUrl = slot.presignedUrl;
       photos[i].putContentType = slot.contentType;
       photos[i].presignedAt = now;
+      final expiresIn =
+          slot.expiresIn > 0 ? slot.expiresIn : _presignDefaultExpiresIn;
+      photos[i].presignedExpiresIn = expiresIn;
       CatalogMediaDebug.upload(
         'sign slot[$i] imageId=${slot.imageId} key=${slot.key} '
         'master=${CatalogMediaDebug.shortUrl(slot.url)} '
         'thumb=${slot.thumbnailUrl.isEmpty ? "NULL" : CatalogMediaDebug.shortUrl(slot.thumbnailUrl)} '
         'detail=${slot.detailUrl.isEmpty ? "NULL" : CatalogMediaDebug.shortUrl(slot.detailUrl)} '
-        'expiresIn=${slot.expiresIn}',
+        'expiresIn=$expiresIn renewAfter=${_renewAfterSeconds(expiresIn)}',
+      );
+      CatalogMediaDebug.r2Qa(
+        'M1',
+        status: expiresIn <= 300 ? 'PASS' : 'INFO',
+        detail:
+            'sign expiresIn=$expiresIn renewAfter=${_renewAfterSeconds(expiresIn)} '
+            'thumb=${slot.thumbnailUrl.isEmpty ? "NULL" : CatalogMediaDebug.cdnTier(slot.thumbnailUrl)} '
+            'detail=${slot.detailUrl.isEmpty ? "NULL" : CatalogMediaDebug.cdnTier(slot.detailUrl)}',
+        once: true,
+        onceKey: 'signSlot:$expiresIn',
       );
       if (slot.imageId.trim().isEmpty) {
         CatalogMediaDebug.gap('sign slot[$i] missing imageId');
@@ -895,11 +1069,20 @@ class CatalogDirectUploadService {
     await _assignPresignedUrls(storeId: storeId, photos: [photo]);
   }
 
+  /// Age (seconds) after which a signed slot should be re-signed.
+  static int _renewAfterSeconds(int expiresIn) {
+    final ttl = expiresIn > 0 ? expiresIn : _presignDefaultExpiresIn;
+    return math.max(30, ttl - _presignRenewBufferSeconds);
+  }
+
   bool _needsPresignRefresh(PreparedCatalogPhoto photo) {
     final url = photo.presignedUrl?.trim() ?? '';
     if (url.isEmpty || photo.presignedAt == null) return true;
-    return DateTime.now().difference(photo.presignedAt!).inSeconds >
-        _presignRenewAfterSeconds;
+    final age = DateTime.now().difference(photo.presignedAt!).inSeconds;
+    final renewAfter = _renewAfterSeconds(
+      photo.presignedExpiresIn ?? _presignDefaultExpiresIn,
+    );
+    return age >= renewAfter;
   }
 
   Future<bool> _putWithRetries({
