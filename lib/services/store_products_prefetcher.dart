@@ -79,9 +79,15 @@ class StoreProductsPrefetcher {
                   if (!hidden.contains(p.id)) p,
               ];
       visible.sort((a, b) => b.id.compareTo(a.id));
-      await CatalogImageCache.precacheUrls([
-        for (final p in visible) ...p.imagePaths.take(4),
-      ]);
+      CatalogImageCache.ensureCatalogMemoryBudget();
+      await CatalogImageCache.precacheUrls(
+        [
+          for (final p in visible) ...p.imagePaths.take(9),
+        ],
+        decode: true,
+        maxDecode: CatalogImageCache.defaultMaxDecode,
+        cacheWidth: CatalogImageCache.gridCacheWidth(),
+      );
       return visible;
     }
 
@@ -122,9 +128,15 @@ class StoreProductsPrefetcher {
       }
       // Match store profile: newest listing first (API returns oldest-first).
       products.sort((a, b) => b.id.compareTo(a.id));
-      await CatalogImageCache.precacheUrls([
-        for (final p in products) ...p.imagePaths.take(4),
-      ]);
+      CatalogImageCache.ensureCatalogMemoryBudget();
+      await CatalogImageCache.precacheUrls(
+        [
+          for (final p in products) ...p.imagePaths.take(9),
+        ],
+        decode: true,
+        maxDecode: CatalogImageCache.defaultMaxDecode,
+        cacheWidth: CatalogImageCache.gridCacheWidth(),
+      );
       await StoreProductsCache.instance.write(storeId, products);
       AppLog.d(_tag, 'Prefetched store=$storeId collections=${products.length}');
       return products;

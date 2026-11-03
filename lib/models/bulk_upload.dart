@@ -379,6 +379,8 @@ class ProductSpec extends Equatable {
   Map<String, dynamic> toBatchProductJson({
     String? imageId,
     List<String>? imageIds,
+    /// Multi-photo guide shape: `[{image_id, thumbhash, width, height, bytes}]`.
+    List<Map<String, dynamic>>? images,
     required String stockStatus,
     int? mtoDays,
     required bool isLocked,
@@ -395,23 +397,48 @@ class ProductSpec extends Equatable {
             .map((e) => e.trim())
             .where((e) => e.isNotEmpty)
             .toList();
+    final imageMaps =
+        (images ?? const <Map<String, dynamic>>[])
+            .where((m) {
+              final id =
+                  (m['image_id'] as String?)?.trim() ??
+                  (m['imageId'] as String?)?.trim() ??
+                  '';
+              return id.isNotEmpty;
+            })
+            .toList(growable: false);
     final singleId = (imageId ?? '').trim();
     final hash = (thumbhash ?? '').trim();
     final key = (imageKey ?? '').trim();
     final body = <String, dynamic>{
-      if (ids.length > 1)
-        'image_ids': ids
+      // Prefer guide `images[]` for multi-photo sub-collections.
+      if (imageMaps.length > 1)
+        'images': imageMaps
+      else if (imageMaps.length == 1)
+        'image_id':
+            (imageMaps.first['image_id'] as String?)?.trim() ??
+            (imageMaps.first['imageId'] as String?)?.trim() ??
+            singleId
+      else if (ids.length > 1)
+        // Fallback if caller still passes bare ids (build minimal images[]).
+        'images': [
+          for (final id in ids) <String, dynamic>{'image_id': id},
+        ]
       else if (ids.length == 1)
         'image_id': ids.first
       else if (singleId.isNotEmpty)
         'image_id': singleId,
       // Persist placeholder + size so list/detail don't return thumbhash:null /
       // bytes:0 when the sign session metadata was not copied server-side.
-      if (hash.isNotEmpty) 'thumbhash': hash,
-      if (key.isNotEmpty) 'key': key,
-      if (imageBytes != null && imageBytes > 0) 'bytes': imageBytes,
-      if (imageWidth != null && imageWidth > 0) 'width': imageWidth,
-      if (imageHeight != null && imageHeight > 0) 'height': imageHeight,
+      // For multi `images[]`, per-image fields live on each element.
+      if (imageMaps.length <= 1 && hash.isNotEmpty) 'thumbhash': hash,
+      if (imageMaps.length <= 1 && key.isNotEmpty) 'key': key,
+      if (imageMaps.length <= 1 && imageBytes != null && imageBytes > 0)
+        'bytes': imageBytes,
+      if (imageMaps.length <= 1 && imageWidth != null && imageWidth > 0)
+        'width': imageWidth,
+      if (imageMaps.length <= 1 && imageHeight != null && imageHeight > 0)
+        'height': imageHeight,
       'stock_status': stockStatus,
       if (stockStatus == 'mto' && mtoDays != null) 'mto_days': mtoDays,
       'is_locked': isLocked,

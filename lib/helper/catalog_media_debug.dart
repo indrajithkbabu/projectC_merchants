@@ -9,6 +9,9 @@ import 'package:project_c/helper/catalog_responsive_image.dart';
 /// **Logcat / console filter:** `CatalogMediaDBG`
 ///
 /// Progressive-quality QA: filter `CatalogMediaDBG` + `QUALITY`.
+/// FE-only review cases: filter **`FE_QA`** (or `CatalogMediaDBG` + `FE_QA`).
+/// R2 responsive low+medium QA: filter **`R2_QA`**.
+/// FE no-BE pending wave: filter **`FE_PENDING`** (standalone tag).
 /// Remove call sites after gap audit (keep this file only if still useful).
 class CatalogMediaDebug {
   CatalogMediaDebug._();
@@ -16,17 +19,41 @@ class CatalogMediaDebug {
   /// Search/filter string — use in Android Studio Logcat or `flutter logs`.
   static const filter = 'CatalogMediaDBG';
 
+  /// FE-only review checklist phase — Logcat filter: `FE_QA`.
+  static const feQaFilter = 'FE_QA';
+
+  /// R2 / CDN responsive low+medium checklist — Logcat filter: `R2_QA`.
+  static const r2QaFilter = 'R2_QA';
+
+  /// FE pending (no-BE) implementation wave — Logcat filter: `FE_PENDING`.
+  static const fePendingFilter = 'FE_PENDING';
+
   /// Dedup paint logs so grids do not flood the console every rebuild.
   static final Set<String> _paintLogged = <String>{};
 
   /// Dedup progressive-quality checklist logs (pinch / rebuild safe).
   static final Set<String> _qualityLogged = <String>{};
 
+  /// Dedup FE_QA once-per-session / once-per-key lines.
+  static final Set<String> _feQaLogged = <String>{};
+
+  /// Dedup R2_QA once-per-session / once-per-key lines.
+  static final Set<String> _r2QaLogged = <String>{};
+
+  /// Dedup FE_PENDING once-per-session / once-per-key lines.
+  static final Set<String> _fePendingLogged = <String>{};
+
   static bool get _enabled => kDebugMode;
 
   static void clearPaintLogDedup() => _paintLogged.clear();
 
   static void clearQualityLogDedup() => _qualityLogged.clear();
+
+  static void clearFeQaLogDedup() => _feQaLogged.clear();
+
+  static void clearR2QaLogDedup() => _r2QaLogged.clear();
+
+  static void clearFePendingLogDedup() => _fePendingLogged.clear();
 
   static void upload(String message) => _log('UPLOAD', message);
 
@@ -40,6 +67,84 @@ class CatalogMediaDebug {
 
   /// Progressive CDN quality checklist (Media cols / Single·Group·Gallery / tap).
   static void quality(String message) => _log('QUALITY', message);
+
+  /// FE-only review case log. Filter Logcat with `FE_QA`.
+  ///
+  /// [caseId] e.g. `P0.1`, [status] `PASS` / `FAIL` / `INFO`,
+  /// [detail] short evidence string.
+  static void feQa(
+    String caseId, {
+    required String status,
+    required String detail,
+    bool once = false,
+    String? onceKey,
+  }) {
+    if (!_enabled) return;
+    if (once) {
+      final key = '${caseId.trim()}|${(onceKey ?? detail).trim()}';
+      if (_feQaLogged.contains(key)) return;
+      _feQaLogged.add(key);
+      if (_feQaLogged.length > 200) {
+        _feQaLogged.clear();
+        _feQaLogged.add(key);
+      }
+    }
+    final id = caseId.trim().isEmpty ? 'P?' : caseId.trim();
+    final st = status.trim().isEmpty ? 'INFO' : status.trim().toUpperCase();
+    _log(feQaFilter, '$id $st | $detail');
+  }
+
+  /// R2 responsive low+medium QA. Filter Logcat with `R2_QA`.
+  ///
+  /// [caseId] e.g. `L1` (CDN tier), `M1` (presign renew), `M2` (batch shape).
+  static void r2Qa(
+    String caseId, {
+    required String status,
+    required String detail,
+    bool once = false,
+    String? onceKey,
+  }) {
+    if (!_enabled) return;
+    if (once) {
+      final key = '${caseId.trim()}|${(onceKey ?? detail).trim()}';
+      if (_r2QaLogged.contains(key)) return;
+      _r2QaLogged.add(key);
+      if (_r2QaLogged.length > 200) {
+        _r2QaLogged.clear();
+        _r2QaLogged.add(key);
+      }
+    }
+    final id = caseId.trim().isEmpty ? 'R2?' : caseId.trim();
+    final st = status.trim().isEmpty ? 'INFO' : status.trim().toUpperCase();
+    // Own Logcat tag so filter `R2_QA` matches without CatalogMediaDBG.
+    AppLog.d(r2QaFilter, '$id $st | $detail');
+  }
+
+  /// FE no-BE pending wave. Filter Logcat with `FE_PENDING`.
+  ///
+  /// [caseId] e.g. `P3.4`, `P4.1`, `P4.5`, [status] `PASS` / `FAIL` / `INFO`.
+  static void fePending(
+    String caseId, {
+    required String status,
+    required String detail,
+    bool once = false,
+    String? onceKey,
+  }) {
+    if (!_enabled) return;
+    if (once) {
+      final key = '${caseId.trim()}|${(onceKey ?? detail).trim()}';
+      if (_fePendingLogged.contains(key)) return;
+      _fePendingLogged.add(key);
+      if (_fePendingLogged.length > 200) {
+        _fePendingLogged.clear();
+        _fePendingLogged.add(key);
+      }
+    }
+    final id = caseId.trim().isEmpty ? 'P?' : caseId.trim();
+    final st = status.trim().isEmpty ? 'INFO' : status.trim().toUpperCase();
+    // Own Logcat tag so filter `FE_PENDING` matches without CatalogMediaDBG.
+    AppLog.d(fePendingFilter, '$id $st | $detail');
+  }
 
   static void _log(String phase, String message) {
     if (!_enabled) return;
@@ -81,21 +186,12 @@ class CatalogMediaDebug {
 
   /// Classify painted CDN URL for QA (thumbnail / detail / master).
   ///
-  /// Current BE: thumb `width=240`, detail `width=720`. Older 320/1080 still
-  /// recognized so mixed payloads keep clear PASS labels.
+  /// BE contract: thumb `width=360`, detail `width=1080`.
   static String cdnTier(String? url) {
     final value = (url ?? '').trim();
     if (value.isEmpty) return 'empty';
-    if (value.contains('width=240') || value.contains('width=320')) {
-      return value.contains('width=240')
-          ? 'thumbnailUrl(240)'
-          : 'thumbnailUrl(320)';
-    }
-    if (value.contains('width=720') || value.contains('width=1080')) {
-      return value.contains('width=720')
-          ? 'detailUrl(720)'
-          : 'detailUrl(1080)';
-    }
+    if (value.contains('width=360')) return 'thumbnailUrl(360)';
+    if (value.contains('width=1080')) return 'detailUrl(1080)';
     if (value.contains('/cdn-cgi/image/')) return 'cdn-cgi(other)';
     return 'master(url)';
   }
@@ -108,6 +204,22 @@ class CatalogMediaDebug {
 
   static int? _lastMediaQualityCols;
   static CatalogImageRole? _lastMediaQualityRole;
+
+  static int _cdnTierRank(String tier) {
+    if (tier.startsWith('thumbnailUrl')) return 1;
+    if (tier.startsWith('detailUrl')) return 2;
+    if (tier.startsWith('master')) return 3;
+    return 0;
+  }
+
+  static int _expectCdnRank(String expectCdn) {
+    return switch (expectCdn) {
+      'thumbnailUrl' => 1,
+      'detailUrl' => 2,
+      'master' => 3,
+      _ => 0,
+    };
+  }
 
   static String _qualityVerdict({
     required CatalogImageRole role,
@@ -123,6 +235,12 @@ class CatalogMediaDebug {
       return 'PASS';
     }
     if (expectCdn == 'master' && tier.startsWith('master')) return 'PASS';
+    // Session ladder may paint a higher unlocked tier than the screen role.
+    final actual = _cdnTierRank(tier);
+    final expect = _expectCdnRank(expectCdn);
+    if (actual > 0 && expect > 0 && actual > expect) {
+      return 'PASS_LADDER';
+    }
     if (tier == 'master(url)') return 'WARN_FALLBACK_MASTER';
     return 'FAIL_CDN';
   }
@@ -155,6 +273,15 @@ class CatalogMediaDebug {
       'CHECK Media cols=$cols role=${role.name} expect=$expectCdn '
       'cdn=$tier url=${shortUrl(sampleUrl)} $verdict',
     );
+    r2Qa(
+      'L1',
+      status: verdict.startsWith('PASS') ? 'PASS' : 'INFO',
+      detail:
+          'Media cols=$cols role=${role.name} expect=$expectCdn '
+          'cdn=$tier $verdict',
+      once: true,
+      onceKey: 'L1:media:$cols:${role.name}:$tier',
+    );
   }
 
   /// Group/Single collage: expect matches painted [role]
@@ -181,6 +308,15 @@ class CatalogMediaDebug {
       'view|$view|${role.name}|$tier',
       'CHECK View $view role=${role.name} expect=$expectCdn '
       'cdn=$tier url=${shortUrl(sampleUrl)} $verdict',
+    );
+    r2Qa(
+      'L1',
+      status: verdict.startsWith('PASS') ? 'PASS' : 'INFO',
+      detail:
+          'View $view role=${role.name} expect=$expectCdn '
+          'cdn=$tier $verdict',
+      once: true,
+      onceKey: 'L1:view:$view:${role.name}:$tier',
     );
   }
 
@@ -412,6 +548,38 @@ class CatalogMediaDebug {
       _paintLogged.clear();
       _paintLogged.add(key);
     }
+    // FE_QA / FE_PENDING paint checks (deduped with paintOnce key).
+    feQa(
+      'P3.4',
+      status: cacheWidth > 0 ? 'PASS' : 'FAIL',
+      detail: 'cacheW=$cacheWidth outcome=$outcome url=${shortUrl(url)}',
+      once: true,
+      onceKey: 'cacheW:$cacheWidth',
+    );
+    fePending(
+      'P3.4',
+      status: cacheWidth > 0 ? 'PASS' : 'FAIL',
+      detail: 'cacheW=$cacheWidth outcome=$outcome url=${shortUrl(url)}',
+      once: true,
+      onceKey: 'cacheW:$cacheWidth',
+    );
+    if (outcome == 'reuseDecoded') {
+      feQa(
+        'P3.7',
+        status: 'PASS',
+        detail: 'reuseDecoded=true cacheW=$cacheWidth ${thumbhashFlag(thumbhash)}',
+        once: true,
+        onceKey: 'reuseDecoded',
+      );
+      fePending(
+        'P3.7',
+        status: 'PASS',
+        detail: 'cdnReuseDecoded cacheW=$cacheWidth ${thumbhashFlag(thumbhash)}',
+        once: true,
+        onceKey: 'reuseDecoded',
+      );
+    }
+
     final hash = thumbhashFlag(thumbhash);
     if (outcome == 'placeholder' &&
         (thumbhash == null || thumbhash.trim().isEmpty)) {

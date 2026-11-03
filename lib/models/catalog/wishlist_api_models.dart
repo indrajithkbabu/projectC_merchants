@@ -1,4 +1,5 @@
 import 'package:equatable/equatable.dart';
+import 'package:project_c/helper/catalog_media_debug.dart';
 import 'package:project_c/models/store_privacy_mode.dart';
 
 /// Result of PUT/DELETE `/products/:productId/like` (public appreciation).
@@ -544,9 +545,31 @@ class WishlistItem extends Equatable {
             ? Map<String, dynamic>.from(rawCollection)
             : const <String, dynamic>{};
 
-    final cover = collectionMap['coverImage'];
+    // P5.1 — prefer collection `cover`; soft-fallback to legacy `coverImage`.
+    final cover =
+        collectionMap.containsKey('cover')
+            ? collectionMap['cover']
+            : collectionMap['coverImage'];
     final coverMap =
         cover is Map ? Map<String, dynamic>.from(cover) : const <String, dynamic>{};
+    if (!collectionMap.containsKey('cover') &&
+        collectionMap.containsKey('coverImage')) {
+      CatalogMediaDebug.fePending(
+        'P5.1',
+        status: 'INFO',
+        detail: 'wishlist used legacy coverImage fallback',
+        once: true,
+        onceKey: 'wishlistCoverImageFallback',
+      );
+    } else if (collectionMap.containsKey('cover')) {
+      CatalogMediaDebug.fePending(
+        'P5.1',
+        status: 'PASS',
+        detail: 'wishlist coverSource=cover',
+        once: true,
+        onceKey: 'wishlistCover',
+      );
+    }
     final rawPhoto =
         json['photo'] ??
         productMap['primaryImage'] ??

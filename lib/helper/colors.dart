@@ -1,32 +1,57 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
-/// Day (Telegram light) vs Night (Graphite dark). Persisted in Settings.
-enum AppAppearance { day, night }
+/// Appearance preference. Persisted in Settings.
+///
+/// [system] follows the device light/dark setting (resolved to Day or Night).
+/// [day] / [night] force Telegram light / Graphite dark.
+enum AppAppearance { system, day, night }
 
 extension AppAppearanceX on AppAppearance {
   String get storageValue => name;
 
   String get label => switch (this) {
+    AppAppearance.system => 'System',
     AppAppearance.day => 'Day mode',
     AppAppearance.night => 'Night mode',
   };
 
   String get subtitle => switch (this) {
+    AppAppearance.system => 'Match device light / dark setting',
     AppAppearance.day => 'Light Telegram-style colours',
     AppAppearance.night => 'Graphite dark catalogue theme',
   };
 
+  /// True only for the forced Night preference (not System).
+  /// Use [AppColors.isNight] or [ThemePreferences.isNight] for the active UI.
   bool get isNight => this == AppAppearance.night;
 
-  ThemeMode get themeMode =>
-      isNight ? ThemeMode.dark : ThemeMode.light;
+  bool get isSystem => this == AppAppearance.system;
+
+  ThemeMode get themeMode => switch (this) {
+    AppAppearance.system => ThemeMode.system,
+    AppAppearance.day => ThemeMode.light,
+    AppAppearance.night => ThemeMode.dark,
+  };
+
+  /// Maps preference + platform brightness to a concrete Day/Night palette.
+  AppAppearance resolve([Brightness? platformBrightness]) {
+    if (this == AppAppearance.day || this == AppAppearance.night) {
+      return this;
+    }
+    final brightness =
+        platformBrightness ??
+        WidgetsBinding.instance.platformDispatcher.platformBrightness;
+    return brightness == Brightness.dark
+        ? AppAppearance.night
+        : AppAppearance.day;
+  }
 
   static AppAppearance fromStorage(String? raw) {
     final value = raw?.trim().toLowerCase() ?? '';
     return AppAppearance.values.firstWhere(
       (mode) => mode.name == value,
-      orElse: () => AppAppearance.day,
+      orElse: () => AppAppearance.system,
     );
   }
 }
@@ -155,22 +180,27 @@ class AppColorPalette {
   );
 }
 
-/// Active appearance colours. Call [bind] when the user switches Day/Night.
+/// Active appearance colours. Call [bind] when the resolved Day/Night changes.
 ///
 /// Prefer role getters (`primary`, `surface`, …) so feature code stays theme-agnostic.
 abstract final class AppColors {
+  /// Always Day or Night (never System) — the palette currently painted.
   static AppAppearance _appearance = AppAppearance.day;
   static AppColorPalette _palette = AppColorPalette.day;
 
   static AppAppearance get appearance => _appearance;
-  static bool get isNight => _appearance.isNight;
+  static bool get isNight => _appearance == AppAppearance.night;
   static AppColorPalette get palette => _palette;
 
-  /// Sync getters with the persisted appearance (call before first frame + on change).
+  /// Sync getters with the active Day/Night palette (call before first frame + on change).
+  ///
+  /// Pass a resolved Day/Night value, or [AppAppearance.system] (resolved from
+  /// the current platform brightness).
   static void bind(AppAppearance appearance) {
-    _appearance = appearance;
+    final resolved = appearance.resolve();
+    _appearance = resolved;
     _palette =
-        appearance == AppAppearance.night
+        resolved == AppAppearance.night
             ? AppColorPalette.night
             : AppColorPalette.day;
   }

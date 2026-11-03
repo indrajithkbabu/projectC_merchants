@@ -1,5 +1,6 @@
 import 'package:bloc/bloc.dart';
 import 'package:equatable/equatable.dart';
+import 'package:project_c/helper/catalog_ui_mapper.dart';
 import 'package:project_c/models/catalog/collection_models.dart';
 import 'package:project_c/models/product_details_feed_item.dart';
 import 'package:project_c/models/store_product.dart';

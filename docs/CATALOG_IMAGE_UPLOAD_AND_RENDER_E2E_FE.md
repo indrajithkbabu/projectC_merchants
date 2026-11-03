@@ -2,7 +2,14 @@
 
 How product photos are prepared on device, uploaded, committed, and shown in the app — including what the backend returns and what the frontend does with that data.
 
-Debug Logcat filter: **`CatalogMediaDBG`**
+Debug Logcat filters:
+
+| Filter | Use |
+| :--- | :--- |
+| **`CatalogMediaDBG`** | Full upload/render pipeline |
+| **`FE_QA`** | FE review checklist PASS/FAIL |
+| **`R2_QA`** | CDN tier / renew / Accept |
+| **`FE_PENDING`** | FE no-BE pending wave (P3.x / P4.x / P5.1) |
 
 ---
 
@@ -14,11 +21,11 @@ On browse, the backend returns three display URLs (grid / detail / zoom) plus a 
 
 | Goal | How |
 | :--- | :--- |
-| Fast create with many 2K/4K photos | On-device compress; prepare up to 3 at a time |
+| Fast create with many 2K/4K photos | On-device compress; prepare overlapped with sign/PUT |
 | Save data on browse | Grid uses `thumbnailUrl`, not master |
-| Instant preview | ThumbHash blur before the network image arrives |
+| Instant preview | ThumbHash blur (LRU) before the network image arrives |
 | Keep API light | Binaries → R2; API signs + commits JSON |
-| Correct portrait/landscape | EXIF orientation before resize |
+| Correct portrait/landscape | EXIF orientation applied; GPS/camera tags stripped (`keepExif: false`) |
 
 **Measured (Redmi Note 10 Pro Max, ~4K JPEGs):** 14 photos prepare ≈ **4.5s**; 1 photo ≈ **1.2s**. Sign + PUT + batch add network time on top.
 
@@ -63,12 +70,14 @@ For each local photo (up to **3 in parallel**):
 | :--- | :--- | :--- |
 | **Probe** | Read first ~256KB of the JPEG; parse size + **EXIF orientation** | ~30–100 ms |
 | **Target size** | Fit so **long edge ≤ 1080** (e.g. 2252×4000 → **608×1080**) | instant |
-| **Compress** | Native compress → **WebP quality 85**, EXIF rotation applied | ~0.5–0.9 s |
+| **Compress** | Native compress → **WebP quality 85**, `autoCorrectionAngle: true`, **`keepExif: false`** (orientation applied; GPS/camera tags stripped) | ~0.5–0.9 s |
 | **ThumbHash** | Native shrink of that WebP to ~100px → ~28-char Base64 string | ~40–90 ms |
 
-**EXIF** = metadata in the photo. Orientation says which way is “up” (phones often store the bitmap sideways and tag rotation).
+**EXIF** = metadata in the photo. Orientation says which way is “up” (phones often store the bitmap sideways and tag rotation). FE applies orientation during compress and does **not** keep EXIF in the uploaded WebP (`keepExif: false`).
 
 **Probe** = quick header read for size + orientation. It does not load the full 5 MB file just to measure it (that older path was ~2–3 s/photo; now ~0.1 s).
+
+**Pipeline overlap (P4.1):** as each photo finishes prepare, FE signs + PUTs that chunk while other photos still prepare (not prepare-all-then-sign).
 
 Device example:
 
@@ -114,7 +123,7 @@ File descriptors only — **no image bytes**:
 | `sessionId` | Upload session |
 | `imageId` | Id used later in batch (`img_…`) |
 | `key` | R2 object key |
-| `presignedUrl` | Time-limited URL for **PUT** (~900s) |
+| `presignedUrl` | Time-limited URL for **PUT** (`expiresIn`, typically ~300s) |
 | `url` | Public **master** display URL |
 | `thumbnailUrl` | Public **grid** variant URL |
 | `detailUrl` | Public **detail** variant URL |
@@ -143,19 +152,27 @@ Bytes go phone → Cloudflare, not phone → API → Cloudflare.
 **Request**  
 `POST /v1/catalog/stores/:storeId/products/batch`  
 Header: `Idempotency-Key` (pending upload id)  
-Body: **JSON only**
+Body: **JSON only** — envelope is **`products[]`** (never a flat single product object).
+
+Logged shape (real FE body):
 
 ```json
 {
-  "image_id": "img_…",
-  "thumbhash": "<base64>",
-  "title": "Chain",
-  "stockStatus": "…",
-  "specifications": { },
-  "imageKey": "catalog/products/…/img_….webp",
-  "width": 608,
-  "height": 1080,
-  "bytes": 138600
+  "products": [
+    {
+      "image_id": "img_…",
+      "thumbhash": "<base64>",
+      "title": "Chain",
+      "stockStatus": "…",
+      "specifications": { },
+      "width": 608,
+      "height": 1080,
+      "bytes": 138600
+    }
+  ],
+  "batchId": "<pending-upload-id>",
+  "idempotencyKey": "<pending-upload-id>",
+  "collectionName": "…"
 }
 ```
 
@@ -165,7 +182,7 @@ Body: **JSON only**
 - Primary image: `url`, `thumbnailUrl`, `detailUrl`, `thumbhash` (when persisted)  
 - Optional collection / listing binding  
 
-FE merges server fields with local sign/prepare data when a field is missing (current session only).
+FE merges server fields with local sign/prepare data when a field is missing (current session only). After PUT, FE also **seeds** CacheManager with local WebP bytes under the sign URLs so grids can paint without a blank flash (P4.5).
 
 Legacy multipart create is fallback only if sign has no `imageId`.
 
@@ -188,8 +205,8 @@ Legacy multipart create is fallback only if sign has no `imageId`.
 
 | Field | Use | Typical shape |
 | :--- | :--- | :--- |
-| `thumbnailUrl` | Small / grid | `…/cdn-cgi/image/width=240,height=240,fit=cover,quality=40,…/img_….webp` |
-| `detailUrl` | Medium / detail | `…/cdn-cgi/image/width=720,fit=scale-down,quality=70,…/img_….webp` |
+| `thumbnailUrl` | Small / grid | `…/cdn-cgi/image/width=360,height=360,fit=cover,quality=60,format=webp/…/img_….webp` |
+| `detailUrl` | Medium / detail | `…/cdn-cgi/image/width=1080,fit=scale-down,quality=75,format=webp/…/img_….webp` |
 | `url` | Master / zoom | `…/catalog/products/…/img_….webp` (no `width=`) |
 | `thumbhash` | Instant blur | ~28-char Base64 |
 
@@ -266,10 +283,11 @@ Logs: `paint placeholder` → `asyncFrame` / `syncFrame` / `reuseDecoded`.
 3. FE compress → ~139 KB WebP + ThumbHash.  
 4. FE `POST /uploads/sign` → `img_…`, `presignedUrl`, three display URLs.  
 5. FE `PUT` WebP to R2 → OK.  
-6. FE `POST …/products/batch` with `image_id` + thumbhash + title → 201.  
+6. FE `POST …/products/batch` with body `{ "products": [ { image_id, thumbhash, title, … } ], "batchId", "idempotencyKey" }` → 201.  
 7. Store has product with `thumbnailUrl` / `detailUrl` / `url` / `thumbhash`.  
-8. Group grid → **grid** role → `thumbnailUrl` + ThumbHash placeholder.  
-9. Details / pinch → **detail** or **zoom** as needed.
+8. Group grid → **grid** role → `thumbnailUrl` + ThumbHash placeholder (LRU reuse).  
+9. Details / pinch → **detail** or **zoom** as needed.  
+10. Grids decode at **cell × dpr** (`cacheWidth`); scroll prefetches the next page and cancels warm on leave.
 
 ---
 
@@ -295,16 +313,17 @@ Compress stays ~0.5–1 s per photo. Total prepare improved mainly from faster p
 
 ## 7. QA checklist
 
-Filter: `CatalogMediaDBG`
+Filter: `CatalogMediaDBG` (+ `FE_PENDING` for the no-BE wave)
 
 **Upload**
 
 - [ ] `oriented … → target …x1080`  
-- [ ] `compress OK` / `listFallback=false`  
+- [ ] `compress OK` / `keepExif=false` (`FE_PENDING` P1.6 PASS)  
 - [ ] `meta … path=nativePreview` + `thumbhash=YES`  
+- [ ] Pipeline overlap: `FE_PENDING` P4.1 `pipeline=overlapPrepareSignPut`  
 - [ ] `[STEP] 1 SIGN` → 200, `imageId` + thumb/detail/url  
-- [ ] `[STEP] 2 R2 PUT OK`  
-- [ ] `[STEP] 3 BATCH` → 201, `primaryThumbhashYES`  
+- [ ] `[STEP] 2 R2 PUT OK` + `FE_PENDING` P4.5 `seedLocal`  
+- [ ] `[STEP] 3 BATCH` → 201, body uses `products[]` (`FE_QA` P0.1)  
 
 **Render**
 
@@ -312,6 +331,9 @@ Filter: `CatalogMediaDBG`
 - [ ] `role=detail source=be.detailUrl`  
 - [ ] `role=zoom source=be.url`  
 - [ ] Placeholder then frame (no `paint ERROR`)  
+- [ ] `FE_PENDING` P3.4 `cellDecode` / `cacheW>0`  
+- [ ] `FE_PENDING` P3.7 `thumbhashLru=HIT` or `reuseDecoded`  
+- [ ] `FE_PENDING` P3.5 warm / prefetch / cancelOnDispose  
 - [ ] Missing variant → `fallback.master` + `[GAP]`  
 
 ---
@@ -321,7 +343,7 @@ Filter: `CatalogMediaDBG`
 `[GAP]` when BE omits fields FE expects:
 
 - Some list payloads: cover thumbhash null while primary image hash is present  
-- Optimistic UI may paint master briefly before refresh fills thumb/detail  
+- FE prefers `cover` (P5.1); legacy `coverImage` is soft-fallback only until BE drops it  
 
 Display-only fixes must not change sign / PUT / batch behavior.
 

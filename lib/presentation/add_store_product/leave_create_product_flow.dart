@@ -15,11 +15,11 @@ import 'package:project_c/session/catalog_session.dart';
 const String kCreateProductBackgroundUpload = 'background_upload';
 
 /// After create publish / background upload: land on Discover store profile
-/// so [ProductUploadCoordinator] pending shimmer is visible.
+/// so [ProductUploadCoordinator] Telegram-style pending collage is visible.
 ///
 /// Prefer popping back to an existing own-store [Routes.storeProfileRoute].
 /// If that route is not on the stack, switch shell to My store and push
-/// own-store profile for the shimmer.
+/// own-store profile for the pending upload tile.
 void leaveCreateProductFlow(BuildContext context) {
   final navigator = Navigator.of(context, rootNavigator: true);
   final session = ServiceLocator.get<CatalogSession>();
@@ -41,7 +41,7 @@ void leaveCreateProductFlow(BuildContext context) {
 
   JewelUploadQa.step(
     'Leave create flow → store profile',
-    detail: 'storeId=$storeId (expect pending shimmer)',
+    detail: 'storeId=$storeId (expect pending collage)',
   );
 
   var landedOnStoreProfile = false;
@@ -62,10 +62,10 @@ void leaveCreateProductFlow(BuildContext context) {
     return;
   }
 
-  // Shell My store hosts a long-lived StoreProfileBloc (pending shimmer).
+  // Shell My store hosts a long-lived StoreProfileBloc (pending collage).
   ShellNav.request(ShellNavTab.myStore);
 
-  // Shell home has no Discover store-profile route — open it for shimmer.
+  // Shell home has no Discover store-profile route — open it for pending UI.
   JewelUploadQa.log('  pushNamed storeProfile + ShellNav.myStore');
   navigator.pushNamed(
     Routes.storeProfileRoute,

@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:project_c/di/service_locator.dart';
 import 'package:project_c/helper/app_log.dart';
+import 'package:project_c/helper/catalog_media_debug.dart';
 import 'package:project_c/helper/product_image.dart';
 import 'package:project_c/models/catalog/wishlist_api_models.dart';
 import 'package:project_c/webservice/wishlist/wishlist_repository.dart';
@@ -98,15 +99,26 @@ class WishlistPrefetcher {
     final page = await ServiceLocator.get<WishlistRepository>().fetchWishlist(
       limit: limit,
     );
+    // P3.5 — warm grid thumbs (not master) for wishlist tiles.
     final urls = <String>[
       for (final item in page.items)
-        if (item.photo.url.trim().isNotEmpty) item.photo.url.trim(),
+        if (item.photo.thumbnailUrl.trim().isNotEmpty)
+          item.photo.thumbnailUrl.trim()
+        else if (item.photo.url.trim().isNotEmpty)
+          item.photo.url.trim(),
     ];
     if (urls.isNotEmpty) {
       // ignore: unawaited_futures
       CatalogImageCache.precacheUrls(
         urls,
         cacheWidth: CatalogImageCache.gridCacheWidth(),
+      );
+      CatalogMediaDebug.fePending(
+        'P3.5',
+        status: 'PASS',
+        detail: 'wishlistPrefetch thumbs=${urls.length}',
+        once: true,
+        onceKey: 'wishlistPrefetch',
       );
     }
     return page;

@@ -55,12 +55,23 @@ class _AppState extends State<App> with WidgetsBindingObserver {
   }
 
   @override
+  void didChangePlatformBrightness() {
+    _themePrefs.syncPlatformBrightness(
+      WidgetsBinding.instance.platformDispatcher.platformBrightness,
+    );
+  }
+
+  @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
       ServiceLocator.get<ScreenshotProtectionService>().reapply();
       // Recover FCM after transient GMS SERVICE_NOT_AVAILABLE (OEM/network).
       // ignore: unawaited_futures
       ServiceLocator.get<PushNotificationService>().onAppResumed();
+      // Some OEMs report brightness only after resume — resync System mode.
+      _themePrefs.syncPlatformBrightness(
+        WidgetsBinding.instance.platformDispatcher.platformBrightness,
+      );
     }
     if (state == AppLifecycleState.paused ||
         state == AppLifecycleState.inactive ||
@@ -127,7 +138,8 @@ class _AppState extends State<App> with WidgetsBindingObserver {
         child: ListenableBuilder(
           listenable: _themePrefs,
           builder: (context, _) {
-            AppColors.bind(_themePrefs.appearance);
+            // Bind concrete Day/Night (System is already resolved in prefs).
+            AppColors.bind(_themePrefs.resolvedAppearance);
             configureSystemUi();
             return MaterialApp(
               navigatorKey: navigatorKey,
@@ -136,11 +148,11 @@ class _AppState extends State<App> with WidgetsBindingObserver {
               debugShowCheckedModeBanner: false,
               theme: AppTheme.light,
               darkTheme: AppTheme.dark,
-              themeMode: _themePrefs.appearance.themeMode,
+              themeMode: _themePrefs.themeMode,
               initialRoute: Routes.bootstrapRoute,
               onGenerateRoute: onGenerateRoutes,
               builder: (context, child) {
-                final appearance = _themePrefs.appearance;
+                final appearance = _themePrefs.resolvedAppearance;
                 return AppearanceScope(
                   appearance: appearance,
                   child: NetworkStatusGate(

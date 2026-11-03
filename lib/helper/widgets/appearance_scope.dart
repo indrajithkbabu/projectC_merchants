@@ -1,7 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:project_c/helper/colors.dart';
 
-/// Provides [AppAppearance] to the tree and notifies dependents on Day/Night switch.
+/// Provides the resolved Day/Night [AppAppearance] to the tree and notifies
+/// dependents when the painted palette switches (including System → OS change).
 class AppearanceScope extends InheritedWidget {
   const AppearanceScope({
     super.key,

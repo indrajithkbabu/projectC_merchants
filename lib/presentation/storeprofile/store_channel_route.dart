@@ -10,6 +10,7 @@ import 'package:project_c/session/catalog_session.dart';
 import 'package:project_c/helper/app_padding.dart';
 import 'package:project_c/helper/catalog_media_debug.dart';
 import 'package:project_c/helper/catalog_responsive_image.dart';
+import 'package:project_c/helper/catalog_ui_mapper.dart';
 import 'package:project_c/helper/colors.dart';
 import 'package:project_c/helper/product_image.dart';
 import 'package:project_c/helper/text_styles.dart';
@@ -261,11 +262,14 @@ class _StoreChannelRouteState extends State<StoreChannelRoute>
 
   List<_ChannelPhoto> get _allPhotos {
     final out = <_ChannelPhoto>[];
-    for (final product in _products) {
-      for (var i = 0; i < product.imagePaths.length; i++) {
-        final master = product.imagePaths[i];
-        if (!ProductImagePaths.isDisplayable(master)) continue;
-        out.add(_ChannelPhoto(product: product, imageIndex: i));
+    for (final listing in _products) {
+      // Nested jewel ids in photoAssetIds → one cell identity per piece.
+      for (final product in CatalogUiMapper.expandCollageToProducts(listing)) {
+        for (var i = 0; i < product.imagePaths.length; i++) {
+          final master = product.imagePaths[i];
+          if (!ProductImagePaths.isDisplayable(master)) continue;
+          out.add(_ChannelPhoto(product: product, imageIndex: i));
+        }
       }
     }
     return out;
@@ -451,6 +455,7 @@ class _StoreChannelRouteState extends State<StoreChannelRoute>
 
   @override
   void dispose() {
+    CatalogImageCache.cancelOffscreenWarm(reason: 'channelDispose');
     _tabs.dispose();
     _logoPager.dispose();
     _columnSnap.dispose();
@@ -520,26 +525,52 @@ class _StoreChannelRouteState extends State<StoreChannelRoute>
               ),
             )
             .toList(growable: false);
-    final index = feed.indexWhere(
-      (e) =>
-          e.product.id == photo.product.id && e.imageIndex == photo.imageIndex,
-    );
     final masterPath = photo.urlFor(CatalogImageRole.zoom, log: true);
     final paintPath = photo.urlFor(_mediaPaintRole);
+    // Path-first — never fall back to feed[0] when the tapped master misses.
+    var feedIndex = -1;
+    final masterNeedle = masterPath.trim();
+    if (masterNeedle.isNotEmpty) {
+      feedIndex = feed.indexWhere((e) => e.path.trim() == masterNeedle);
+    }
+    if (feedIndex < 0) {
+      feedIndex = feed.indexWhere(
+        (e) =>
+            e.product.id == photo.product.id &&
+            e.imageIndex == photo.imageIndex,
+      );
+    }
+    final useFeed =
+        feedIndex >= 0 &&
+        feedIndex < feed.length &&
+        (masterNeedle.isEmpty || feed[feedIndex].path.trim() == masterNeedle);
     CatalogMediaDebug.qualityTapOpen(
       from: 'channel_media cols=${_mediaColumns.round()}',
       role: CatalogImageRole.zoom,
       url: masterPath,
       paintedUrl: paintPath,
     );
-    // Med/High: disk + decode master at fullCacheWidth so details pinch hits
-    // the same ImageCache key (grids use half-width — different key).
+    if (masterPath.isNotEmpty) {
+      CatalogImageQualityLadder.unlockMaster(
+        masterPath,
+        reason: 'tap_open_details',
+      );
+    }
+    // Full width for details pinch; detailCacheWidth for ladder tile boost
+    // after back (ProductMediaImage upgrade path).
     // ignore: unawaited_futures
     CatalogImageCache.precacheUrls(
       [masterPath],
       decode: true,
       maxDecode: 1,
       cacheWidth: CatalogImageCache.fullCacheWidth(),
+    );
+    // ignore: unawaited_futures
+    CatalogImageCache.precacheUrls(
+      [masterPath],
+      decode: true,
+      maxDecode: 1,
+      cacheWidth: CatalogImageCache.detailCacheWidth(),
     );
     final thumb = photo.product.thumbhashAt(photo.imageIndex);
     await Navigator.of(context).pushNamed(
@@ -551,8 +582,10 @@ class _StoreChannelRouteState extends State<StoreChannelRoute>
         'storeLink': widget.storeLink,
         'isOwnStore': widget.isOwnStore,
         'imageIndex': photo.imageIndex,
-        'galleryFeed': feed,
-        'galleryFeedIndex': index < 0 ? 0 : index,
+        if (useFeed) ...{
+          'galleryFeed': feed,
+          'galleryFeedIndex': feedIndex,
+        },
         if (sourceRect != null && paintPath.trim().isNotEmpty) ...{
           'photoSourceRect': rectToArgs(sourceRect),
           // Flyer starts from the painted grid/detail tile.
@@ -561,6 +594,9 @@ class _StoreChannelRouteState extends State<StoreChannelRoute>
         },
       },
     );
+    if (!mounted) return;
+    // Rebind Media tiles to ladder-upgraded URLs after plain back.
+    setState(() {});
   }
 
   void _onPinchStart(double baseColumns) {
@@ -860,18 +896,24 @@ class _StoreChannelRouteState extends State<StoreChannelRoute>
               },
               onImageLongPress:
                   _canVisitorPhotoSelect ? _onVisitorPhotoLongPress : null,
-              onImageTap: (product, imageIndex, {Rect? sourceRect}) {
+              onImageTap: (product, imageIndex, {Rect? sourceRect}) async {
                 if (_visitorPhotoSelecting) {
                   _onVisitorPhotoTap(product, imageIndex);
                   return;
                 }
+                final resolved = CatalogUiMapper.resolveCollageTap(
+                  product,
+                  imageIndex,
+                );
+                final media = resolved.product;
+                final openIndex = resolved.imageIndex;
                 final paintRole = CatalogResponsiveImage.roleForMediaColumns(
                   _galleryColumns.round(),
                 );
                 // Flyer matches painted Gallery tile; details use master.
-                final paintPath = product.urlForRole(imageIndex, paintRole);
-                final masterPath = product.urlForRole(
-                  imageIndex,
+                final paintPath = media.urlForRole(openIndex, paintRole);
+                final masterPath = media.urlForRole(
+                  openIndex,
                   CatalogImageRole.zoom,
                 );
                 CatalogMediaDebug.qualityTapOpen(
@@ -880,7 +922,13 @@ class _StoreChannelRouteState extends State<StoreChannelRoute>
                   url: masterPath,
                   paintedUrl: paintPath,
                 );
-                final thumb = product.thumbhashAt(imageIndex);
+                if (masterPath.isNotEmpty) {
+                  CatalogImageQualityLadder.unlockMaster(
+                    masterPath,
+                    reason: 'tap_open_details',
+                  );
+                }
+                final thumb = media.thumbhashAt(openIndex);
                 // ignore: unawaited_futures
                 CatalogImageCache.precacheUrls(
                   [masterPath],
@@ -888,15 +936,22 @@ class _StoreChannelRouteState extends State<StoreChannelRoute>
                   maxDecode: 1,
                   cacheWidth: CatalogImageCache.fullCacheWidth(),
                 );
-                Navigator.of(context).pushNamed(
+                // ignore: unawaited_futures
+                CatalogImageCache.precacheUrls(
+                  [masterPath],
+                  decode: true,
+                  maxDecode: 1,
+                  cacheWidth: CatalogImageCache.detailCacheWidth(),
+                );
+                await Navigator.of(context).pushNamed(
                   Routes.productDetailsRoute,
                   arguments: <String, Object?>{
-                    'product': product,
+                    'product': media,
                     'storeId': widget.storeId,
                     'storeName': widget.storeName,
                     'storeLink': widget.storeLink,
                     'isOwnStore': widget.isOwnStore,
-                    'imageIndex': imageIndex,
+                    'imageIndex': openIndex,
                     if (sourceRect != null &&
                         paintPath.trim().isNotEmpty) ...{
                       'photoSourceRect': rectToArgs(sourceRect),
@@ -906,6 +961,8 @@ class _StoreChannelRouteState extends State<StoreChannelRoute>
                     },
                   },
                 );
+                if (!mounted) return;
+                setState(() {});
               },
             ),
           ],
@@ -1772,6 +1829,7 @@ class _GroupTab extends StatelessWidget {
           // Photo-level select only — not whole-product owner selection.
           selectionMode: false,
           photoSelectionMode: photoSelectionMode,
+          showPhotoImportStatus: photoSelectionMode,
           selectedPhotoKeys: selectedPhotoKeys,
           onProductTap: onProductTap,
           onImageLongPress: onImageLongPress,

@@ -14,8 +14,8 @@ This file defines what to follow for UI and logic inside `lib/presentation/store
   it aligns with Contacts / Wishlist on shell tab switches. Trailing actions are
   **right-aligned** (Expanded title + trailing): (own store) notification icon
   → `activity_route` (live `GET /activity` feed + unread badge from
-  `/activity/unread-count`) + overflow `⋮` (**Create group** → snackbar
-  “coming soon”). No brand logo or subtitle under the title.
+  `/activity/unread-count`). No overflow `⋮` menu. No brand logo or subtitle
+  under the title.
 - Home search field uses a pill radius (`BorderRadius.circular(32)`) matching
   the floating bottom nav capsule. It is an entry to `global_search_route`
   (product/tag/store Discover). It is read-only on this screen; store-list
@@ -61,8 +61,10 @@ This file defines what to follow for UI and logic inside `lib/presentation/store
   `StoreHomeCache` with the other store caches.
 - Never show a full-screen spinner. Keep previous rows visible while refreshing;
   empty first paint shows list-row shimmer (`store_listing_shimmer`) **only when
-  there is no home cache**, not “Loading stores…” text. True empty state shows
-  “No stores found”.
+  there is no home cache**, not “Loading stores…” text. True empty state uses
+  animated `StoreListingEmpty` (soft float + pulse illustration), not plain
+  “No stores found” text. App bar has Activity bell (own store only) — no ⋮
+  overflow menu.
 - Account delete remains available on the Settings tab via `AccountProfileBloc` (`DELETE /me`).
 - Global product search lives under `lib/presentation/search/` and calls catalog search APIs via `SearchRepository`.
 
@@ -75,4 +77,4 @@ This file defines what to follow for UI and logic inside `lib/presentation/store
 ## Folder Scope
 - `store_listing_route.dart`: listing route / Stores tab body.
 - `store_listing_widgets/`: listing-only visual widgets (tile, image preview,
-  header profile avatar, list shimmer).
+  header profile avatar, list shimmer, empty illustration).

@@ -19,7 +19,7 @@ Upload invariants stay untouched on both sides:
 
 ## BE resolution (prod)
 
-Per backend ticket #14 (confirmed):
+Per backend ticket #14 + R2 responsive guide:
 
 | Gap | Fix |
 |-----|-----|
@@ -30,13 +30,14 @@ Example shapes:
 
 ```text
 url          = https://media.catly.in/catalog/products/…/img_….webp
-thumbnailUrl = https://media.catly.in/cdn-cgi/image/width=240,height=240,fit=cover,quality=40,format=auto/catalog/products/…/img_….webp
-detailUrl    = https://media.catly.in/cdn-cgi/image/width=720,fit=scale-down,quality=70,format=auto/catalog/products/…/img_….webp
+thumbnailUrl = https://media.catly.in/cdn-cgi/image/width=360,height=360,fit=cover,quality=60,format=webp/catalog/products/…/img_….webp
+detailUrl    = https://media.catly.in/cdn-cgi/image/width=1080,fit=scale-down,quality=75,format=webp/catalog/products/…/img_….webp
 ```
 
 Notes:
 
 - Cloudflare rejects Sharp’s `fit=inside` → use **`fit=scale-down`** (same intent: fit within width, no upscale).
+- Prefer **`format=webp`** (Flutter image fetches often omit `Accept: image/webp`; `format=auto` can fall back to larger JPEG).
 - BE never copies master into `thumbnailUrl` / `detailUrl`.
 
 ---
@@ -47,22 +48,30 @@ Notes:
 - Prefer BE variants when present (`source=be.*` in logs)
 - **FE CDN synth disabled** — if BE omits a variant, paint master + GAP log (commented `synthesize` can be restored in `catalog_responsive_image.dart`)
 - Image widgets use plain HTTPS GET (public media; no Bearer unless QA proves 401)
+- Product feed: parse `primaryImage` and fall back to `cover` / `coverImage`
+- QUALITY / ladder classify **only** thumb `width=360` and detail `width=1080`
 
 ---
 
 ## Device acceptance
 
-Filter Logcat: `CatalogMediaDBG`
+Filter Logcat: `CatalogMediaDBG` and **`R2_QA`**
 
-- [ ] `[STEP] 2 R2 PUT OK` then `[STEP] 3 BATCH` → `201`
-- [ ] `[RENDER] URL role=grid source=be.thumbnailUrl` → `cdn-cgi/image/width=240` + `quality=40`
-- [ ] `[RENDER] URL role=detail source=be.detailUrl` → `width=720` + `fit=scale-down` + `quality=70`
-- [ ] `[RENDER] URL role=zoom source=be.url` → master (no `width=`)
-- [ ] `[QUALITY] CHECK` → `thumbnailUrl(240)` / `detailUrl(720)` / `master(url)` **PASS**
+### Low (CDN / ladder) — filter `R2_QA` → `L1`
+- [ ] Grid paint → `L1 PASS | role=grid … cdn=thumbnailUrl(360)` (or ladder)
+- [ ] Detail paint → `L1 PASS | … cdn=detailUrl(1080)`
+- [ ] Zoom / master → `cdn=master(url)`
+- [ ] `[RENDER] URL role=grid source=be.thumbnailUrl` → `width=360` + `format=webp`
+- [ ] `[RENDER] URL role=detail source=be.detailUrl` → `width=1080` + `format=webp`
 - [ ] Missing BE variant → `source=fallback.master` + GAP (not `fe.synth`)
-- [ ] `paint asyncFrame` / `syncFrame` — **no** `paint ERROR`
 - [ ] Cold open store: InstantCatalogPhoto blur then thumbnail
 - [ ] Product details pinch still uses master `url`
+
+### Medium — filter `R2_QA` → `M1` / `M2` / `M3`
+- [ ] Upload → `M1 PASS | presignRenew … defaultExpiresIn=300s` and/or `sign expiresIn=… renewAfter=…`
+- [ ] Multi-photo publish → `M2 PASS | batchShape images[]=N image_id=… image_ids(legacy)=0`
+- [ ] First catalog image paint → `M3 PASS | imageFetch Accept=image/webp…`
+- [ ] `[STEP] 2 R2 PUT OK` then `[STEP] 3 BATCH` → `201`
 
 ---
 

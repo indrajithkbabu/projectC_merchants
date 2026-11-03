@@ -47,7 +47,7 @@ class AppSettingsStorage {
     AppLog.d(_tag, 'productViewMode=${mode.storageValue}');
   }
 
-  /// Defaults to [AppAppearance.day].
+  /// Defaults to [AppAppearance.system] (follow device light/dark).
   Future<AppAppearance> readAppearance() async {
     final raw = await _storage.read(key: _kAppearance);
     return AppAppearanceX.fromStorage(raw);

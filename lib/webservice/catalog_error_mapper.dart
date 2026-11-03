@@ -168,13 +168,40 @@ class CatalogErrorMapper {
       case 'CANNOT_IMPORT_OWN_PRODUCT':
         return 'You cannot import from your own store.';
       case 'STOCK_OVERRIDE_FORBIDDEN_ON_LOCKED':
+      case 'STOCK_OVERRIDE_FORBIDDEN':
         return 'Stock follows the source on locked products.';
       case 'CANNOT_UNLOCK_LOCKED_PRODUCT':
         return 'This product is locked by the source and cannot be unlocked.';
       case 'LOCKED_PRODUCT':
+      case 'PRODUCT_LOCKED':
         return 'This product is locked. Follow the store to view it.';
       case 'PRODUCT_NOT_FOUND':
         return 'This product is no longer available.';
+      case 'UNAUTHORIZED_STORE_ACCESS':
+        return 'You do not have permission for this photo.';
+      case 'IDEMPOTENCY_IN_PROGRESS':
+        return 'Still saving your upload. Please wait a moment.';
+      case 'INVALID_BATCH_BODY':
+        return 'We could not save this upload. Please try again.';
+      case 'IMAGE_REQUIRED':
+      case 'NO_PHOTOS':
+        return 'Add at least one photo to continue.';
+      case 'IMAGE_NOT_FOUND_IN_STORAGE':
+        return 'The photo upload did not finish. Please try again.';
+      case 'FILE_TOO_LARGE':
+        return 'This photo is too large. Choose a smaller photo and try again.';
+      case 'INVALID_THUMBHASH':
+        return 'We could not save this photo. Please try another.';
+      case 'INVALID_IMAGE_BINARY':
+        return 'This file is not a supported photo. Try a different image.';
+      case 'UNSUPPORTED_IMAGE_FORMAT':
+        return 'This image format is not supported. Try JPEG, PNG, or WebP.';
+      case 'PRESIGNED_URL_EXPIRED':
+        return 'Upload timed out. Please try again.';
+      case 'COLLECTION_NAME_REQUIRED':
+        return 'Enter a collection name to continue.';
+      case 'TARGET_COLLECTION_NOT_FOUND':
+        return 'That collection is no longer available.';
       case 'CANNOT_FOLLOW_OWN_STORE':
         return 'You cannot follow your own store.';
       case 'ALREADY_FOLLOWING':
@@ -200,9 +227,9 @@ class CatalogErrorMapper {
       case 'PHOTO_NOT_FOUND':
         return 'One or more photos are no longer available.';
       case 'TOO_MANY_PHOTOS':
-        return 'You can upload at most 50 photos.';
+        return 'You can upload at most 50 photos at a time.';
       case 'INVALID_MULTIPART':
-        return 'Upload format is invalid. Try again with fewer or smaller photos.';
+        return 'We could not read those photos. Try fewer or smaller ones.';
       case 'NO_VALID_PHOTOS':
         return 'None of the photos could be uploaded. Try different images.';
       case 'PHOTOS_NOT_READY':
@@ -212,7 +239,7 @@ class CatalogErrorMapper {
       case 'COLLECTION_QUOTA_EXCEEDED':
         return 'This store has reached its collection limit.';
       case 'STORAGE_QUOTA_EXCEEDED':
-        return 'This store is out of media storage space.';
+        return 'This store is out of photo storage space.';
       case 'REVISION_CONFLICT':
         return 'This was updated elsewhere. Refresh and try again.';
       case 'INCOMPLETE_SPECIFICATIONS':
@@ -233,23 +260,23 @@ class CatalogErrorMapper {
         return 'Uploads are busy. Please try again in a moment.';
       case 'PAYLOAD_TOO_LARGE':
       case 'REQUEST_ENTITY_TOO_LARGE':
-        return 'These photos are too large to upload. Try smaller images or fewer photos.';
+        return 'These photos are too large. Try smaller images or fewer photos.';
 
       // ── Image / processing (top-level or failedPhotos[].code) ───
       case 'HEIC_NOT_SUPPORTED':
         return 'HEIC photos are not supported. Use JPEG, PNG, or WebP.';
       case 'INVALID_IMAGE':
-        return 'This file is not a valid image.';
+        return 'This file is not a valid photo. Try another image.';
       case 'UNSUPPORTED_IMAGE':
-        return 'This image format is not supported.';
+        return 'This image format is not supported. Try JPEG, PNG, or WebP.';
       case 'ANIMATED_IMAGE_NOT_ALLOWED':
-        return 'Animated images are not supported.';
+        return 'Animated images are not supported. Use a still photo.';
       case 'IMAGE_TOO_LARGE':
-        return 'Image is too large. Use a photo under 500 MB.';
+        return 'This photo is too large. Choose a smaller photo and try again.';
       case 'IMAGE_RESOLUTION_TOO_LOW':
-        return 'Image is too small. Use a clearer photo.';
+        return 'This photo is too small. Use a clearer photo.';
       case 'PROCESSED_IMAGE_TOO_LARGE':
-        return 'Processed photo is too large. Try another image.';
+        return 'This photo is still too large after processing. Try another.';
       case 'IMAGE_PROCESSING_FAILED':
       case 'PROCESSING_RETRYABLE_FAILURE':
       case 'WORKER_RETRIES_EXHAUSTED':
@@ -258,19 +285,19 @@ class CatalogErrorMapper {
       case 'S3_UPLOAD_FAILED':
         return 'Photo upload failed. Please try again.';
       case 'UPLOAD_SIGNING_FAILED':
-        return 'Unable to prepare this photo. Please try again.';
+        return 'We could not start the upload. Please try again.';
 
       // ── Legacy upload-ticket codes (safe if server still returns) ─
       case 'UPLOAD_NOT_FOUND':
-        return 'Upload not found. Please select the photo again.';
+        return 'That photo upload was not found. Please pick the photo again.';
       case 'UPLOAD_EXPIRED':
       case 'UPLOAD_NOT_AVAILABLE':
-        return 'Upload expired. Please select the photo again.';
+        return 'The upload timed out. Please pick the photo again.';
       case 'UPLOAD_IN_PROGRESS':
         return 'Photo is still processing. Please wait.';
       case 'UPLOAD_CLAIM_LOST':
       case 'UPLOAD_RETRY_REQUIRED':
-        return 'Photo processing was interrupted. Try again.';
+        return 'Photo processing was interrupted. Please try again.';
       case 'UPLOAD_CHECKSUM_MISMATCH':
         return 'Photo upload failed. Please try again.';
 

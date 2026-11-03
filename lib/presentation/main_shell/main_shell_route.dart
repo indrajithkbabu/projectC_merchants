@@ -137,8 +137,8 @@ class _MainShellRouteState extends State<MainShellRoute> {
         const FloatingNavItem(
           tab: FloatingNavTab.stores,
           label: 'Stores',
-          icon: Icons.storefront_outlined,
-          activeIcon: Icons.storefront_rounded,
+          icon: Icons.home_outlined,
+          activeIcon: Icons.home_rounded,
         ),
         const FloatingNavItem(
           tab: FloatingNavTab.contacts,
@@ -170,8 +170,8 @@ class _MainShellRouteState extends State<MainShellRoute> {
       const FloatingNavItem(
         tab: FloatingNavTab.stores,
         label: 'Stores',
-        icon: Icons.storefront_outlined,
-        activeIcon: Icons.storefront_rounded,
+        icon: Icons.home_outlined,
+        activeIcon: Icons.home_rounded,
       ),
       const FloatingNavItem(
         tab: FloatingNavTab.contacts,

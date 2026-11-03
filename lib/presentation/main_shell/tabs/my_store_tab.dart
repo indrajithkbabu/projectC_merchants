@@ -5,6 +5,7 @@ import 'package:project_c/bloc/store_gallery/store_gallery_bloc.dart';
 import 'package:project_c/bloc/storeprofile/store_profile_bloc.dart';
 import 'package:project_c/di/service_locator.dart';
 import 'package:project_c/helper/app_padding.dart';
+import 'package:project_c/helper/catalog_ui_mapper.dart';
 import 'package:project_c/helper/colors.dart';
 import 'package:project_c/helper/product_image.dart';
 import 'package:project_c/helper/text_styles.dart';
@@ -26,7 +27,8 @@ class MyStoreTab extends StatefulWidget {
 }
 
 class MyStoreTabState extends State<MyStoreTab> {
-  final Set<String> _selectedIds = {};
+  /// Photo keys `"listingId|imageIndex"` for per-item multi-delete.
+  final Set<String> _selectedPhotoKeys = {};
   bool _selectionMode = false;
 
   /// Consumes shell system-back while multi-select is active.
@@ -37,35 +39,36 @@ class MyStoreTabState extends State<MyStoreTab> {
   }
 
   void _exitSelection() {
-    if (!_selectionMode && _selectedIds.isEmpty) return;
+    if (!_selectionMode && _selectedPhotoKeys.isEmpty) return;
     setState(() {
       _selectionMode = false;
-      _selectedIds.clear();
+      _selectedPhotoKeys.clear();
     });
   }
 
-  void _enterSelection(StoreProduct product) {
+  void _enterSelection(StoreProduct product, int imageIndex) {
     setState(() {
       _selectionMode = true;
-      _selectedIds
+      _selectedPhotoKeys
         ..clear()
-        ..add(product.id);
+        ..add(StoreMyStoreTab.photoKey(product.id, imageIndex));
     });
   }
 
-  void _toggleSelected(StoreProduct product) {
+  void _toggleSelected(StoreProduct product, int imageIndex) {
+    final key = StoreMyStoreTab.photoKey(product.id, imageIndex);
     setState(() {
-      if (_selectedIds.contains(product.id)) {
-        _selectedIds.remove(product.id);
-        if (_selectedIds.isEmpty) _selectionMode = false;
+      if (_selectedPhotoKeys.contains(key)) {
+        _selectedPhotoKeys.remove(key);
+        if (_selectedPhotoKeys.isEmpty) _selectionMode = false;
       } else {
-        _selectedIds.add(product.id);
+        _selectedPhotoKeys.add(key);
       }
     });
   }
 
   Future<void> _confirmDeleteSelected(BuildContext context) async {
-    final count = _selectedIds.length;
+    final count = _selectedPhotoKeys.length;
     if (count == 0) return;
     final confirmed = await showDialog<bool>(
       context: context,
@@ -73,13 +76,13 @@ class MyStoreTabState extends State<MyStoreTab> {
         return AlertDialog(
           backgroundColor: AppColors.surface,
           title: Text(
-            count == 1 ? 'Delete product?' : 'Delete $count products?',
+            count == 1 ? 'Delete item?' : 'Delete $count items?',
             style: AppTextStyles.headline(fontSize: 18),
           ),
           content: Text(
             count == 1
-                ? 'This removes the selected product from your store. Linked imports in other stores will also stop showing it.'
-                : 'This removes the selected products from your store. Linked imports in other stores will also stop showing them.',
+                ? 'This removes the selected item from your store. The rest of the product stays.'
+                : 'This removes the selected items from your store. Remaining items in each product stay.',
             style: AppTextStyles.body(),
           ),
           actions: [
@@ -99,9 +102,9 @@ class MyStoreTabState extends State<MyStoreTab> {
       },
     );
     if (!context.mounted || confirmed != true) return;
-    final ids = _selectedIds.toList();
+    final keys = _selectedPhotoKeys.toList();
     _exitSelection();
-    context.read<StoreProfileBloc>().add(StoreProfileProductsDeleted(ids));
+    context.read<StoreProfileBloc>().add(StoreProfileItemsDeleted(keys));
   }
 
   Future<void> _openCollectionBrowse(
@@ -151,13 +154,44 @@ class MyStoreTabState extends State<MyStoreTab> {
     }
 
     if (payload['updated'] == true && payload.containsKey('id')) {
-      context.read<StoreProfileBloc>().add(
-        StoreProfileProductUpdated(
-          StoreProduct.fromMap(payload),
-          replacedListingId: payload['replacedListingId'] as String?,
-        ),
-      );
+      _applyProductUpdatedPayload(context, payload);
     }
+  }
+
+  /// Same merge rules as store profile: silent = bump existing listing only.
+  void _applyProductUpdatedPayload(
+    BuildContext context,
+    Map<String, Object?> payload,
+  ) {
+    final incoming = StoreProduct.fromMap(payload);
+    final silent = payload['silent'] == true;
+    var product = incoming;
+    if (silent) {
+      final products = context.read<StoreProfileBloc>().state.products;
+      StoreProduct? matched;
+      for (final p in products) {
+        if (p.id == incoming.id) {
+          matched = p.copyWith(
+            likeCount: incoming.likeCount,
+            viewCount: incoming.viewCount ?? p.viewCount,
+            wishlistCount: incoming.wishlistCount,
+            clearWishlistCount:
+                incoming.wishlistCount == null &&
+                payload.containsKey('wishlistCount'),
+          );
+          break;
+        }
+      }
+      if (matched == null) return;
+      product = matched;
+    }
+    context.read<StoreProfileBloc>().add(
+      StoreProfileProductUpdated(
+        product,
+        replacedListingId: payload['replacedListingId'] as String?,
+        silent: silent,
+      ),
+    );
   }
 
   Future<void> _openProductDetails(
@@ -166,13 +200,16 @@ class MyStoreTabState extends State<MyStoreTab> {
     StoreProduct product, {
     int imageIndex = 0,
   }) async {
-    StoreProduct media = product;
+    StoreProduct listing = product;
     for (final p in state.productsForMedia) {
       if (p.id == product.id) {
-        media = p;
+        listing = p;
         break;
       }
     }
+    final resolved = CatalogUiMapper.resolveCollageTap(listing, imageIndex);
+    final media = resolved.product;
+    final openIndex = resolved.imageIndex;
 
     final galleryState = StoreGalleryState(
       products: state.productsForMedia,
@@ -182,10 +219,24 @@ class MyStoreTabState extends State<MyStoreTab> {
       isOwnStore: state.isOwnStore,
       sections: StoreGalleryState.buildSections(state.productsForMedia),
     );
-    final feed = galleryState.buildPhotoFeed();
-    final feedIndex = galleryState.feedIndexFor(
+    final safeIndex =
+        openIndex < 0
+            ? 0
+            : (openIndex >= media.imagePaths.length ? 0 : openIndex);
+    final masterAt =
+        media.imagePaths.isEmpty ? '' : media.imagePaths[safeIndex].trim();
+    final tapPath =
+        masterAt.isNotEmpty
+            ? masterAt
+            : (listing.imagePaths.isEmpty ||
+                    imageIndex < 0 ||
+                    imageIndex >= listing.imagePaths.length
+                ? ''
+                : listing.imagePaths[imageIndex].trim());
+    final openFeed = galleryState.resolveOpenFeed(
       productId: media.id,
-      imageIndex: imageIndex,
+      imageIndex: openIndex,
+      path: tapPath,
     );
 
     final result = await Navigator.of(context).pushNamed(
@@ -196,9 +247,11 @@ class MyStoreTabState extends State<MyStoreTab> {
         'storeLink': state.storeLink,
         'storeId': state.storeId,
         'isOwnStore': state.isOwnStore,
-        'imageIndex': imageIndex,
-        'galleryFeed': feed,
-        'galleryFeedIndex': feedIndex,
+        'imageIndex': openIndex,
+        if (openFeed.useFeed) ...{
+          'galleryFeed': openFeed.feed,
+          'galleryFeedIndex': openFeed.index,
+        },
       },
     );
     if (!context.mounted || result is! Map) return;
@@ -214,12 +267,7 @@ class MyStoreTabState extends State<MyStoreTab> {
     }
 
     if (payload['updated'] == true && payload.containsKey('id')) {
-      context.read<StoreProfileBloc>().add(
-        StoreProfileProductUpdated(
-          StoreProduct.fromMap(payload),
-          replacedListingId: payload['replacedListingId'] as String?,
-        ),
-      );
+      _applyProductUpdatedPayload(context, payload);
     }
   }
 
@@ -227,17 +275,18 @@ class MyStoreTabState extends State<MyStoreTab> {
     BuildContext context,
     StoreProfileState state,
     StoreProduct product,
-    ProductViewMode viewMode,
-  ) {
+    ProductViewMode viewMode, {
+    int imageIndex = 0,
+  }) {
     if (_selectionMode) {
-      _toggleSelected(product);
+      _toggleSelected(product, imageIndex);
       return;
     }
     if (viewMode == ProductViewMode.group) {
       _openCollectionBrowse(context, state, product);
       return;
     }
-    _openProductDetails(context, state, product);
+    _openProductDetails(context, state, product, imageIndex: imageIndex);
   }
 
   Future<void> _openFollowersFollowing(
@@ -358,10 +407,10 @@ class MyStoreTabState extends State<MyStoreTab> {
                   children: [
                     if (_selectionMode)
                       _ShellSelectionBar(
-                        count: _selectedIds.length,
+                        count: _selectedPhotoKeys.length,
                         onCancel: _exitSelection,
                         onDelete:
-                            _selectedIds.isEmpty
+                            _selectedPhotoKeys.isEmpty
                                 ? null
                                 : () => _confirmDeleteSelected(context),
                       ),
@@ -388,13 +437,15 @@ class MyStoreTabState extends State<MyStoreTab> {
                         onOpenFollowRequests:
                             () => _openFollowRequests(context, state),
                         onProductTap:
-                            (product) => _onProductTap(
+                            (product, imageIndex) => _onProductTap(
                               context,
                               state,
                               product,
                               viewMode,
+                              imageIndex: imageIndex,
                             ),
                         onProductLongPress: _enterSelection,
+                        selectedPhotoKeys: _selectedPhotoKeys,
                         bottomInset: bottomInset,
                       ),
                     ),
@@ -442,7 +493,7 @@ class _ShellSelectionBar extends StatelessWidget {
               ),
               Expanded(
                 child: Text(
-                  count == 0 ? 'Select products' : '$count selected',
+                  count == 0 ? 'Select items' : '$count selected',
                   textAlign: TextAlign.center,
                   style: AppTextStyles.body(fontWeight: FontWeight.w600),
                 ),

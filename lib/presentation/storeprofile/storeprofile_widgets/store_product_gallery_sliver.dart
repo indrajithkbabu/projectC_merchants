@@ -5,6 +5,7 @@ import 'package:project_c/helper/catalog_responsive_image.dart';
 import 'package:project_c/helper/colors.dart';
 import 'package:project_c/helper/product_image.dart';
 import 'package:project_c/helper/text_styles.dart';
+import 'package:project_c/models/product_view_mode.dart';
 import 'package:project_c/models/store_product.dart';
 import 'package:project_c/presentation/storeprofile/storeprofile_widgets/store_product_grid_shimmer.dart';
 import 'package:project_c/presentation/storeprofile/storeprofile_widgets/visitor_photo_selection_chrome.dart';
@@ -25,6 +26,7 @@ class StoreProductGallerySliver extends StatelessWidget {
     this.selectedIds = const {},
     this.selectedPhotoKeys = const {},
     this.isLoading = false,
+    this.productsResolved = true,
     this.columns = 4,
     this.pinching = false,
     this.focusProductId,
@@ -46,6 +48,9 @@ class StoreProductGallerySliver extends StatelessWidget {
   final Set<String> selectedPhotoKeys;
   final bool isLoading;
 
+  /// False while disk/warm hydrate runs after process restart.
+  final bool productsResolved;
+
   /// Continuous 2…9; painted as [columns.round] (Media-style).
   final double columns;
   final bool pinching;
@@ -56,7 +61,13 @@ class StoreProductGallerySliver extends StatelessWidget {
   Widget build(BuildContext context) {
     if (products.isEmpty) {
       if (isLoading) {
-        return const StoreProductGridShimmer();
+        return StoreProductGridShimmer(
+          viewMode: ProductViewMode.gallery,
+          galleryColumns: columns.round().clamp(2, 9),
+        );
+      }
+      if (!productsResolved) {
+        return const SliverToBoxAdapter(child: SizedBox.shrink());
       }
       return SliverFillRemaining(
         hasScrollBody: false,

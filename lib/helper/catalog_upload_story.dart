@@ -210,8 +210,9 @@ class CatalogUploadStory {
       'to a collection listing.',
     );
     frontend(
-      'Request body is JSON only (image_id / keys, thumbhash, specs, '
-      'stock/lock) — not multipart file upload.',
+      'Request body is JSON only with products[] envelope '
+      '(image_id, thumbhash, specs, stock/lock) + batchId/idempotencyKey — '
+      'not a flat single object and not multipart file upload.',
     );
   }
 
@@ -223,8 +224,8 @@ class CatalogUploadStory {
           'thumbhashes are now available for InstantCatalogPhoto.',
     );
     frontend(
-      'Store profile refreshes cache. Grids bind thumbnailUrl (~15KB), '
-      'product detail binds detailUrl (~1080), pinch-zoom binds master url. '
+      'Store profile refreshes cache. Grids bind thumbnailUrl (~360 @ q60), '
+      'product detail binds detailUrl (~1080 @ q75), pinch-zoom binds master. '
       'ThumbHash paints instantly until the CDN frame arrives.',
     );
     step(
@@ -410,7 +411,8 @@ class CatalogUploadStory {
     return 'sessionId=$session, $n upload slot(s). '
         'imageIdYES=$withImageId thumbnailUrlYES=$withThumb '
         'detailUrlYES=$withDetail. Each slot has key, url, '
-        'thumbnailUrl, detailUrl, and R2 presignedUrl (expires ~900s).';
+        'thumbnailUrl, detailUrl, and R2 presignedUrl '
+        '(expiresIn from BE; typically 300s).';
   }
 
   static String _batchBodyStory(Map<String, dynamic>? body) {

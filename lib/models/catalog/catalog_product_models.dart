@@ -1,4 +1,5 @@
 import 'package:equatable/equatable.dart';
+import 'package:project_c/helper/catalog_media_debug.dart';
 import 'package:project_c/models/catalog/catalog_stock_status.dart';
 import 'package:project_c/models/catalog/collection_models.dart';
 import 'package:project_c/models/catalog/quick_import_api_models.dart';
@@ -125,13 +126,40 @@ class CatalogProduct extends Equatable {
   };
 
   factory CatalogProduct.fromJson(Map<String, dynamic> json) {
-    final primary = json['primaryImage'];
-    final primaryMap =
-        primary is Map<String, dynamic>
-            ? primary
-            : primary is Map
-            ? Map<String, dynamic>.from(primary)
-            : const <String, dynamic>{};
+    Map<String, dynamic> asImageMap(dynamic raw) {
+      if (raw is Map<String, dynamic>) return raw;
+      if (raw is Map) return Map<String, dynamic>.from(raw);
+      return const <String, dynamic>{};
+    }
+
+    // primaryImage preferred; feed cover field is `cover` (P5.1).
+    // Soft-fallback to legacy `coverImage` only when `cover` is absent.
+    final primaryMap = asImageMap(json['primaryImage']);
+    final hasCover = json.containsKey('cover');
+    final coverRaw = hasCover ? json['cover'] : json['coverImage'];
+    final coverMap = asImageMap(coverRaw);
+    if (!hasCover && json.containsKey('coverImage')) {
+      CatalogMediaDebug.fePending(
+        'P5.1',
+        status: 'INFO',
+        detail: 'product used legacy coverImage fallback',
+        once: true,
+        onceKey: 'productCoverImageFallback',
+      );
+    }
+
+    String fromPrimaryOrCover(String key, {String? alt}) {
+      for (final map in [primaryMap, coverMap]) {
+        final v = (map[key] as String?)?.trim() ?? '';
+        if (v.isNotEmpty) return v;
+        if (alt != null) {
+          final a = (map[alt] as String?)?.trim() ?? '';
+          if (a.isNotEmpty) return a;
+        }
+      }
+      return '';
+    }
+
     final rawImages = json['images'] ?? json['photos'] ?? json['gallery'];
     final imageUrls = <String>[];
     final imageThumbnailUrls = <String>[];
@@ -172,24 +200,38 @@ class CatalogProduct extends Equatable {
         }
       }
     }
+    final coverOrPrimaryUrl = fromPrimaryOrCover('url', alt: 'publicUrl');
+    final coverOrPrimaryThumb = fromPrimaryOrCover('thumbnailUrl');
+    final coverOrPrimaryDetail = fromPrimaryOrCover('detailUrl');
+    final coverOrPrimaryId = fromPrimaryOrCover('imageId', alt: 'image_id');
+    final coverOrPrimaryHash = fromPrimaryOrCover(
+      'thumbhash',
+      alt: 'thumbHash',
+    );
     final primaryUrl =
-        (primaryMap['url'] as String?)?.trim() ??
-        (imageUrls.isNotEmpty ? imageUrls.first : '');
+        coverOrPrimaryUrl.isNotEmpty
+            ? coverOrPrimaryUrl
+            : (imageUrls.isNotEmpty ? imageUrls.first : '');
     final primaryThumb =
-        (primaryMap['thumbnailUrl'] as String?)?.trim() ??
-        (json['thumbnailUrl'] as String?)?.trim() ??
-        (imageThumbnailUrls.isNotEmpty ? imageThumbnailUrls.first : '');
+        coverOrPrimaryThumb.isNotEmpty
+            ? coverOrPrimaryThumb
+            : ((json['thumbnailUrl'] as String?)?.trim() ??
+                (imageThumbnailUrls.isNotEmpty
+                    ? imageThumbnailUrls.first
+                    : ''));
     final primaryDetail =
-        (primaryMap['detailUrl'] as String?)?.trim() ??
-        (json['detailUrl'] as String?)?.trim() ??
-        (imageDetailUrls.isNotEmpty ? imageDetailUrls.first : '');
+        coverOrPrimaryDetail.isNotEmpty
+            ? coverOrPrimaryDetail
+            : ((json['detailUrl'] as String?)?.trim() ??
+                (imageDetailUrls.isNotEmpty ? imageDetailUrls.first : ''));
     final primaryId =
-        (primaryMap['imageId'] as String?)?.trim() ??
-        (imageIds.isNotEmpty ? imageIds.first : '');
+        coverOrPrimaryId.isNotEmpty
+            ? coverOrPrimaryId
+            : (imageIds.isNotEmpty ? imageIds.first : '');
     final primaryHash =
-        (primaryMap['thumbhash'] as String?)?.trim() ??
-        (primaryMap['thumbHash'] as String?)?.trim() ??
-        (imageThumbhashes.isNotEmpty ? imageThumbhashes.first : '');
+        coverOrPrimaryHash.isNotEmpty
+            ? coverOrPrimaryHash
+            : (imageThumbhashes.isNotEmpty ? imageThumbhashes.first : '');
     if (primaryUrl.isNotEmpty &&
         (imageUrls.isEmpty || imageUrls.first != primaryUrl)) {
       imageUrls.insert(0, primaryUrl);

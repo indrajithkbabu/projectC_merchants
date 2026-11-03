@@ -15,6 +15,9 @@ class StoreProfileState extends Equatable {
     this.infoMessage,
     this.errorMessage,
     this.isLoadingProducts = false,
+    /// False until the first disk/warm/network collections resolve finishes.
+    /// Avoids restart shimmer (disk hydrate) and false "No products yet".
+    this.productsResolved = false,
     this.isLoadingMembers = false,
     this.isLoadingStoreMeta = false,
     this.isUpdatingStoreImages = false,
@@ -58,6 +61,9 @@ class StoreProfileState extends Equatable {
   final String? infoMessage;
   final String? errorMessage;
   final bool isLoadingProducts;
+
+  /// True after first collections resolve (cache hit or confirmed empty/cold).
+  final bool productsResolved;
   final bool isLoadingMembers;
   final bool isLoadingStoreMeta;
   final bool isUpdatingStoreImages;
@@ -137,6 +143,17 @@ class StoreProfileState extends Equatable {
   /// Visitor cannot see product photos / details.
   bool get isContentLocked => !isOwnStore && !canViewContent;
 
+  /// Confirmed cold load — view-mode shimmer (not disk hydrate after restart).
+  bool get showProductGridShimmer =>
+      isLoadingProducts && products.isEmpty && pendingUploads.isEmpty;
+
+  /// Truly empty after cache/network resolve — never during disk hydrate.
+  bool get showProductGridEmpty =>
+      productsResolved &&
+      !isLoadingProducts &&
+      products.isEmpty &&
+      pendingUploads.isEmpty;
+
   /// Show Follow / Requested / Following chrome on other stores.
   bool get showVisitorFollowChrome =>
       !isOwnStore &&
@@ -167,6 +184,7 @@ class StoreProfileState extends Equatable {
     String? infoMessage,
     String? errorMessage,
     bool? isLoadingProducts,
+    bool? productsResolved,
     bool? isLoadingMembers,
     bool? isLoadingStoreMeta,
     bool? isUpdatingStoreImages,
@@ -210,6 +228,7 @@ class StoreProfileState extends Equatable {
       infoMessage: clearInfoMessage ? null : (infoMessage ?? this.infoMessage),
       errorMessage: clearError ? null : (errorMessage ?? this.errorMessage),
       isLoadingProducts: isLoadingProducts ?? this.isLoadingProducts,
+      productsResolved: productsResolved ?? this.productsResolved,
       isLoadingMembers: isLoadingMembers ?? this.isLoadingMembers,
       isLoadingStoreMeta: isLoadingStoreMeta ?? this.isLoadingStoreMeta,
       isUpdatingStoreImages:
@@ -258,6 +277,7 @@ class StoreProfileState extends Equatable {
     infoMessage,
     errorMessage,
     isLoadingProducts,
+    productsResolved,
     isLoadingMembers,
     isLoadingStoreMeta,
     isUpdatingStoreImages,

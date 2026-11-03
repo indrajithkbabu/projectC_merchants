@@ -20,6 +20,7 @@ import 'package:project_c/models/catalog/collection_specifications.dart';
 import 'package:project_c/models/product_details_feed_item.dart';
 import 'package:project_c/models/store_product.dart';
 import 'package:project_c/navigation/routes.dart';
+import 'package:project_c/webservice/catalog_api_exception.dart';
 import 'package:project_c/webservice/catalog_error_mapper.dart';
 import 'package:project_c/webservice/collection/collection_repository.dart';
 
@@ -78,10 +79,22 @@ class _CollectionBrowseRouteState extends State<CollectionBrowseRoute> {
   int _crossAxisCount = 5;
   double _pinchStartColumns = 5;
 
+  /// Own-store Select chrome when detail and/or jewel product tiles are ready.
   bool get _canManage =>
-      widget.isOwnStore && widget.forcedSingles == null && _detail != null;
+      widget.isOwnStore &&
+      widget.forcedSingles == null &&
+      (_detail != null || _hasProductTiles);
+
+  /// Edit / Ungroup need collection detail (photo move + revise).
+  bool get _canEditUngroup => _canManage && _detail != null;
 
   bool get _hasProductTiles => _collectionProducts.isNotEmpty;
+
+  @override
+  void dispose() {
+    CatalogImageCache.cancelOffscreenWarm(reason: 'collectionBrowseDispose');
+    super.dispose();
+  }
 
   @override
   void initState() {
@@ -557,9 +570,9 @@ class _CollectionBrowseRouteState extends State<CollectionBrowseRoute> {
   Future<void> _openPhoto(CatalogPhoto photo) async {
     final collectionProduct = _product ?? widget.product;
     final tiles = _tiles();
-    final List<ProductDetailsFeedItem> feed;
-    final StoreProduct openProduct;
-    final int tappedIndex;
+    late List<ProductDetailsFeedItem> feed;
+    late final StoreProduct openProduct;
+    late final int tappedIndex;
     var feedIndex = 0;
 
     if (_hasProductTiles) {
@@ -583,14 +596,38 @@ class _CollectionBrowseRouteState extends State<CollectionBrowseRoute> {
           ),
       ];
       final photoId = photo.id?.trim() ?? '';
-      feedIndex = mapped.indexWhere((p) => p.id == photoId);
-      if (feedIndex < 0) {
-        feedIndex = feed.indexWhere(
-          (e) => e.path.trim() == photo.url.trim(),
-        );
+      final photoUrl = photo.url.trim();
+      // Path-first so a missing product id never opens mapped[0].
+      feedIndex = photoUrl.isEmpty
+          ? -1
+          : feed.indexWhere((e) => e.path.trim() == photoUrl);
+      if (feedIndex < 0 && photoId.isNotEmpty) {
+        feedIndex = mapped.indexWhere((p) => p.id == photoId);
       }
-      if (feedIndex < 0) feedIndex = 0;
-      openProduct = mapped[feedIndex];
+      if (feedIndex >= 0 && feedIndex < mapped.length) {
+        openProduct = mapped[feedIndex];
+      } else {
+        // One-slot open from the tapped photo — never fall back to mapped[0].
+        openProduct = StoreProduct(
+          id: photoId.isNotEmpty ? photoId : collectionProduct.id,
+          title: collectionProduct.title,
+          description: collectionProduct.description,
+          tags: collectionProduct.tags,
+          imagePaths: photoUrl.isEmpty ? const [] : [photoUrl],
+          collectionId: collectionProduct.id,
+          canEdit: widget.isOwnStore || collectionProduct.canEdit,
+          canDelete: widget.isOwnStore || collectionProduct.canDelete,
+          toneIndex: collectionProduct.toneIndex,
+        );
+        feed = [
+          ProductDetailsFeedItem(
+            product: openProduct,
+            imageIndex: 0,
+            path: photoUrl,
+          ),
+        ];
+        feedIndex = 0;
+      }
       tappedIndex = 0;
     } else {
       feed = [
@@ -602,11 +639,12 @@ class _CollectionBrowseRouteState extends State<CollectionBrowseRoute> {
           ),
       ];
       tappedIndex = _imageIndexFor(photo);
-      feedIndex = feed.indexWhere((e) => e.imageIndex == tappedIndex);
+      final photoUrl = photo.url.trim();
+      feedIndex = photoUrl.isEmpty
+          ? -1
+          : feed.indexWhere((e) => e.path.trim() == photoUrl);
       if (feedIndex < 0) {
-        feedIndex = feed.indexWhere(
-          (e) => e.path.trim() == photo.url.trim(),
-        );
+        feedIndex = feed.indexWhere((e) => e.imageIndex == tappedIndex);
       }
       if (feedIndex < 0) feedIndex = 0;
       openProduct = collectionProduct;
@@ -620,6 +658,14 @@ class _CollectionBrowseRouteState extends State<CollectionBrowseRoute> {
       maxDecode: 1,
       cacheWidth: CatalogImageCache.fullCacheWidth(),
     );
+    final photoUrl = photo.url.trim();
+    final useFeed =
+        feed.isNotEmpty &&
+        feedIndex >= 0 &&
+        feedIndex < feed.length &&
+        (photoUrl.isEmpty ||
+            feed[feedIndex].path.trim() == photoUrl ||
+            feed[feedIndex].product.id == openProduct.id);
     final result = await Navigator.of(context).pushNamed(
       Routes.productDetailsRoute,
       arguments: <String, Object?>{
@@ -629,15 +675,17 @@ class _CollectionBrowseRouteState extends State<CollectionBrowseRoute> {
         'storeLink': widget.storeLink,
         'isOwnStore': widget.isOwnStore,
         'imageIndex': tappedIndex,
-        'galleryFeed': feed,
-        'galleryFeedIndex': feedIndex,
+        if (useFeed) ...{
+          'galleryFeed': feed,
+          'galleryFeedIndex': feedIndex,
+        },
       },
     );
     if (!mounted) return;
     if (result is Map) {
       final payload = Map<String, Object?>.from(result);
-      _popResult = payload;
       if (payload['deleted'] == true) {
+        _popResult = payload;
         Navigator.of(context).pop(payload);
         return;
       }
@@ -645,9 +693,21 @@ class _CollectionBrowseRouteState extends State<CollectionBrowseRoute> {
         if (widget.forcedSingles == null) {
           // Details always may pop updated (view/like counts use silent=true).
           // Never flip the full-screen loader — keep tiles painted.
-          if (payload['silent'] == true) return;
+          // Silent pops often use the nested product id; only forward to the
+          // store grid when it matches this listing — otherwise Group grew a
+          // ghost "Title (1 item)" card until refresh.
+          if (payload['silent'] == true) {
+            final poppedId = (payload['id'] as String?)?.trim() ?? '';
+            final listingId = widget.product.id.trim();
+            if (poppedId.isNotEmpty && poppedId == listingId) {
+              _popResult = payload;
+            }
+            return;
+          }
+          _popResult = payload;
           await _load(quiet: true);
         } else if (payload.containsKey('id')) {
+          _popResult = payload;
           setState(() {
             _product = StoreProduct.fromMap(payload);
           });
@@ -672,6 +732,173 @@ class _CollectionBrowseRouteState extends State<CollectionBrowseRoute> {
       _selectMode = enabled;
       if (!enabled) _selectedPhotoIds.clear();
     });
+  }
+
+  Future<void> _confirmDeleteSelected() async {
+    if (_busy || _selectedPhotoIds.isEmpty) return;
+    final selectedIds = _selectedPhotoIds.toList(growable: false);
+    final count = selectedIds.length;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) {
+        return AlertDialog(
+          backgroundColor: AppColors.surface,
+          title: Text(
+            count == 1 ? 'Delete item?' : 'Delete $count items?',
+            style: AppTextStyles.headline(fontSize: 18),
+          ),
+          content: Text(
+            count == 1
+                ? 'This removes the selected item from this product. Other items stay.'
+                : 'This removes the selected items from this product. Remaining items stay.',
+            style: AppTextStyles.body(),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(false),
+              child: Text('Cancel', style: AppTextStyles.button()),
+            ),
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(true),
+              child: Text(
+                'Delete',
+                style: AppTextStyles.button(color: AppColors.error),
+              ),
+            ),
+          ],
+        );
+      },
+    );
+    if (!mounted || confirmed != true) return;
+    await _runDeleteSelected(selectedIds);
+  }
+
+  Future<void> _runDeleteSelected(List<String> selectedIds) async {
+    final listingId = widget.product.id.trim();
+    if (listingId.isEmpty || selectedIds.isEmpty) return;
+
+    setState(() => _busy = true);
+    final repo = ServiceLocator.get<CollectionRepository>();
+    var failed = 0;
+    final deleted = <String>{};
+    final tilesBefore = _tiles();
+    final deletingAll =
+        tilesBefore.isNotEmpty &&
+        selectedIds.length >= tilesBefore.length;
+
+    try {
+      if (deletingAll) {
+        // Removing every item → drop the whole listing.
+        await repo.deleteCollection(
+          storeId: widget.storeId,
+          listingId: listingId,
+        );
+        if (!mounted) return;
+        final payload = <String, Object?>{
+          'deleted': true,
+          'productId': listingId,
+        };
+        _popResult = payload;
+        Navigator.of(context).pop(payload);
+        return;
+      }
+
+      if (_hasProductTiles) {
+        for (final id in selectedIds) {
+          final productId = id.trim();
+          if (productId.isEmpty) continue;
+          try {
+            await repo.deleteProduct(productId: productId);
+            deleted.add(productId);
+          } on CatalogApiException catch (e) {
+            final gone =
+                e.statusCode == 404 ||
+                e.code == 'PRODUCT_NOT_FOUND' ||
+                e.code == 'NOT_FOUND';
+            if (gone) {
+              deleted.add(productId);
+            } else {
+              failed++;
+              AppLog.e(_logTag, 'Delete product failed id=$productId', e);
+            }
+          } catch (e) {
+            failed++;
+            AppLog.e(_logTag, 'Delete product failed id=$productId', e);
+          }
+        }
+        if (deleted.isNotEmpty) {
+          final remaining = [
+            for (final p in _collectionProducts)
+              if (!deleted.contains(p.id.trim())) p,
+          ];
+          if (remaining.isEmpty) {
+            try {
+              await repo.deleteCollection(
+                storeId: widget.storeId,
+                listingId: listingId,
+              );
+            } catch (e) {
+              AppLog.e(_logTag, 'Empty collection delete failed', e);
+            }
+            if (!mounted) return;
+            final payload = <String, Object?>{
+              'deleted': true,
+              'productId': listingId,
+            };
+            _popResult = payload;
+            Navigator.of(context).pop(payload);
+            return;
+          }
+          setState(() => _collectionProducts = remaining);
+        }
+      } else {
+        // Legacy collection photos.
+        final photoIds =
+            selectedIds
+                .map((e) => e.trim())
+                .where((e) => e.isNotEmpty)
+                .toList(growable: false);
+        if (photoIds.isNotEmpty) {
+          final revision = _detail?.revision;
+          await repo.deletePhotos(
+            storeId: widget.storeId,
+            listingId: listingId,
+            photoIds: photoIds,
+            revision: revision,
+          );
+          deleted.addAll(photoIds);
+        }
+      }
+
+      if (!mounted) return;
+      _setSelectMode(false);
+      _popResult = <String, Object?>{
+        'updated': true,
+        'refreshCollections': true,
+        'id': listingId,
+      };
+      await _load(quiet: true);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            failed > 0 && deleted.isEmpty
+                ? 'Could not delete items.'
+                : deleted.length <= 1
+                ? 'Item deleted.'
+                : '${deleted.length} items deleted.',
+          ),
+        ),
+      );
+    } catch (e) {
+      AppLog.e(_logTag, 'FAIL delete selected', e);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(CatalogErrorMapper.toUserMessage(e))),
+      );
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
   }
 
   Future<void> _openEditSelected() async {
@@ -1194,17 +1421,27 @@ class _CollectionBrowseRouteState extends State<CollectionBrowseRoute> {
                                   !_loading &&
                                   _error == null) ...[
                                 if (_selectMode) ...[
+                                  if (_canEditUngroup) ...[
+                                    _BrowseToolbarAction(
+                                      label: 'Edit',
+                                      enabled:
+                                          _selectedPhotoIds.isNotEmpty &&
+                                          !_busy,
+                                      onTap: _openEditSelected,
+                                    ),
+                                    _BrowseToolbarAction(
+                                      label: 'Ungroup',
+                                      enabled:
+                                          _selectedPhotoIds.isNotEmpty &&
+                                          !_busy,
+                                      onTap: _confirmUngroup,
+                                    ),
+                                  ],
                                   _BrowseToolbarAction(
-                                    label: 'Edit',
+                                    label: 'Delete',
                                     enabled:
                                         _selectedPhotoIds.isNotEmpty && !_busy,
-                                    onTap: _openEditSelected,
-                                  ),
-                                  _BrowseToolbarAction(
-                                    label: 'Ungroup',
-                                    enabled:
-                                        _selectedPhotoIds.isNotEmpty && !_busy,
-                                    onTap: _confirmUngroup,
+                                    onTap: _confirmDeleteSelected,
                                   ),
                                   _BrowseToolbarAction(
                                     label: 'Done',

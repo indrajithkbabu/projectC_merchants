@@ -217,44 +217,60 @@ class CatalogUiMapper {
     final stocks = <String>[];
     final importStatuses = <String>[];
     for (final p in products) {
-      final url =
-          p.primaryImageUrl.trim().isNotEmpty
-              ? p.primaryImageUrl.trim()
-              : (p.imageUrls.isNotEmpty ? p.imageUrls.first.trim() : '');
-      if (url.isEmpty) continue;
-      urls.add(url);
-      thumbs.add(
-        p.primaryImageThumbnailUrl.trim().isNotEmpty
-            ? p.primaryImageThumbnailUrl.trim()
-            : (p.imageThumbnailUrls.isNotEmpty
-                ? p.imageThumbnailUrls.first.trim()
-                : ''),
-      );
-      details.add(
-        p.primaryImageDetailUrl.trim().isNotEmpty
-            ? p.primaryImageDetailUrl.trim()
-            : (p.imageDetailUrls.isNotEmpty
-                ? p.imageDetailUrls.first.trim()
-                : ''),
-      );
-      // Prefer CatalogProduct._id so collage cell → like/wishlist/import hits
-      // the product (not img_* / collection listing id).
+      // Flatten every album frame (not only primary) so My store / Gallery /
+      // Group collage can show the full set from the same enrich payload.
+      final albumUrls = <String>[
+        for (final u in p.imageUrls)
+          if (u.trim().isNotEmpty) u.trim(),
+      ];
+      if (albumUrls.isEmpty) {
+        final primary = p.primaryImageUrl.trim();
+        if (primary.isNotEmpty) albumUrls.add(primary);
+      }
       final productId = p.id.trim();
-      final imageId =
-          p.primaryImageId.trim().isNotEmpty
-              ? p.primaryImageId.trim()
-              : (p.imageIds.isNotEmpty ? p.imageIds.first.trim() : '');
-      ids.add(productId.isNotEmpty ? productId : imageId);
-      final hash =
-          p.primaryImageThumbhash.trim().isNotEmpty
-              ? p.primaryImageThumbhash.trim()
-              : (p.imageThumbhashes.isNotEmpty
-                  ? p.imageThumbhashes.first.trim()
-                  : '');
-      hashes.add(hash);
-      locks.add(p.isLocked);
-      stocks.add(p.stockStatus?.apiValue ?? '');
-      importStatuses.add(p.importFlags.importStatus?.trim() ?? '');
+      final lock = p.isLocked;
+      final stock = p.stockStatus?.apiValue ?? '';
+      final importStatus = p.importFlags.importStatus?.trim() ?? '';
+      for (var i = 0; i < albumUrls.length; i++) {
+        final url = albumUrls[i];
+        urls.add(url);
+        thumbs.add(
+          i < p.imageThumbnailUrls.length &&
+                  p.imageThumbnailUrls[i].trim().isNotEmpty
+              ? p.imageThumbnailUrls[i].trim()
+              : (i == 0 && p.primaryImageThumbnailUrl.trim().isNotEmpty
+                  ? p.primaryImageThumbnailUrl.trim()
+                  : ''),
+        );
+        details.add(
+          i < p.imageDetailUrls.length &&
+                  p.imageDetailUrls[i].trim().isNotEmpty
+              ? p.imageDetailUrls[i].trim()
+              : (i == 0 && p.primaryImageDetailUrl.trim().isNotEmpty
+                  ? p.primaryImageDetailUrl.trim()
+                  : ''),
+        );
+        final imageId =
+            i < p.imageIds.length && p.imageIds[i].trim().isNotEmpty
+                ? p.imageIds[i].trim()
+                : (i == 0 && p.primaryImageId.trim().isNotEmpty
+                    ? p.primaryImageId.trim()
+                    : '');
+        // Prefer CatalogProduct._id so cell → like/wishlist/import hits the
+        // product (not img_* / collection listing id).
+        ids.add(productId.isNotEmpty ? productId : imageId);
+        hashes.add(
+          i < p.imageThumbhashes.length &&
+                  p.imageThumbhashes[i].trim().isNotEmpty
+              ? p.imageThumbhashes[i].trim()
+              : (i == 0 && p.primaryImageThumbhash.trim().isNotEmpty
+                  ? p.primaryImageThumbhash.trim()
+                  : ''),
+        );
+        locks.add(lock);
+        stocks.add(stock);
+        importStatuses.add(importStatus);
+      }
     }
     if (urls.isEmpty) return cover;
     final coverUrl = cover.primaryImagePath?.trim() ?? '';
@@ -311,8 +327,9 @@ class CatalogUiMapper {
   /// Instant browse tiles from a Group collage card (no network).
   ///
   /// Uses parallel [StoreProduct] media arrays written by
-  /// [collectionCardFromProducts]. Empty when the card has fewer than two
-  /// seeded product cells (single / cover-only).
+  /// [collectionCardFromProducts]. One tile per CatalogProduct id (album may
+  /// expand to many paths — browse stays jewel one-tile-per-product). Empty
+  /// when fewer than two distinct product cells.
   static List<CatalogProduct> seedProductsFromCollectionCard(
     StoreProduct card, {
     required String storeId,
@@ -324,10 +341,13 @@ class CatalogUiMapper {
     if (paths.length < 2) return const [];
     final collectionId = card.id.trim();
     final out = <CatalogProduct>[];
+    final seenProductIds = <String>{};
     for (var i = 0; i < paths.length; i++) {
       final id =
           i < card.photoAssetIds.length ? card.photoAssetIds[i].trim() : '';
       if (id.isEmpty) continue;
+      // Full albums repeat product id per frame — seed once (cover-first).
+      if (!seenProductIds.add(id)) continue;
       final thumb =
           i < card.imageThumbnailUrls.length
               ? card.imageThumbnailUrls[i].trim()
@@ -373,6 +393,137 @@ class CatalogUiMapper {
       );
     }
     return out.length >= 2 ? out : const [];
+  }
+
+  /// True when [card.photoAssetIds] holds nested CatalogProduct ids (not the
+  /// listing id / `img_*` photo keys). Album expand stores product ids per frame.
+  static bool collageHasNestedProducts(StoreProduct card) {
+    final listingId = card.id.trim();
+    if (listingId.isEmpty || card.photoAssetIds.isEmpty) return false;
+    for (final raw in card.photoAssetIds) {
+      final id = raw.trim();
+      if (id.isEmpty || id == listingId) continue;
+      if (id.startsWith('img_')) continue;
+      return true;
+    }
+    return false;
+  }
+
+  /// Split an enriched collection collage into one [StoreProduct] per nested
+  /// jewel (full album frames). Legacy listing cards (no nested product ids)
+  /// return `[card]` unchanged.
+  static List<StoreProduct> expandCollageToProducts(StoreProduct card) {
+    if (!collageHasNestedProducts(card)) return [card];
+    final order = <String>[];
+    final indexesById = <String, List<int>>{};
+    for (var i = 0; i < card.imagePaths.length; i++) {
+      final id =
+          i < card.photoAssetIds.length ? card.photoAssetIds[i].trim() : '';
+      if (id.isEmpty || id == card.id || id.startsWith('img_')) continue;
+      final list = indexesById.putIfAbsent(id, () {
+        order.add(id);
+        return <int>[];
+      });
+      list.add(i);
+    }
+    if (order.isEmpty) return [card];
+    return [
+      for (final id in order) _sliceCollageProduct(card, id, indexesById[id]!),
+    ];
+  }
+
+  /// Map a collage / gallery tap on [card] to the nested jewel + local album
+  /// index (so product-details opens the tapped piece, not another listing).
+  static ({StoreProduct product, int imageIndex}) resolveCollageTap(
+    StoreProduct card,
+    int imageIndex,
+  ) {
+    final last =
+        card.imagePaths.isEmpty ? 0 : card.imagePaths.length - 1;
+    final safe =
+        imageIndex < 0 ? 0 : (imageIndex > last ? last : imageIndex);
+    if (!collageHasNestedProducts(card) || card.imagePaths.isEmpty) {
+      return (product: card, imageIndex: safe);
+    }
+    final assetId =
+        safe < card.photoAssetIds.length
+            ? card.photoAssetIds[safe].trim()
+            : '';
+    if (assetId.isEmpty ||
+        assetId == card.id ||
+        assetId.startsWith('img_')) {
+      return (product: card, imageIndex: safe);
+    }
+    for (final piece in expandCollageToProducts(card)) {
+      if (piece.id != assetId) continue;
+      var local = 0;
+      for (var i = 0; i < safe; i++) {
+        final id =
+            i < card.photoAssetIds.length
+                ? card.photoAssetIds[i].trim()
+                : '';
+        if (id == assetId) local++;
+      }
+      return (product: piece, imageIndex: local);
+    }
+    return (product: card, imageIndex: safe);
+  }
+
+  static StoreProduct _sliceCollageProduct(
+    StoreProduct card,
+    String productId,
+    List<int> indexes,
+  ) {
+    String pick(List<String> list, int i) =>
+        i < list.length ? list[i] : '';
+    return StoreProduct(
+      id: productId,
+      title: card.title,
+      description: card.description,
+      tags: card.tags,
+      imagePaths: [for (final i in indexes) card.imagePaths[i]],
+      photoAssetIds: [for (final i in indexes) pick(card.photoAssetIds, i)],
+      imageThumbhashes: [
+        for (final i in indexes) pick(card.imageThumbhashes, i),
+      ],
+      imageThumbnailUrls: [
+        for (final i in indexes) pick(card.imageThumbnailUrls, i),
+      ],
+      imageDetailUrls: [
+        for (final i in indexes) pick(card.imageDetailUrls, i),
+      ],
+      imageQualities: [
+        for (final i in indexes) pick(card.imageQualities, i),
+      ],
+      imageIsLocked: [
+        for (final i in indexes)
+          i < card.imageIsLocked.length
+              ? card.imageIsLocked[i]
+              : card.isLocked,
+      ],
+      imageStockStatuses: [
+        for (final i in indexes) pick(card.imageStockStatuses, i),
+      ],
+      imageImportStatuses: [
+        for (final i in indexes) pick(card.imageImportStatuses, i),
+      ],
+      canEdit: card.canEdit,
+      canDelete: card.canDelete,
+      toneIndex: productId.hashCode.abs() % 4,
+      viewCount: null,
+      likeCount: null,
+      wishlistCount: null,
+      isLocked: indexes.isNotEmpty ? card.isLockedAt(indexes.first) : card.isLocked,
+      stockStatus:
+          indexes.isNotEmpty
+              ? card.stockStatusAt(indexes.first)
+              : card.stockStatus,
+      mtoDays: card.mtoDays,
+      precisionTag: card.precisionTag,
+      collectionId: card.id,
+      importFlags: card.importFlags,
+      createdAt: card.createdAt,
+    );
   }
 
   /// Viewer-private: count of embedded products with `wishlisted == true`.

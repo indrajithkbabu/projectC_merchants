@@ -96,6 +96,20 @@ class StoreProfileProductsDeleted extends StoreProfileEvent {
   List<Object?> get props => [productIds];
 }
 
+/// Deletes selected collage/gallery items (`listingId|imageIndex` keys).
+///
+/// Resolves nested CatalogProduct ids via `DELETE /products/:id`, legacy
+/// `img_*` via `POST …/photos/delete`, and empty listings via collection
+/// delete. Used by owner photo multi-select.
+class StoreProfileItemsDeleted extends StoreProfileEvent {
+  const StoreProfileItemsDeleted(this.photoKeys);
+
+  final List<String> photoKeys;
+
+  @override
+  List<Object?> get props => [photoKeys];
+}
+
 class StoreProfileProductsReplaced extends StoreProfileEvent {
   const StoreProfileProductsReplaced(
     this.products, {
@@ -149,6 +163,21 @@ class StoreProfilePendingUploadStarted extends StoreProfileEvent {
   List<Object?> get props => [pending];
 }
 
+class StoreProfilePendingUploadProgress extends StoreProfileEvent {
+  const StoreProfilePendingUploadProgress({
+    required this.pendingId,
+    required this.photos,
+    this.isCommitting = false,
+  });
+
+  final String pendingId;
+  final List<PendingPhotoSlot> photos;
+  final bool isCommitting;
+
+  @override
+  List<Object?> get props => [pendingId, photos, isCommitting];
+}
+
 class StoreProfilePendingUploadSucceeded extends StoreProfileEvent {
   const StoreProfilePendingUploadSucceeded({
     required this.pendingId,
@@ -164,6 +193,16 @@ class StoreProfilePendingUploadSucceeded extends StoreProfileEvent {
   List<Object?> get props => [pendingId, product, partialMessage];
 }
 
+/// After commit success, pending collage finished its one-by-one tick reveal.
+class StoreProfilePendingRevealFinished extends StoreProfileEvent {
+  const StoreProfilePendingRevealFinished(this.pendingId);
+
+  final String pendingId;
+
+  @override
+  List<Object?> get props => [pendingId];
+}
+
 class StoreProfilePendingUploadFailed extends StoreProfileEvent {
   const StoreProfilePendingUploadFailed({
     required this.pendingId,
@@ -175,6 +214,15 @@ class StoreProfilePendingUploadFailed extends StoreProfileEvent {
 
   @override
   List<Object?> get props => [pendingId, message];
+}
+
+class StoreProfilePendingUploadRetry extends StoreProfileEvent {
+  const StoreProfilePendingUploadRetry(this.pendingId);
+
+  final String pendingId;
+
+  @override
+  List<Object?> get props => [pendingId];
 }
 
 /// Hide mid-upload listing from the grid until append batches finish.

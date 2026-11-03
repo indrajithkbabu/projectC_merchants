@@ -9,8 +9,8 @@ This file defines what to follow for UI and logic inside `lib/presentation/main_
 - Root shell uses `ScreenWrapper` with `extendBodyBehindBottom: true`.
 - Floating capsule nav is `FloatingBottomNavBar` from `lib/helper/widgets/`.
 - **Tab sets (driven by `AccountProfileBloc` / `CatalogSession.ownStoreId`):**
-  - **No own store:** **Stores** | **Contacts** | **Settings** | **Profile**
-  - **Own store:** **Stores** | **Contacts** | **Wishlist** (heart) | **My store**
+  - **No own store:** **Stores** (home icon) | **Contacts** | **Settings** | **Profile**
+  - **Own store:** **Stores** (home icon) | **Contacts** | **Wishlist** (heart) | **My store**
 - Own-store Settings is **not** a bottom tab. Open it from My store toolbar gear →
   `settings_route` (`SettingsTab(showBack: true)`), including Account privacy +
   Import requests, Appearance, View products, screenshots, logout / delete.
@@ -27,7 +27,13 @@ This file defines what to follow for UI and logic inside `lib/presentation/main_
 - My store shell tab reuses `StoreMyStoreTab` with `showBack: false` + hamburger
   → Settings (no day/night icon on this tab). Primary CTAs: **Import requests**
   (pending count from `StoreProfileBloc`) + **Share store**. Wrapped in
-  `AppPadding.screen`. Product taps / long-press / follow-requests unchanged.
+  `AppPadding.screen`. Mosaic shows **every displayable image** across
+  listings (`productsForMedia` albums from the same collections enrich /
+  `StoreProductsCache` — no extra loader). **Products** count matches
+  mosaic cell count (album frames), not listing count. Tap opens details
+  at that `imageIndex` (Group preference still opens collection browse).
+  Long-press selects the **listing** (all its cells highlight); delete
+  removes the listing and every cell for it. Follow-requests unchanged.
 - Wishlist is warmed by `WishlistPrefetcher` after auth + home (`AuthBloc` /
   shell mount). Shell Wishlist never shows shimmer — paints warm/empty then
   quiet-refreshes.
@@ -43,10 +49,11 @@ This file defines what to follow for UI and logic inside `lib/presentation/main_
 - Soft keyboard open → hide floating nav with slide + fade; restore smoothly when IME closes (`resizeToAvoidBottomInset: false` on the shell so the bar is not pushed above the keypad).
 - No blocking loaders (no centered `CircularProgressIndicator`). Prefer cached/session data + quiet refresh + pull-to-refresh.
 - Use `AppPadding`, `AppTextStyles`, and `AppColors` (including `navBar*` tokens).
-- Settings includes **Appearance** (Day / Night via `ThemePreferences`) and **Allow screenshots**
-  (default off). Switching appearance must refresh open screens immediately
-  (`AppearanceScope` + `AppearanceRebuildGate` in `MaterialApp.builder`). App-wide
-  capture blocking is owned by `ScreenshotProtectionService` (`lib/services/`);
+- Settings includes **Appearance** (System / Day / Night via `ThemePreferences`) and
+  **Allow screenshots** (default off). System (default) follows the device light/dark
+  setting; Day/Night force a mode. Switching appearance must refresh open screens
+  immediately (`AppearanceScope` + `AppearanceRebuildGate` in `MaterialApp.builder`).
+  App-wide capture blocking is owned by `ScreenshotProtectionService` (`lib/services/`);
   do not add per-screen FLAG_SECURE hacks.
 
 ## Anti-flicker Rules

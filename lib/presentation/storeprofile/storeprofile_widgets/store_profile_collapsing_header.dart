@@ -14,7 +14,8 @@ import 'package:project_c/presentation/storeprofile/storeprofile_widgets/visitor
 ///
 /// Three frosted pills over the product grid (not a full-width bar):
 /// back circle · identity (DP + name + followers) · actions.
-/// Actions replace phone/menu with add/import + search (owner/visitor gated).
+/// Actions: own store → add + search; visitor browse → search only.
+/// Visitor Import is long-press selection (forward + bottom dock), not toolbar.
 class StoreProfileTelegramHeader extends StatelessWidget {
   const StoreProfileTelegramHeader({
     super.key,
@@ -24,7 +25,7 @@ class StoreProfileTelegramHeader extends StatelessWidget {
     required this.onBack,
     required this.onAddProducts,
     required this.onImport,
-    required     this.onSearch,
+    required this.onSearch,
     this.selectedPhotoCount,
     this.showSelectionImport = true,
   });
@@ -53,10 +54,8 @@ class StoreProfileTelegramHeader extends StatelessWidget {
 
   bool get _photoSelecting => selectedPhotoCount != null;
 
-  /// Own store → add. Other store when importable → download.
-  bool get _showPrimaryAction =>
-      !_photoSelecting &&
-      (state.isOwnStore || (!state.isOwnStore && state.canImport));
+  /// Own store → add. Visitor browse has no toolbar Import (use long-press).
+  bool get _showPrimaryAction => !_photoSelecting && state.isOwnStore;
 
   bool get _showSearch => !_photoSelecting && !state.isContentLocked;
 
@@ -229,16 +228,11 @@ class StoreProfileTelegramHeader extends StatelessWidget {
                     children: [
                       if (_showPrimaryAction)
                         _PillIconButton(
-                          icon:
-                              state.isOwnStore
-                                  ? Icons.add_rounded
-                                  : Icons.file_download_outlined,
+                          icon: Icons.add_rounded,
                           color: onPill,
                           size: 22,
-                          tooltip:
-                              state.isOwnStore ? 'Add products' : 'Import',
-                          onTap:
-                              state.isOwnStore ? onAddProducts : onImport,
+                          tooltip: 'Add products',
+                          onTap: onAddProducts,
                         ),
                       if (_showSearch)
                         _PillIconButton(

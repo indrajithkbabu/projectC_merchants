@@ -41,6 +41,7 @@ class _StoreGalleryBodyState extends State<StoreGalleryBody> {
 
   @override
   void dispose() {
+    CatalogImageCache.cancelOffscreenWarm(reason: 'galleryDispose');
     _scrollController.dispose();
     super.dispose();
   }
@@ -71,6 +72,22 @@ class _StoreGalleryBodyState extends State<StoreGalleryBody> {
     // Disk only — decode is viewport-scoped via scroll.
     // ignore: unawaited_futures
     CatalogImageCache.precacheUrls(urls);
+    CatalogMediaDebug.feQa(
+      'P3.5',
+      status: 'PASS',
+      detail: 'prefetchDisk urls=${urls.length} role=${role.name}',
+      once: true,
+      onceKey: 'galleryPrefetch:${role.name}',
+    );
+    CatalogMediaDebug.fePending(
+      'P3.5',
+      status: 'PASS',
+      detail:
+          'gallery prefetchDisk+scrollWarm+cancelOnDispose '
+          'urls=${urls.length} role=${role.name}',
+      once: true,
+      onceKey: 'galleryPrefetch:${role.name}',
+    );
     // Also disk-warm thumbs so zoom-out is instant.
     if (role != CatalogImageRole.grid) {
       // ignore: unawaited_futures
