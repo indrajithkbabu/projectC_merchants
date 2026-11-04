@@ -528,6 +528,10 @@ class _ProductCardState extends State<_ProductCard> {
                   for (var i = 0; i < displayCells.length; i++)
                     product.isImportDeclinedAt(displayCells[i].index),
                 ],
+                imageCartProductIds: [
+                  for (var i = 0; i < displayCells.length; i++)
+                    product.sourceProductIdAt(displayCells[i].index),
+                ],
                 selectedIndexes: {
                   for (var i = 0; i < displayCells.length; i++)
                     if (widget.selectedPhotoIndexes.contains(

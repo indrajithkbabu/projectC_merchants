@@ -67,6 +67,7 @@ class _MainShellRouteState extends State<MainShellRoute> {
       ShellNavTab.settings => hasStore ? null : 2,
       ShellNavTab.profile => hasStore ? null : 3,
       ShellNavTab.wishlist => hasStore ? 2 : null,
+      ShellNavTab.cart => hasStore ? 2 : null,
       ShellNavTab.myStore => hasStore ? 3 : null,
     };
     if (index == null) return;

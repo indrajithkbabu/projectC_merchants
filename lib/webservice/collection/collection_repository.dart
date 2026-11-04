@@ -60,6 +60,12 @@ abstract class CollectionRepository {
 
   Future<void> deleteProduct({required String productId});
 
+  /// Soft-delete up to 100 product / `img_*` ids in one request.
+  Future<CatalogProductDeleteBatchResult> deleteProductsBatch({
+    required String storeId,
+    required List<String> productIds,
+  });
+
   Future<CollectionCreateResult> createCollectionFromUploads({
     required String storeId,
     required String name,
@@ -276,6 +282,57 @@ class CollectionRepositoryImpl implements CollectionRepository {
   Future<void> deleteProduct({required String productId}) {
     AppLog.d(_tag, 'deleteProduct id=$productId');
     return _request.deleteProduct(productId: productId);
+  }
+
+  @override
+  Future<CatalogProductDeleteBatchResult> deleteProductsBatch({
+    required String storeId,
+    required List<String> productIds,
+  }) async {
+    final ids = <String>[
+      for (final raw in productIds)
+        if (raw.trim().isNotEmpty) raw.trim(),
+    ];
+    // Dedupe while preserving order.
+    final seen = <String>{};
+    final unique = <String>[
+      for (final id in ids)
+        if (seen.add(id)) id,
+    ];
+    AppLog.d(
+      _tag,
+      'deleteProductsBatch store=$storeId count=${unique.length}',
+    );
+    if (unique.isEmpty) {
+      return const CatalogProductDeleteBatchResult();
+    }
+
+    // BE max 100 per request — chunk and merge results.
+    const chunkSize = 100;
+    var deletedCount = 0;
+    final deletedIds = <String>[];
+    final messages = <String>[];
+    for (var i = 0; i < unique.length; i += chunkSize) {
+      final end =
+          i + chunkSize > unique.length ? unique.length : i + chunkSize;
+      final chunk = unique.sublist(i, end);
+      final result = await _request.deleteProductsBatch(
+        storeId: storeId,
+        productIds: chunk,
+      );
+      deletedCount += result.deletedCount;
+      deletedIds.addAll(result.deletedProductIds);
+      if (result.message.isNotEmpty) messages.add(result.message);
+    }
+    return CatalogProductDeleteBatchResult(
+      success: true,
+      message:
+          messages.isEmpty
+              ? 'Successfully deleted $deletedCount product(s)'
+              : messages.last,
+      deletedCount: deletedCount,
+      deletedProductIds: deletedIds,
+    );
   }
 
   @override

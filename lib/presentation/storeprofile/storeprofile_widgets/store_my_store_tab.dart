@@ -52,6 +52,8 @@ class StoreMyStoreTab extends StatelessWidget {
     required this.onProductLongPress,
     this.onOpenFollowRequests,
     this.onOpenSettings,
+    this.onDeleteSelected,
+    this.onCancelSelection,
     this.showBack = true,
     this.bottomInset = 0,
     this.selectedProductIds = const {},
@@ -70,6 +72,10 @@ class StoreMyStoreTab extends StatelessWidget {
   final VoidCallback? onOpenFollowRequests;
   /// When set (shell My store tab), shows a hamburger that opens Settings.
   final VoidCallback? onOpenSettings;
+  /// Item multi-select: delete replaces settings in the toolbar.
+  final VoidCallback? onDeleteSelected;
+  /// Item multi-select: close exits selection (no Cancel/Delete bar).
+  final VoidCallback? onCancelSelection;
   /// Hide back when hosted as a shell tab (no stack to pop).
   final bool showBack;
   final double bottomInset;
@@ -77,6 +83,8 @@ class StoreMyStoreTab extends StatelessWidget {
   final Set<String> selectedProductIds;
   /// Photo keys `"listingId|imageIndex"` for per-item multi-delete.
   final Set<String> selectedPhotoKeys;
+
+  bool get _selectingItems => selectedPhotoKeys.isNotEmpty;
 
   static String photoKey(String productId, int imageIndex) =>
       '$productId|$imageIndex';
@@ -118,9 +126,16 @@ class StoreMyStoreTab extends StatelessWidget {
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               _MyStoreToolbar(
-                onBack: onBack,
-                showBack: showBack,
-                onOpenSettings: onOpenSettings,
+                onBack: _selectingItems ? (onCancelSelection ?? onBack) : onBack,
+                showBack: showBack || _selectingItems,
+                showClose: _selectingItems,
+                onOpenSettings: _selectingItems ? null : onOpenSettings,
+                onDeleteSelected:
+                    _selectingItems && onDeleteSelected != null
+                        ? onDeleteSelected
+                        : null,
+                selectedCount:
+                    _selectingItems ? selectedPhotoKeys.length : null,
               ),
               const SizedBox(height: 12),
               Row(
@@ -301,23 +316,60 @@ class _MyStoreToolbar extends StatelessWidget {
   const _MyStoreToolbar({
     required this.onBack,
     this.showBack = true,
+    this.showClose = false,
     this.onOpenSettings,
+    this.onDeleteSelected,
+    this.selectedCount,
   });
 
   final VoidCallback onBack;
   final bool showBack;
+  final bool showClose;
   final VoidCallback? onOpenSettings;
+  final VoidCallback? onDeleteSelected;
+  final int? selectedCount;
 
   @override
   Widget build(BuildContext context) {
     return Row(
       children: [
         if (showBack)
-          AppBackButton(onPressed: onBack)
+          showClose
+              ? IconButton(
+                onPressed: onBack,
+                tooltip: 'Close',
+                icon: Icon(
+                  Icons.close_rounded,
+                  color: AppColors.textPrimary,
+                  size: 24,
+                ),
+              )
+              : AppBackButton(onPressed: onBack)
         else
           const SizedBox(width: 8),
-        const Spacer(),
-        if (onOpenSettings != null)
+        if (selectedCount != null)
+          Expanded(
+            child: Text(
+              selectedCount == 1
+                  ? '1 selected'
+                  : '$selectedCount selected',
+              textAlign: TextAlign.center,
+              style: AppTextStyles.body(fontWeight: FontWeight.w600),
+            ),
+          )
+        else
+          const Spacer(),
+        if (onDeleteSelected != null)
+          IconButton(
+            onPressed: onDeleteSelected,
+            tooltip: 'Delete',
+            icon: Icon(
+              Icons.delete_outline_rounded,
+              color: AppColors.error,
+              size: 24,
+            ),
+          )
+        else if (onOpenSettings != null)
           IconButton(
             onPressed: onOpenSettings,
             tooltip: 'Settings',

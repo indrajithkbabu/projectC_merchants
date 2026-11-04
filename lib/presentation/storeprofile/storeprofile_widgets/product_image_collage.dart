@@ -1,9 +1,11 @@
 import 'package:flutter/material.dart';
+import 'package:project_c/di/service_locator.dart';
 import 'package:project_c/helper/colors.dart';
 import 'package:project_c/helper/product_image.dart';
 import 'package:project_c/helper/text_styles.dart';
 import 'package:project_c/models/catalog/catalog_stock_status.dart';
 import 'package:project_c/presentation/storeprofile/storeprofile_widgets/visitor_photo_selection_chrome.dart';
+import 'package:project_c/services/cart_store.dart';
 
 /// Telegram-style media album collage — layout unchanged; each photo is clipped
 /// with a subtle [tileBorderRadius] on every corner and a small [gap] between
@@ -46,6 +48,7 @@ class ProductImageCollage extends StatelessWidget {
     this.imageImportStocks = const <CatalogStockStatus?>[],
     this.imageImportPending = const <bool>[],
     this.imageImportDeclined = const <bool>[],
+    this.imageCartProductIds = const <String>[],
   });
 
   final List<String> imagePaths;
@@ -109,6 +112,9 @@ class ProductImageCollage extends StatelessWidget {
   /// Parallel to [imagePaths] — destination import declined by source.
   final List<bool> imageImportDeclined;
 
+  /// Parallel to [imagePaths] — CatalogProduct ids for in-cart badges.
+  final List<String> imageCartProductIds;
+
   @override
   Widget build(BuildContext context) {
     if (imagePaths.isEmpty) {
@@ -147,6 +153,7 @@ class ProductImageCollage extends StatelessWidget {
           imageImportStocks: imageImportStocks,
           imageImportPending: imageImportPending,
           imageImportDeclined: imageImportDeclined,
+          imageCartProductIds: imageCartProductIds,
           cellOverlayBuilder: cellOverlayBuilder,
           child: _CollageBody(
             paths: paths,
@@ -177,6 +184,7 @@ class _CollageInteraction extends InheritedWidget {
     required this.imageImportStocks,
     required this.imageImportPending,
     required this.imageImportDeclined,
+    required this.imageCartProductIds,
     this.cellOverlayBuilder,
     required super.child,
   });
@@ -194,6 +202,7 @@ class _CollageInteraction extends InheritedWidget {
   final List<CatalogStockStatus?> imageImportStocks;
   final List<bool> imageImportPending;
   final List<bool> imageImportDeclined;
+  final List<String> imageCartProductIds;
   final void Function(int index)? onImageLongPress;
   final Widget Function(int index)? cellOverlayBuilder;
 
@@ -221,6 +230,13 @@ class _CollageInteraction extends InheritedWidget {
     return importStock;
   }
 
+  String cartProductIdAt(int index) {
+    if (index >= 0 && index < imageCartProductIds.length) {
+      return imageCartProductIds[index].trim();
+    }
+    return '';
+  }
+
   static _CollageInteraction? maybeOf(BuildContext context) {
     return context.dependOnInheritedWidgetOfExactType<_CollageInteraction>();
   }
@@ -239,7 +255,17 @@ class _CollageInteraction extends InheritedWidget {
         !_stockListEquals(imageImportStocks, oldWidget.imageImportStocks) ||
         !_boolListEquals(imageImportPending, oldWidget.imageImportPending) ||
         !_boolListEquals(imageImportDeclined, oldWidget.imageImportDeclined) ||
+        !_stringListEquals(imageCartProductIds, oldWidget.imageCartProductIds) ||
         !_setEquals(selectedIndexes, oldWidget.selectedIndexes);
+  }
+
+  static bool _stringListEquals(List<String> a, List<String> b) {
+    if (identical(a, b)) return true;
+    if (a.length != b.length) return false;
+    for (var i = 0; i < a.length; i++) {
+      if (a[i] != b[i]) return false;
+    }
+    return true;
   }
 
   static bool _setEquals(Set<int> a, Set<int> b) {
@@ -724,13 +750,23 @@ class _ImageCell extends StatelessWidget {
               top: hasImportTag ? 30 : 6,
               left: 6,
               right: 28,
-              child: VisitorImportStatusMarks(
-                locked: interaction?.isImportLockedAt(index) ?? false,
-                stock: interaction?.importStockAt(index),
-                alreadyImported:
-                    interaction?.importAlreadyImported ?? false,
-                selectionBlocked:
-                    interaction?.importSelectionBlocked ?? false,
+              child: ListenableBuilder(
+                listenable: ServiceLocator.get<CartStore>(),
+                builder: (context, _) {
+                  final pid = interaction?.cartProductIdAt(index) ?? '';
+                  final inCart =
+                      pid.isNotEmpty &&
+                      ServiceLocator.get<CartStore>().contains(pid);
+                  return VisitorImportStatusMarks(
+                    locked: interaction?.isImportLockedAt(index) ?? false,
+                    stock: interaction?.importStockAt(index),
+                    alreadyImported:
+                        interaction?.importAlreadyImported ?? false,
+                    selectionBlocked:
+                        interaction?.importSelectionBlocked ?? false,
+                    inCart: inCart,
+                  );
+                },
               ),
             ),
         ],

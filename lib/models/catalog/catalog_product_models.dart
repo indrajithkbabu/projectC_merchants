@@ -424,3 +424,46 @@ class CatalogProductBatchResult extends Equatable {
   @override
   List<Object?> get props => [success, count, batchId, collection, products];
 }
+
+/// `POST /stores/:storeId/products/delete-batch` response.
+class CatalogProductDeleteBatchResult extends Equatable {
+  const CatalogProductDeleteBatchResult({
+    this.success = true,
+    this.message = '',
+    this.deletedCount = 0,
+    this.deletedProductIds = const [],
+  });
+
+  final bool success;
+  final String message;
+  final int deletedCount;
+
+  /// Canonical Mongo product `_id`s soft-deleted (may differ from `img_*` inputs).
+  final List<String> deletedProductIds;
+
+  factory CatalogProductDeleteBatchResult.fromJson(Map<String, dynamic> json) {
+    final rawIds = json['deletedProductIds'];
+    final ids = <String>[
+      if (rawIds is List)
+        for (final e in rawIds)
+          if (e != null && '$e'.trim().isNotEmpty) '$e'.trim(),
+    ];
+    final count =
+        (json['deletedCount'] as num?)?.toInt() ??
+        ids.length;
+    return CatalogProductDeleteBatchResult(
+      success: json['success'] != false,
+      message: (json['message'] as String?)?.trim() ?? '',
+      deletedCount: count,
+      deletedProductIds: ids,
+    );
+  }
+
+  @override
+  List<Object?> get props => [
+    success,
+    message,
+    deletedCount,
+    deletedProductIds,
+  ];
+}

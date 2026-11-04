@@ -803,71 +803,87 @@ class _CollectionBrowseRouteState extends State<CollectionBrowseRoute> {
         return;
       }
 
-      if (_hasProductTiles) {
-        for (final id in selectedIds) {
-          final productId = id.trim();
-          if (productId.isEmpty) continue;
-          try {
-            await repo.deleteProduct(productId: productId);
-            deleted.add(productId);
-          } on CatalogApiException catch (e) {
-            final gone =
-                e.statusCode == 404 ||
-                e.code == 'PRODUCT_NOT_FOUND' ||
-                e.code == 'NOT_FOUND';
-            if (gone) {
-              deleted.add(productId);
-            } else {
-              failed++;
-              AppLog.e(_logTag, 'Delete product failed id=$productId', e);
-            }
-          } catch (e) {
-            failed++;
-            AppLog.e(_logTag, 'Delete product failed id=$productId', e);
-          }
-        }
-        if (deleted.isNotEmpty) {
-          final remaining = [
-            for (final p in _collectionProducts)
-              if (!deleted.contains(p.id.trim())) p,
-          ];
-          if (remaining.isEmpty) {
-            try {
-              await repo.deleteCollection(
-                storeId: widget.storeId,
-                listingId: listingId,
-              );
-            } catch (e) {
-              AppLog.e(_logTag, 'Empty collection delete failed', e);
-            }
-            if (!mounted) return;
-            final payload = <String, Object?>{
-              'deleted': true,
-              'productId': listingId,
-            };
-            _popResult = payload;
-            Navigator.of(context).pop(payload);
-            return;
-          }
-          setState(() => _collectionProducts = remaining);
-        }
-      } else {
-        // Legacy collection photos.
-        final photoIds =
-            selectedIds
-                .map((e) => e.trim())
-                .where((e) => e.isNotEmpty)
-                .toList(growable: false);
-        if (photoIds.isNotEmpty) {
-          final revision = _detail?.revision;
-          await repo.deletePhotos(
+      // Jewel tiles + legacy photo ids → one delete-batch (mixed ids OK).
+      final batchIds =
+          selectedIds
+              .map((e) => e.trim())
+              .where((e) => e.isNotEmpty)
+              .toList(growable: false);
+      if (batchIds.isNotEmpty) {
+        try {
+          final result = await repo.deleteProductsBatch(
             storeId: widget.storeId,
-            listingId: listingId,
-            photoIds: photoIds,
-            revision: revision,
+            productIds: batchIds,
           );
-          deleted.addAll(photoIds);
+          deleted.addAll(batchIds);
+          deleted.addAll(result.deletedProductIds);
+          AppLog.d(
+            _logTag,
+            'Batch deleted ${result.deletedCount} browse items',
+          );
+        } on CatalogApiException catch (e) {
+          final missingRoute =
+              e.statusCode == 404 ||
+              e.code == 'NOT_FOUND' ||
+              e.code == 'ROUTE_NOT_FOUND';
+          if (!missingRoute) rethrow;
+          // Older BE without delete-batch — sequential fallback.
+          AppLog.d(_logTag, 'delete-batch unavailable — sequential fallback');
+          if (_hasProductTiles) {
+            for (final id in batchIds) {
+              try {
+                await repo.deleteProduct(productId: id);
+                deleted.add(id);
+              } on CatalogApiException catch (err) {
+                final gone =
+                    err.statusCode == 404 ||
+                    err.code == 'PRODUCT_NOT_FOUND' ||
+                    err.code == 'NOT_FOUND';
+                if (gone) {
+                  deleted.add(id);
+                } else {
+                  failed++;
+                }
+              } catch (_) {
+                failed++;
+              }
+            }
+          } else {
+            await repo.deletePhotos(
+              storeId: widget.storeId,
+              listingId: listingId,
+              photoIds: batchIds,
+              revision: _detail?.revision,
+            );
+            deleted.addAll(batchIds);
+          }
         }
+      }
+
+      if (_hasProductTiles && deleted.isNotEmpty) {
+        final remaining = [
+          for (final p in _collectionProducts)
+            if (!deleted.contains(p.id.trim())) p,
+        ];
+        if (remaining.isEmpty) {
+          try {
+            await repo.deleteCollection(
+              storeId: widget.storeId,
+              listingId: listingId,
+            );
+          } catch (e) {
+            AppLog.e(_logTag, 'Empty collection delete failed', e);
+          }
+          if (!mounted) return;
+          final payload = <String, Object?>{
+            'deleted': true,
+            'productId': listingId,
+          };
+          _popResult = payload;
+          Navigator.of(context).pop(payload);
+          return;
+        }
+        setState(() => _collectionProducts = remaining);
       }
 
       if (!mounted) return;

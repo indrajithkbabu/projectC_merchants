@@ -39,6 +39,12 @@ Catalog “collections” map to UI “products”:
 - Sub-groups: `POST .../subgroups` to create; `PATCH .../subgroups/:subGroupId` to
   update name/tag/description/specs/`usePrecisionTag` (membership via photos/move)
 
+## Multi-select delete
+- `POST /stores/:storeId/products/delete-batch` `{ productIds: [...] }`
+  (max 100; mixed Mongo product ids + `img_*`; soft-delete + counter sync)
+- Repo chunks >100. Owner multi-select uses this; single details delete still
+  uses `DELETE /products/:id`. Empty collections still use collection DELETE.
+
 ## Other
 - List/get/delete under `/stores/:storeId/collections`
 - List/detail should include `createdAt` (ISO or epoch) for upload day.

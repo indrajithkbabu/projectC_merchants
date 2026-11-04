@@ -27,6 +27,8 @@ class Routes {
   static const String editProductSpecsRoute = 'edit_product_specs_route';
   static const String collectionBrowseRoute = 'collection_browse_route';
   static const String productDetailsRoute = 'product_details_route';
+  /// FE-local cart (grouped by store). BE `/me/cart` not wired yet.
+  static const String cartRoute = 'cart_route';
   static const String globalSearchRoute = 'global_search_route';
   static const String storeSearchRoute = 'store_search_route';
   static const String searchFiltersRoute = 'search_filters_route';
