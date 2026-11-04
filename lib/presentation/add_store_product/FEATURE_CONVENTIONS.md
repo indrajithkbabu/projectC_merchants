@@ -69,9 +69,7 @@ This file defines what to follow for UI and logic inside `lib/presentation/add_s
   scrolls off-screen (controller kept). Thumbs reuse cached
   `AssetEntityImageProvider` instances. Gallery awaits live-camera dispose
   before pop so CameraX close does not race compose. Compose decodes photos at
-  display/`cacheWidth` size (not full-res). **Compose back** re-opens the
-  sheet with `initialAssetIds` restored once after first page (no scroll-path
-  work). Then →
+  display/`cacheWidth` size (not full-res). Then →
   `add_product_compose_route` (**Quick Upload v4**): full-bleed photo; quieter
   right rail (no white rings; metal text Gold/Silver/Rose/Plat; wastage default
   **4%**, ±0.5); top-left **NET WEIGHT** readout (36px fixed; tap → decimal

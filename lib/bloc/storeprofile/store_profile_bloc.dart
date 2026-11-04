@@ -1795,86 +1795,49 @@ class StoreProfileBloc extends Bloc<StoreProfileEvent, StoreProfileState> {
       }
     }
 
-    // Remaining jewels + legacy img_* → one atomic batch (max 100 / chunk).
-    final batchIds = <String>[
-      for (final productId in productIds)
-        if (!deleteWholeListings.contains(targets[productId])) productId,
-      for (final entry in legacyByListing.entries)
-        if (!deleteWholeListings.contains(entry.key)) ...entry.value,
-    ];
-    if (batchIds.isNotEmpty) {
-      emit(
-        state.copyWith(
-          deletingProductId: batchIds.first,
-          clearError: true,
-        ),
-      );
+    for (final productId in productIds) {
+      if (deleteWholeListings.contains(targets[productId])) continue;
+      emit(state.copyWith(deletingProductId: productId, clearError: true));
       try {
-        final result = await _collectionRepository.deleteProductsBatch(
-          storeId: storeId,
-          productIds: batchIds,
-        );
-        if (result.deletedCount > 0 ||
-            result.deletedProductIds.isNotEmpty) {
-          // Keep request ids (may be img_* on collage) + canonical Mongo ids.
-          deletedIds.addAll(batchIds);
-          deletedIds.addAll(result.deletedProductIds);
-        } else {
-          failed++;
-        }
-        AppLog.d(
-          _tag,
-          'Batch deleted ${result.deletedCount} items '
-          '(requested=${batchIds.length})',
-        );
+        await _collectionRepository.deleteProduct(productId: productId);
+        deletedIds.add(productId);
+        AppLog.d(_tag, 'Deleted item product $productId');
       } on CatalogApiException catch (e) {
-        // Route missing on older BE — fall back to per-id deletes.
-        final missingRoute =
+        final gone =
             e.statusCode == 404 ||
-            e.code == 'NOT_FOUND' ||
-            e.code == 'ROUTE_NOT_FOUND';
-        if (!missingRoute) {
-          AppLog.e(_tag, 'Batch item delete failed', e);
-          failed++;
+            e.code == 'PRODUCT_NOT_FOUND' ||
+            e.code == 'NOT_FOUND';
+        if (gone) {
+          deletedIds.add(productId);
         } else {
-          AppLog.d(_tag, 'delete-batch unavailable — sequential fallback');
-          for (final productId in productIds) {
-            if (deleteWholeListings.contains(targets[productId])) continue;
-            try {
-              await _collectionRepository.deleteProduct(productId: productId);
-              deletedIds.add(productId);
-            } on CatalogApiException catch (err) {
-              final gone =
-                  err.statusCode == 404 ||
-                  err.code == 'PRODUCT_NOT_FOUND' ||
-                  err.code == 'NOT_FOUND';
-              if (gone) {
-                deletedIds.add(productId);
-              } else {
-                failed++;
-              }
-            } catch (_) {
-              failed++;
-            }
-          }
-          for (final entry in legacyByListing.entries) {
-            if (deleteWholeListings.contains(entry.key)) continue;
-            final photoIds = entry.value.toList(growable: false);
-            if (photoIds.isEmpty) continue;
-            try {
-              await _collectionRepository.deletePhotos(
-                storeId: storeId,
-                listingId: entry.key,
-                photoIds: photoIds,
-              );
-              deletedIds.addAll(photoIds);
-            } catch (_) {
-              failed++;
-            }
-          }
+          AppLog.e(_tag, 'Item product delete failed for $productId', e);
+          failed++;
         }
       } catch (e) {
-        AppLog.e(_tag, 'Batch item delete failed', e);
+        AppLog.e(_tag, 'Item product delete failed for $productId', e);
+        failed++;
+      }
+    }
+
+    for (final entry in legacyByListing.entries) {
+      final listingId = entry.key;
+      if (deleteWholeListings.contains(listingId)) continue;
+      final photoIds = entry.value.toList(growable: false);
+      if (photoIds.isEmpty) continue;
+      emit(state.copyWith(deletingProductId: listingId, clearError: true));
+      try {
+        await _collectionRepository.deletePhotos(
+          storeId: storeId,
+          listingId: listingId,
+          photoIds: photoIds,
+        );
+        deletedIds.addAll(photoIds);
+        AppLog.d(
+          _tag,
+          'Deleted ${photoIds.length} photos from listing $listingId',
+        );
+      } catch (e) {
+        AppLog.e(_tag, 'Photo delete failed for $listingId', e);
         failed++;
       }
     }

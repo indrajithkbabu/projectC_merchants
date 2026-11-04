@@ -17,7 +17,8 @@ import 'package:project_c/helper/text_styles.dart';
 import 'package:project_c/helper/cart_qa.dart';
 import 'package:project_c/helper/visitor_cart_batch.dart';
 import 'package:project_c/helper/visitor_wishlist_batch.dart';
-import 'package:project_c/helper/whatsapp_invite.dart';
+import 'package:project_c/helper/merchant_profile_link.dart';
+import 'package:share_plus/share_plus.dart';
 import 'package:project_c/helper/widgets/app_back_button.dart';
 import 'package:project_c/helper/widgets/appearance_scope.dart';
 import 'package:project_c/helper/widgets/catalog_image_edge_fades.dart';
@@ -543,34 +544,21 @@ class _StoreChannelRouteState extends State<StoreChannelRoute>
   }
 
   Future<void> _copyStoreLink() async {
-    final link = widget.storeLink.trim();
-    final text =
-        link.isEmpty
-            ? widget.storeName
-            : '${widget.storeName}\n$link';
+    final url = MerchantProfileLink.httpsUrl(widget.storeLink);
+    final text = url.isEmpty ? widget.storeName : url;
     await Clipboard.setData(ClipboardData(text: text));
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Store link copied')),
+      const SnackBar(content: Text('Profile link copied')),
     );
   }
 
-  Future<void> _shareStoreViaWhatsApp() async {
-    final link = widget.storeLink.trim();
-    final name =
-        widget.storeName.trim().isEmpty ? 'this store' : widget.storeName.trim();
-    final url =
-        link.isEmpty
-            ? WhatsAppInvite.defaultAppUrl
-            : (link.startsWith('http://') || link.startsWith('https://')
-                ? link
-                : 'https://$link');
-    final message = 'Check out $name on JewelFlow: $url';
-    final ok = await WhatsAppInvite.shareText(message);
-    if (!mounted || ok) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Could not open WhatsApp')),
+  Future<void> _shareProfile() async {
+    final message = MerchantProfileLink.shareMessage(
+      storeName: widget.storeName,
+      storeLinkOrSlug: widget.storeLink,
     );
+    await Share.share(message);
   }
 
   Future<void> _openPhoto(_ChannelPhoto photo, {Rect? sourceRect}) async {
@@ -888,7 +876,7 @@ class _StoreChannelRouteState extends State<StoreChannelRoute>
                     child: _InviteLinkCard(
                       storeLink: widget.storeLink,
                       onCopy: _copyStoreLink,
-                      onShare: _shareStoreViaWhatsApp,
+                      onShare: _shareProfile,
                     ),
                   ),
                   const SizedBox(height: 14),
@@ -1090,9 +1078,7 @@ class _StoreChannelRouteState extends State<StoreChannelRoute>
                         });
                       },
                       onImport:
-                          _viewerCanImport
-                              ? _onVisitorSelectionImport
-                              : null,
+                          _viewerCanImport ? _onVisitorSelectionImport : null,
                       onWishlist: _onVisitorSelectionWishlist,
                       wishlistBusy: _visitorWishlistBusy,
                       cartBusy: _visitorCartBusy,
@@ -1553,7 +1539,8 @@ class _InviteLinkCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final link = storeLink.trim().isEmpty ? 'jewelflow.app' : storeLink.trim();
+    final httpsUrl = MerchantProfileLink.httpsUrl(storeLink);
+    final link = httpsUrl.isEmpty ? 'https://catly.in/store' : httpsUrl;
     return Material(
       color: AppColors.surfaceSecondary,
       borderRadius: BorderRadius.circular(14),
@@ -1578,7 +1565,7 @@ class _InviteLinkCard extends StatelessWidget {
                     ),
                     const SizedBox(height: 2),
                     Text(
-                      'Store link',
+                      'Profile link',
                       style: AppTextStyles.caption(fontSize: 12),
                     ),
                   ],
@@ -1598,7 +1585,7 @@ class _InviteLinkCard extends StatelessWidget {
               ),
             ),
             IconButton(
-              tooltip: 'Share on WhatsApp',
+              tooltip: 'Share profile',
               onPressed: onShare,
               visualDensity: VisualDensity.compact,
               padding: EdgeInsets.zero,

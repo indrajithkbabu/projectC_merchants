@@ -37,7 +37,6 @@ Each numbered file is **one issue**. Open that file for request/response example
 | 13 | Every collection photo must have a stable `id` | Confirm | [13](./13-collection-photo-id.md) |
 | 14 | R2 display URLs: CDN variants + public GET + cover thumbhash | **Verify** | [14](./14-r2-responsive-display-urls.md) |
 | 15 | Collection list `cover.thumbhash` still null after #14 | **Blocker** | [15](./15-collection-cover-thumbhash.md) |
-| 16 | Cart API — device verify via `CART_QA` | Verify | [16](./16-cart-api-device-verify.md) |
 
 ---
 
@@ -48,7 +47,6 @@ Each numbered file is **one issue**. Open that file for request/response example
 3. **08** — re-test multi-product likes in one collection
 4. **09** — re-test wishlist batch
 5. **14** — finish device verify of media URLs
-6. **16** — cart device verify (`CART_QA`); promote failures to new blockers
-7. Then confirm **01, 02, 05, 06, 12, 13** when convenient
+6. Then confirm **01, 02, 05, 06, 12, 13** when convenient
 
 

@@ -485,6 +485,7 @@ class _ProductGallerySheetState extends State<_ProductGallerySheet> {
   final DragSelectGridViewController _gridController =
       DragSelectGridViewController();
   final Set<String> _selectedIds = {};
+  bool _didRestoreInitialSelection = false;
   /// id → 1-based order — O(1) badge numbers without scanning [_selected].
   final Map<String, int> _selectionOrder = {};
   /// Header count without rebuilding the whole sheet on every drag tick.
@@ -508,7 +509,6 @@ class _ProductGallerySheetState extends State<_ProductGallerySheet> {
   bool _albumMenuOpen = false;
   bool _ignoreGridListener = false;
   bool _openingCamera = false;
-  bool _didRestoreInitialSelection = false;
 
   @override
   void initState() {
@@ -719,7 +719,6 @@ class _ProductGallerySheetState extends State<_ProductGallerySheet> {
       _selectedCount.value = _selected.length;
     }
     _syncGridFromSelected();
-    // One rebuild for badge paints on visible cells — not per-scroll.
     if (mounted) setState(() {});
   }
 

@@ -16,6 +16,7 @@ class Routes {
   static const String storeImportApprovedRoute = 'store_import_approved_route';
   static const String storeImportRequestsRoute = 'store_import_requests_route';
   static const String addProductGalleryRoute = 'add_product_gallery_route';
+
   /// WhatsApp-style edit + title note after gallery pick (before group form).
   static const String addProductComposeRoute = 'add_product_compose_route';
   static const String addProductGroupRoute = 'add_product_group_route';
@@ -27,17 +28,26 @@ class Routes {
   static const String editProductSpecsRoute = 'edit_product_specs_route';
   static const String collectionBrowseRoute = 'collection_browse_route';
   static const String productDetailsRoute = 'product_details_route';
-  /// FE-local cart (grouped by store). BE `/me/cart` not wired yet.
+
+  /// Cart screen. Also embedded as the Wishlist hub Cart pill.
   static const String cartRoute = 'cart_route';
   static const String globalSearchRoute = 'global_search_route';
   static const String storeSearchRoute = 'store_search_route';
   static const String searchFiltersRoute = 'search_filters_route';
   static const String countryPickerRoute = 'country_picker_route';
   static const String inviteFriendsRoute = 'invite_friends_route';
+
   /// Full-screen Settings (opened from My store when the user has a store).
   static const String settingsRoute = 'settings_route';
+
   /// Activity feed (opened from Stores home notification icon).
   static const String activityRoute = 'activity_route';
+
+  /// Merchant chat thread (UI mock until the chat API exists).
+  static const String chatThreadRoute = 'chat_thread_route';
+
+  /// New merchant chat: customers who follow the store.
+  static const String chatNewRoute = 'chat_new_route';
   static const String accountPrivacyRoute = 'account_privacy_route';
   static const String followRequestsRoute = 'follow_requests_route';
   static const String followRequesterProfileRoute =

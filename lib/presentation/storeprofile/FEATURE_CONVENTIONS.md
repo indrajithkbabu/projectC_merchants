@@ -39,14 +39,11 @@ This file defines what to follow for UI and logic inside `lib/presentation/store
   must not insert a new Group card (ghost "Title (1 item)" until refresh).
   Collection browse must not forward silent member pops to the store grid.
   Multi-select wishlist bumps
-  `wishlistCount` via `VisitorWishlistBatch.applyWishlistCounts`. Visitor
-  selection dock also has **Add to cart** (skips already-in-cart / out-of-stock;
-  “Go to cart” / “Out of stock” when nothing new is addable). Header shows a
-  cart badge for visitors. Do **not**
+  `wishlistCount` via `VisitorWishlistBatch.applyWishlistCounts`. Do **not**
   show lock / stock chips on product cards outside selection — those live on
   product details only. After visitor **long-press** photo selection, each
-  cell shows per-photo lock / out-of-stock / in-cart (and In Your Store /
-  Exclusive) marks; clearing selection hides them again. Destination **Pending** tags
+  cell shows per-photo lock / out-of-stock (and In Your Store / Exclusive)
+  marks; clearing selection hides them again. Destination **Pending** tags
   stay visible without selection. Grid is **collections-first**
   (`GET …/collections`); collage / browse use `GET …/products?collectionId=`.
   Public like vs private wishlist are separate on product details
@@ -62,8 +59,13 @@ This file defines what to follow for UI and logic inside `lib/presentation/store
   swipeable **store** logos only — never product photos; missing logo →
   name initials. Count buttons: **Products** / **Followers** / **Following**
   only (no Mute/Report/Share row). Owner: followers/following open on tap;
-  visitor counts display-only. Store link card: **copy** + **share**
-  (WhatsApp via `WhatsAppInvite.shareText`) side by side. Visitor: Follow
+  visitor counts display-only. Profile link card: **copy** + **share**
+  (`https://catly.in/store/{slug}` via the native share sheet) side by side.
+  Incoming `https://catly.in/store/{slug}` opens `store_channel_route` (store photos
+  and the profile link card). `https://catly.in/store/{slug}/p/{productId}` and
+  `catly://store/{slug}/p/{productId}` open product details. Both go through
+  `ProfileLinkService`: validate the path, load the store, then push the
+  route. A failed lookup does not open another store. Visitor: Follow
   chrome under counts (not on Discover listing). Tabs: **Media** (pinch
   zoom 2–9 columns, smooth continuous resize + snap) / **Group** /
   **Gallery**. Edge-swipe back via `EdgeBackSwipe`.
@@ -201,16 +203,14 @@ This file defines what to follow for UI and logic inside `lib/presentation/store
   available on other stores.
 - Own-store **item** delete: long-press a **collage / gallery photo** (or a
   My Store mosaic cell) to enter photo selection (`productId|imageIndex`
-  keys, check badges). Further taps toggle items across listings. **No**
-  Cancel/Delete container under the header — Discover replaces add/search
-  with a delete icon (close/X exits selection); My Store replaces the
-  settings icon with delete and shows close + “N selected”. Delete →
-  confirm → `StoreProfileItemsDeleted` via `POST …/products/delete-batch`
-  (max 100 / chunk; sequential fallback if route 404). Whole-listing when
-  every frame is selected still uses `DELETE …/collections/:id`. Collage
-  cards strip deleted frames in place; emptied listings are removed and
-  quiet refresh omits cover-only ghosts. Visitor Import / Wishlist photo
-  select is unchanged.
+  keys, check badges). Further taps toggle items across listings. Selection
+  bar Delete → confirm → `StoreProfileItemsDeleted` which resolves nested
+  CatalogProduct ids via `DELETE /products/:id`, legacy `img_*` via
+  `POST …/photos/delete`, and whole-listing when every frame is selected.
+  Collage cards strip deleted frames in place; when a listing is emptied the
+  collection is deleted too and quiet refresh **omits** cover-only empty
+  collections (no ghost tile in My Store / Discover). Visitor Import /
+  Wishlist photo select is unchanged.
 - Store showcase images (1–5): loaded via `GET /stores/:id` into `coverImageUrl` /
   `storeImages`. Own-store logo camera opens `store_images_manager_sheet` — same
   carousel bottomsheet pattern as group photo preview (`ProductImageCarousel` +
@@ -290,12 +290,16 @@ This file defines what to follow for UI and logic inside `lib/presentation/store
   Single / Gallery** view modes and on `store_channel_route` **Media /
   Group / Gallery** tabs. Further taps toggle photos across listings.
   - Header switches to selection chrome: **close (X)** instead of back; DP +
-    name + subtitle (`followers · N selected`) stay in the identity capsule
+    name + subtitle (`N selected`) stay in the identity capsule
     with a WhatsApp-style **forward** icon on the right of that same capsule
-    (same handler as bottom Import). No Cancel button. Add/search hide while
+    (Import). No Cancel button. Add/search/chat hide while
     selecting. Close, system back, or edge-swipe clears selection (does not
     leave the store).
-  - Bottom shows **two separate** glass buttons — **Import** and **Wishlist**
+  - Discover visitor dock is **Import** and **Wishlist**, same as the channel.
+    Asking about a photo happens on the full-size product viewer.
+  - Visitor store page (not own, not locked) shows a **chat** bubble in the
+    header. It opens the chat with that store.
+  - Bottom on the channel still shows **two separate** glass buttons — **Import** and **Wishlist**
     (not one segmented dock; Follow dock hidden while selecting). **Wishlist**
     bookmarks selected photos via `VisitorWishlistBatch` →
     `POST /wishlist/batch` `{ productIds }` (fallback: parallel
@@ -332,11 +336,7 @@ This file defines what to follow for UI and logic inside `lib/presentation/store
   then an in-app full-screen camera (`camera` package — not `image_picker`,
   which races CameraX on MIUI) → photo. After pick →
   `add_product_compose_route` (WhatsApp compose: edit crop/mark/text, title
-  note, send) → `add_product_group_route`. **Back / edge-swipe from compose**
-  re-opens the gallery sheet with the same selection restored via
-  `photo_manager` asset ids (one-shot after first page paint — not on scroll).
-  Dismissing the restored sheet returns to Discover; publish / Done still
-  leaves create via existing group flow.
+  note, send) → `add_product_group_route`.
 
 ## Collection browse
 - `collection_browse_route` on land: prefer **seeded tiles** from the Group
@@ -376,10 +376,9 @@ This file defines what to follow for UI and logic inside `lib/presentation/store
     `POST .../photos/move`, then refresh. New collection requires ≥1 photo left
     in the source collection. Popping browse after a new-collection move returns
     `refreshCollections` / `newCollectionId` so store profile reloads the product grid.
-  - **Delete**: removes selected jewels / photos via
-    `POST …/products/delete-batch` (mixed product + `img_*` ids). Selecting
-    every tile deletes the collection and pops `{deleted: true}` so the store
-    grid drops the listing.
+  - **Delete**: removes selected jewel products (`DELETE /products/:id`) or
+    legacy photos (`POST …/photos/delete`). Selecting every tile deletes the
+    collection and pops `{deleted: true}` so the store grid drops the listing.
 - Browse shows all singles (no collage cap). Loading / error use `AppTextStyles`.
 
 ## Route and Navigation Notes

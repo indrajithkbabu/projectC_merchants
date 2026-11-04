@@ -17,7 +17,7 @@ import 'package:project_c/services/cart_store.dart';
 ///
 /// Three frosted pills over the product grid (not a full-width bar):
 /// back circle · identity (DP + name + followers) · actions.
-/// Actions: own store → add + search; visitor browse → cart + search.
+/// Actions: own store → add + search; visitor browse → cart + chat + search.
 /// Visitor Import is long-press selection (forward + bottom dock), not toolbar.
 class StoreProfileTelegramHeader extends StatelessWidget {
   const StoreProfileTelegramHeader({
@@ -31,6 +31,8 @@ class StoreProfileTelegramHeader extends StatelessWidget {
     required this.onSearch,
     this.onCart,
     this.onDeleteSelected,
+    this.onChat,
+    this.chatUnread = 0,
     this.selectedPhotoCount,
     this.showSelectionImport = true,
   });
@@ -46,6 +48,10 @@ class StoreProfileTelegramHeader extends StatelessWidget {
 
   /// Own-store photo multi-select: replaces add/search with delete.
   final VoidCallback? onDeleteSelected;
+
+  /// Visitor store page: open the chat with this store. Hidden while selecting.
+  final VoidCallback? onChat;
+  final int chatUnread;
 
   /// When non-null, photo multi-select chrome: close icon, subtitle shows
   /// followers · N selected. Visitor may also show forward (import).
@@ -71,6 +77,9 @@ class StoreProfileTelegramHeader extends StatelessWidget {
   /// Visitor cart badge — browse + selection (own store hides it).
   bool get _showCart => !state.isOwnStore && onCart != null;
 
+  bool get _showChat =>
+      onChat != null && !_photoSelecting && !state.isContentLocked;
+
   /// Own-store item select → delete in the actions pill (no Cancel/Delete bar).
   bool get _showOwnerDelete =>
       _photoSelecting && state.isOwnStore && onDeleteSelected != null;
@@ -79,7 +88,7 @@ class StoreProfileTelegramHeader extends StatelessWidget {
   bool get _showActionsPill =>
       _showCart ||
       _showOwnerDelete ||
-      (!_photoSelecting && (_showPrimaryAction || _showSearch));
+      (!_photoSelecting && (_showPrimaryAction || _showSearch || _showChat));
 
   @override
   Widget build(BuildContext context) {
@@ -265,6 +274,12 @@ class StoreProfileTelegramHeader extends StatelessWidget {
                           tooltip: 'Add products',
                           onTap: onAddProducts,
                         ),
+                      if (_showChat)
+                        _ChatPillButton(
+                          color: onPill,
+                          unread: chatUnread,
+                          onTap: onChat!,
+                        ),
                       if (_showSearch)
                         _PillIconButton(
                           icon: Icons.search_rounded,
@@ -360,6 +375,64 @@ class _FrostedPill extends StatelessWidget {
             child: SizedBox(height: height, child: child),
           ),
         ),
+      ),
+    );
+  }
+}
+
+class _ChatPillButton extends StatelessWidget {
+  const _ChatPillButton({
+    required this.color,
+    required this.unread,
+    required this.onTap,
+  });
+
+  final Color color;
+  final int unread;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final count = unread < 0 ? 0 : unread;
+    final label = count > 99 ? '99+' : '$count';
+    return IconButton(
+      onPressed: onTap,
+      tooltip: 'Chat',
+      padding: EdgeInsets.zero,
+      visualDensity: VisualDensity.compact,
+      constraints: const BoxConstraints.tightFor(width: 40, height: 42),
+      splashColor: Colors.transparent,
+      highlightColor: Colors.transparent,
+      hoverColor: Colors.transparent,
+      focusColor: Colors.transparent,
+      icon: Stack(
+        clipBehavior: Clip.none,
+        children: [
+          Icon(Icons.chat_bubble_outline_rounded, size: 22, color: color),
+          if (count > 0)
+            Positioned(
+              right: -8,
+              top: -6,
+              child: Container(
+                constraints: const BoxConstraints(minWidth: 16, minHeight: 16),
+                padding: const EdgeInsets.symmetric(horizontal: 4),
+                alignment: Alignment.center,
+                decoration: BoxDecoration(
+                  color: AppColors.primary,
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: AppColors.surface, width: 1.4),
+                ),
+                child: Text(
+                  label,
+                  style: AppTextStyles.caption(
+                    fontSize: 9,
+                    fontWeight: FontWeight.w700,
+                    color: AppColors.textOnPrimary,
+                  ),
+                ),
+              ),
+            ),
+        ],
       ),
     );
   }

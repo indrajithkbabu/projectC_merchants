@@ -13,6 +13,8 @@ import 'package:project_c/helper/widgets/floating_bottom_nav_bar.dart';
 import 'package:project_c/helper/widgets/screen_wrapper.dart';
 import 'package:project_c/navigation/routes.dart';
 import 'package:project_c/presentation/main_shell/shell_nav.dart';
+import 'package:project_c/presentation/chat/chat_mock_store.dart';
+import 'package:project_c/presentation/chat/chat_tab.dart';
 import 'package:project_c/presentation/main_shell/tabs/contacts_tab.dart';
 import 'package:project_c/presentation/main_shell/tabs/my_store_tab.dart';
 import 'package:project_c/presentation/main_shell/tabs/profile_tab.dart';
@@ -25,7 +27,8 @@ import 'package:project_c/services/wishlist_prefetcher.dart';
 /// Post-onboarding root: Telegram-style floating nav with Stores as home.
 ///
 /// No store yet: Stores · Contacts · Settings · Profile.
-/// Own store: Stores · Contacts · Wishlist · My store (Settings under My store).
+/// Own store: Stores · Contacts · Wishlist · My store · Chats
+/// (Settings under My store).
 class MainShellRoute extends StatefulWidget {
   const MainShellRoute({super.key});
 
@@ -69,12 +72,17 @@ class _MainShellRouteState extends State<MainShellRoute> {
       ShellNavTab.wishlist => hasStore ? 2 : null,
       ShellNavTab.cart => hasStore ? 2 : null,
       ShellNavTab.myStore => hasStore ? 3 : null,
+      ShellNavTab.chats => hasStore ? 4 : null,
     };
     if (index == null) return;
     _onTabChanged(context, index, hasStore: hasStore);
   }
 
-  void _onTabChanged(BuildContext context, int value, {required bool hasStore}) {
+  void _onTabChanged(
+    BuildContext context,
+    int value, {
+    required bool hasStore,
+  }) {
     final sameTab = value == _index;
     // Re-selecting Wishlist still quiet-refreshes so new likes appear.
     if (sameTab && !(hasStore && value == 2)) return;
@@ -101,8 +109,7 @@ class _MainShellRouteState extends State<MainShellRoute> {
   /// Shell is root: other tabs → Stores; two backs on Stores exits the app.
   /// Nested routes above the shell still pop normally.
   void _handleShellBack({required bool hasStore}) {
-    if (hasStore &&
-        (_myStoreKey.currentState?.consumeSystemBack() ?? false)) {
+    if (hasStore && (_myStoreKey.currentState?.consumeSystemBack() ?? false)) {
       return;
     }
     if (_index != 0) {
@@ -132,6 +139,7 @@ class _MainShellRouteState extends State<MainShellRoute> {
     required String profileImageUrl,
     required String storeCoverUrl,
     required bool profileOrMyStoreSelected,
+    required int chatUnread,
   }) {
     if (!hasStore) {
       return [
@@ -201,6 +209,13 @@ class _MainShellRouteState extends State<MainShellRoute> {
                   selected: profileOrMyStoreSelected,
                 ),
       ),
+      // FloatingNavItem(
+      //   tab: FloatingNavTab.chats,
+      //   label: 'Chats',
+      //   icon: Icons.chat_bubble_outline_rounded,
+      //   activeIcon: Icons.chat_bubble_rounded,
+      //   badgeCount: chatUnread,
+      // ),
     ];
   }
 
@@ -232,10 +247,9 @@ class _MainShellRouteState extends State<MainShellRoute> {
               const AccountProfileClearAccountDeleted(),
             );
             context.read<AuthBloc>().add(const AuthLoggedOut());
-            Navigator.of(context).pushNamedAndRemoveUntil(
-              Routes.authPhoneRoute,
-              (route) => false,
-            );
+            Navigator.of(
+              context,
+            ).pushNamedAndRemoveUntil(Routes.authPhoneRoute, (route) => false);
           },
         ),
       ],
@@ -262,7 +276,7 @@ class _MainShellRouteState extends State<MainShellRoute> {
               profileState.profile?.effectiveProfileImageUrl.trim() ?? '';
 
           // Clamp index if tab set changed (e.g. store created mid-session).
-          final safeIndex = _index.clamp(0, 3);
+          final safeIndex = _index.clamp(0, hasStore ? 4 : 3);
 
           Widget body = ScreenWrapper(
             backgroundColor: AppColors.background,
@@ -291,6 +305,7 @@ class _MainShellRouteState extends State<MainShellRoute> {
                         MyStoreTab(key: _myStoreKey)
                       else
                         const ProfileTab(),
+                      if (hasStore) const ChatTab(),
                     ],
                   ),
                 ),
@@ -306,30 +321,37 @@ class _MainShellRouteState extends State<MainShellRoute> {
                         duration: const Duration(milliseconds: 240),
                         curve: Curves.easeOutCubic,
                         offset:
-                            keyboardOpen
-                                ? const Offset(0, 1.15)
-                                : Offset.zero,
+                            keyboardOpen ? const Offset(0, 1.15) : Offset.zero,
                         child: AnimatedOpacity(
                           duration: const Duration(milliseconds: 200),
                           curve: Curves.easeOutCubic,
                           opacity: keyboardOpen ? 0 : 1,
                           child: IgnorePointer(
                             ignoring: keyboardOpen,
-                            child: FloatingBottomNavBar(
-                              currentIndex: safeIndex,
-                              onChanged:
-                                  (value) => _onTabChanged(
-                                    context,
-                                    value,
+                            child: ListenableBuilder(
+                              listenable: ChatMockStore.instance,
+                              builder: (context, _) {
+                                return FloatingBottomNavBar(
+                                  currentIndex: safeIndex,
+                                  onChanged:
+                                      (value) => _onTabChanged(
+                                        context,
+                                        value,
+                                        hasStore: hasStore,
+                                      ),
+                                  items: _navItems(
                                     hasStore: hasStore,
+                                    profileInitials: initials,
+                                    profileImageUrl: imageUrl,
+                                    storeCoverUrl: storeCover,
+                                    profileOrMyStoreSelected: safeIndex == 3,
+                                    chatUnread:
+                                        hasStore
+                                            ? ChatMockStore.instance.totalUnread
+                                            : 0,
                                   ),
-                              items: _navItems(
-                                hasStore: hasStore,
-                                profileInitials: initials,
-                                profileImageUrl: imageUrl,
-                                storeCoverUrl: storeCover,
-                                profileOrMyStoreSelected: safeIndex == 3,
-                              ),
+                                );
+                              },
                             ),
                           ),
                         ),
@@ -414,6 +436,7 @@ class _NavProfileAvatar extends StatefulWidget {
 class _NavProfileAvatarState extends State<_NavProfileAvatar> {
   /// Last URL we successfully warmed for paint.
   String _readyUrl = '';
+
   /// Keep showing the previous photo while a new URL warms (no initials flash).
   String _displayUrl = '';
 
@@ -462,8 +485,7 @@ class _NavProfileAvatarState extends State<_NavProfileAvatar> {
 
   @override
   Widget build(BuildContext context) {
-    final bg =
-        widget.selected ? AppColors.primary : AppColors.surfaceSecondary;
+    final bg = widget.selected ? AppColors.primary : AppColors.surfaceSecondary;
     final label = Text(
       widget.initials,
       style: AppTextStyles.caption(

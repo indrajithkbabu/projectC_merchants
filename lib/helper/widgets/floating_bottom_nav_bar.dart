@@ -5,9 +5,17 @@ import 'package:project_c/helper/text_styles.dart';
 /// Shell bottom-nav destinations.
 ///
 /// No-store users: [stores] · [contacts] · [settings] · [profile].
-/// Own-store users: [stores] · [contacts] · [wishlist] · [myStore]
+/// Own-store users: [stores] · [contacts] · [wishlist] · [myStore] · [chats]
 /// (Settings lives under My store, not as its own tab).
-enum FloatingNavTab { stores, contacts, settings, profile, wishlist, myStore }
+enum FloatingNavTab {
+  stores,
+  contacts,
+  settings,
+  profile,
+  wishlist,
+  myStore,
+  chats,
+}
 
 class FloatingNavItem {
   const FloatingNavItem({
@@ -90,6 +98,7 @@ class FloatingBottomNavBar extends StatelessWidget {
                   child: _NavItemButton(
                     item: items[i],
                     selected: i == currentIndex,
+                    compact: items.length > 4,
                     onTap: () => onChanged(i),
                   ),
                 ),
@@ -106,11 +115,13 @@ class _NavItemButton extends StatelessWidget {
     required this.item,
     required this.selected,
     required this.onTap,
+    this.compact = false,
   });
 
   final FloatingNavItem item;
   final bool selected;
   final VoidCallback onTap;
+  final bool compact;
 
   @override
   Widget build(BuildContext context) {
@@ -131,7 +142,10 @@ class _NavItemButton extends StatelessWidget {
             AnimatedContainer(
               duration: const Duration(milliseconds: 220),
               curve: Curves.easeOutCubic,
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
+              padding: EdgeInsets.symmetric(
+                horizontal: compact ? 8 : 14,
+                vertical: 4,
+              ),
               decoration: BoxDecoration(
                 color:
                     selected ? AppColors.navBarActivePill : Colors.transparent,
@@ -142,9 +156,7 @@ class _NavItemButton extends StatelessWidget {
                 children: [
                   item.avatar ??
                       Icon(
-                        selected
-                            ? (item.activeIcon ?? item.icon)
-                            : item.icon,
+                        selected ? (item.activeIcon ?? item.icon) : item.icon,
                         size: 22,
                         color: color,
                       ),
@@ -166,7 +178,10 @@ class _NavItemButton extends StatelessWidget {
                 fontWeight: selected ? FontWeight.w600 : FontWeight.w500,
                 color: color,
               ),
-              child: Text(item.label),
+              child: FittedBox(
+                fit: BoxFit.scaleDown,
+                child: Text(item.label, maxLines: 1),
+              ),
             ),
           ],
         ),

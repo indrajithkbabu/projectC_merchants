@@ -44,8 +44,7 @@ class WishlistRoute extends StatefulWidget {
   /// Shell tab: match Stores/Contacts title size + status-bar padding.
   final bool embeddedInShell;
 
-  /// When true (Wishlist hub), parent owns [ShellTabTitleBar] + pills — only
-  /// search / filters chrome is drawn here (no second status-bar inset).
+  /// Wishlist hub already draws the title and pills. Keep search chrome only.
   final bool hideShellTitle;
 
   /// Bump from the shell when the Wishlist tab is selected so likes appear
@@ -1006,7 +1005,6 @@ class _WishlistRouteState extends State<WishlistRoute>
         widget.bottomInset > 0 ? widget.bottomInset + 8 : 24.0;
 
     final collapsedActions = _collapsedChromeActions();
-
     final hideTitle = widget.hideShellTitle && widget.embeddedInShell;
 
     return Column(
@@ -1031,41 +1029,41 @@ class _WishlistRouteState extends State<WishlistRoute>
                   )
                 else
                   SizedBox(
-                    height: ShellTabTitleBar.rowHeight,
-                    child: Row(
-                      children: [
-                        if (widget.onBack != null)
-                          AppBackButton(onPressed: widget.onBack),
-                        Expanded(
-                          child: Align(
-                            alignment: Alignment.centerLeft,
-                            child: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Flexible(
-                                  child: Text(
-                                    'Wishlist',
-                                    style: AppTextStyles.headline(
-                                      fontSize: 18,
-                                      fontWeight: FontWeight.w700,
-                                      height: 1.2,
-                                    ),
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
+                  height: ShellTabTitleBar.rowHeight,
+                  child: Row(
+                    children: [
+                      if (widget.onBack != null)
+                        AppBackButton(onPressed: widget.onBack),
+                      Expanded(
+                        child: Align(
+                          alignment: Alignment.centerLeft,
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Flexible(
+                                child: Text(
+                                  'Wishlist',
+                                  style: AppTextStyles.headline(
+                                    fontSize: 18,
+                                    fontWeight: FontWeight.w700,
+                                    height: 1.2,
                                   ),
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
                                 ),
-                                if (countBadge != null) ...[
-                                  const SizedBox(width: 8),
-                                  countBadge,
-                                ],
+                              ),
+                              if (countBadge != null) ...[
+                                const SizedBox(width: 8),
+                                countBadge,
                               ],
-                            ),
+                            ],
                           ),
                         ),
-                        collapsedActions,
-                      ],
-                    ),
+                      ),
+                      collapsedActions,
+                    ],
                   ),
+                ),
               ] else
                 Align(
                   alignment: Alignment.centerRight,

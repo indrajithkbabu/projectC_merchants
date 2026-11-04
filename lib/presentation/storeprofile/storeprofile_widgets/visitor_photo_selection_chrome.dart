@@ -57,6 +57,9 @@ class TelegramPhotoSelectBadge extends StatelessWidget {
 
 /// Selection dock: Add to cart · Import (optional) · Heart.
 ///
+/// When [onAsk] is set, the dock is Ask about N + cart + heart. Import stays
+/// on the header forward control.
+///
 /// Cart CTA label / style follows [CartSelectionBreakdown]:
 /// - addable > 0 → "Add N to cart"
 /// - all in cart → "Go to cart"
@@ -81,12 +84,16 @@ class VisitorPhotoActionDock extends StatelessWidget {
       selected: 0,
     ),
     this.cartFull = false,
+    this.onAsk,
   });
 
   final VoidCallback? onAddToCart;
   final VoidCallback? onGoToCart;
   final VoidCallback? onImport;
   final VoidCallback? onWishlist;
+
+  /// When set, the dock adds Ask about N. Import stays on the header forward.
+  final VoidCallback? onAsk;
 
   final bool wishlistBusy;
   final bool cartBusy;
@@ -119,8 +126,17 @@ class VisitorPhotoActionDock extends StatelessWidget {
         ],
         Row(
           children: [
+            if (onAsk != null) ...[
+              Expanded(
+                child: _AskAboutButton(
+                  count: count,
+                  onTap: count == 0 ? null : onAsk,
+                ),
+              ),
+              const SizedBox(width: 8),
+            ],
             Expanded(
-              flex: showImport ? 3 : 4,
+              flex: showImport && onAsk == null ? 3 : 4,
               child: _CartActionButton(
                 label: cartState.label,
                 mode: cartState.mode,
@@ -128,7 +144,7 @@ class VisitorPhotoActionDock extends StatelessWidget {
                 onTap: cartState.onTap,
               ),
             ),
-            if (showImport) ...[
+            if (showImport && onAsk == null) ...[
               const SizedBox(width: 8),
               Expanded(
                 flex: 2,
@@ -279,12 +295,14 @@ class VisitorPhotoSelectionOverlay extends StatelessWidget {
       selected: 0,
     ),
     this.cartFull = false,
+    this.onAsk,
   });
 
   final VoidCallback? onAddToCart;
   final VoidCallback? onGoToCart;
   final VoidCallback? onImport;
   final VoidCallback? onWishlist;
+  final VoidCallback? onAsk;
   final bool wishlistBusy;
   final bool cartBusy;
   final bool showImport;
@@ -314,6 +332,7 @@ class VisitorPhotoSelectionOverlay extends StatelessWidget {
         importPendingCount: importPendingCount,
         cartBreakdown: cartBreakdown,
         cartFull: cartFull,
+        onAsk: onAsk,
       ),
     );
   }
@@ -335,6 +354,7 @@ class VisitorPhotoSelectionOverlay extends StatelessWidget {
     final imageIndex = int.tryParse(key.substring(bar + 1)) ?? 0;
     final product = byId[key.substring(0, bar)];
     if (product == null) continue;
+    // Group collage: lock is per cell (photoAssetIds), not card rollup.
     if (product.isLockedAt(imageIndex)) {
       pending++;
     } else {
@@ -464,6 +484,48 @@ class VisitorImportStatusMarks extends StatelessWidget {
             : AppColors.border.withValues(alpha: 0.7),
     foreground: night ? AppColors.textOnPrimary : AppColors.textPrimary,
   );
+}
+
+class _AskAboutButton extends StatelessWidget {
+  const _AskAboutButton({required this.count, required this.onTap});
+
+  final int count;
+  final VoidCallback? onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final label = count <= 0 ? 'Ask about' : 'Ask about $count';
+    return Material(
+      color: Colors.white,
+      borderRadius: BorderRadius.circular(16),
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(16),
+        child: SizedBox(
+          height: 52,
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(
+                Icons.chat_bubble_outline_rounded,
+                size: 18,
+                color: onTap == null ? AppColors.grey400 : AppColors.grey900,
+              ),
+              const SizedBox(width: 8),
+              Text(
+                label,
+                style: AppTextStyles.label(
+                  fontSize: 16,
+                  fontWeight: FontWeight.w600,
+                  color: onTap == null ? AppColors.grey400 : AppColors.grey900,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
 }
 
 class _CartActionButton extends StatelessWidget {

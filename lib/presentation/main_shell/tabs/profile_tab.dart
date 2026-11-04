@@ -6,6 +6,7 @@ import 'package:project_c/di/service_locator.dart';
 import 'package:project_c/helper/app_log.dart';
 import 'package:project_c/helper/app_padding.dart';
 import 'package:project_c/helper/colors.dart';
+import 'package:project_c/helper/merchant_profile_link.dart';
 import 'package:project_c/helper/text_styles.dart';
 import 'package:project_c/helper/widgets/floating_bottom_nav_bar.dart';
 import 'package:project_c/helper/widgets/primary_button.dart';
@@ -216,6 +217,10 @@ class _ProfileTabState extends State<ProfileTab> {
         builder: (context, state) {
           final profile = state.profile;
           final ownStore = profile?.ownStore;
+          final profileLink =
+              ownStore == null
+                  ? ''
+                  : MerchantProfileLink.httpsUrl(ownStore.storeLink);
           final imageUrl = profile?.effectiveProfileImageUrl ?? '';
           final storeId = ownStore?.id.trim() ?? '';
           if (storeId.isNotEmpty &&
@@ -283,8 +288,11 @@ class _ProfileTabState extends State<ProfileTab> {
                           ),
                           const SizedBox(height: 14),
                           _InfoLine(
-                            value: ownStore.storeLink,
-                            label: 'Store link',
+                            value:
+                                profileLink.isEmpty
+                                    ? ownStore.storeLink
+                                    : profileLink,
+                            label: 'Profile link',
                           ),
                         ],
                       ],

@@ -2,10 +2,13 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/scheduler.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:project_c/bloc/auth/auth_bloc.dart';
+import 'package:project_c/di/service_locator.dart';
 import 'package:project_c/helper/app_log.dart';
+import 'package:project_c/services/profile_link_service.dart';
 import 'package:project_c/helper/app_padding.dart';
 import 'package:project_c/helper/colors.dart';
 import 'package:project_c/helper/otp_sms_autofill.dart';
@@ -163,6 +166,9 @@ class _OtpRouteState extends State<OtpRoute> {
             if (route == null) return;
             context.read<AuthBloc>().add(const AuthClearPostAuthNavigation());
             Navigator.of(context).pushNamedAndRemoveUntil(route, (r) => r.isFirst);
+            SchedulerBinding.instance.addPostFrameCallback((_) {
+              ServiceLocator.get<ProfileLinkService>().flushPending();
+            });
           },
         ),
         // Fresh challenge (initial request already set before push; resend updates id).
