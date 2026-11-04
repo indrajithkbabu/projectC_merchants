@@ -405,21 +405,17 @@ class MyStoreTabState extends State<MyStoreTab> {
                 padding: AppPadding.screen(top: top, bottom: 0),
                 child: Column(
                   children: [
-                    if (_selectionMode)
-                      _ShellSelectionBar(
-                        count: _selectedPhotoKeys.length,
-                        onCancel: _exitSelection,
-                        onDelete:
-                            _selectedPhotoKeys.isEmpty
-                                ? null
-                                : () => _confirmDeleteSelected(context),
-                      ),
                     Expanded(
                       child: StoreMyStoreTab(
                         state: state,
                         showBack: false,
                         onBack: () {},
                         onOpenSettings: () => _openSettings(context),
+                        onCancelSelection: _exitSelection,
+                        onDeleteSelected:
+                            _selectedPhotoKeys.isEmpty
+                                ? null
+                                : () => _confirmDeleteSelected(context),
                         onFollowersTap:
                             () => _openFollowersFollowing(
                               context,
@@ -455,65 +451,6 @@ class MyStoreTabState extends State<MyStoreTab> {
             },
           );
         },
-      ),
-    );
-  }
-}
-
-class _ShellSelectionBar extends StatelessWidget {
-  const _ShellSelectionBar({
-    required this.count,
-    required this.onCancel,
-    required this.onDelete,
-  });
-
-  final int count;
-  final VoidCallback onCancel;
-  final VoidCallback? onDelete;
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 8, left: 8, right: 8),
-      child: DecoratedBox(
-        decoration: BoxDecoration(
-          color: AppColors.surfaceSecondary,
-          borderRadius: BorderRadius.circular(12),
-        ),
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-          child: Row(
-            children: [
-              TextButton(
-                onPressed: onCancel,
-                child: Text(
-                  'Cancel',
-                  style: AppTextStyles.body(fontWeight: FontWeight.w600),
-                ),
-              ),
-              Expanded(
-                child: Text(
-                  count == 0 ? 'Select items' : '$count selected',
-                  textAlign: TextAlign.center,
-                  style: AppTextStyles.body(fontWeight: FontWeight.w600),
-                ),
-              ),
-              TextButton(
-                onPressed: onDelete,
-                child: Text(
-                  'Delete',
-                  style: AppTextStyles.body(
-                    fontWeight: FontWeight.w700,
-                    color:
-                        onDelete == null
-                            ? AppColors.textSecondary
-                            : AppColors.error,
-                  ),
-                ),
-              ),
-            ],
-          ),
-        ),
       ),
     );
   }

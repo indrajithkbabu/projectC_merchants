@@ -2,8 +2,10 @@ import 'dart:ui';
 
 import 'package:flutter/material.dart';
 import 'package:project_c/helper/app_padding.dart';
+import 'package:project_c/helper/cart_qa.dart';
 import 'package:project_c/helper/colors.dart';
 import 'package:project_c/helper/text_styles.dart';
+import 'package:project_c/helper/visitor_cart_batch.dart';
 import 'package:project_c/helper/widgets/appearance_scope.dart';
 import 'package:project_c/models/catalog/catalog_stock_status.dart';
 import 'package:project_c/models/store_product.dart';
@@ -53,40 +55,47 @@ class TelegramPhotoSelectBadge extends StatelessWidget {
   }
 }
 
-/// Two separate Import + Wishlist buttons (not a single segmented dock).
-/// Clear selection via header close / edge-swipe — no Cancel CTA.
-/// Store accounts see Import (with the selection count). Accounts without
-/// a store see Wishlist alone.
+/// Selection dock: Add to cart · Import (optional) · Heart.
 ///
-/// When any selected photo is locked, an orange approval strip sits above
-/// the buttons; the Import CTA stays short (`Import N`) so it never overflows.
+/// Cart CTA label / style follows [CartSelectionBreakdown]:
+/// - addable > 0 → "Add N to cart"
+/// - all in cart → "Go to cart"
+/// - all out of stock → "Out of stock" (disabled; heart stays active)
 class VisitorPhotoActionDock extends StatelessWidget {
   const VisitorPhotoActionDock({
     super.key,
+    this.onAddToCart,
+    this.onGoToCart,
     this.onImport,
     this.onWishlist,
     this.wishlistBusy = false,
+    this.cartBusy = false,
     this.showImport = true,
     this.importCount = 0,
     this.importInstantCount = 0,
     this.importPendingCount = 0,
+    this.cartBreakdown = const CartSelectionBreakdown(
+      addable: 0,
+      alreadyInCart: 0,
+      outOfStock: 0,
+      selected: 0,
+    ),
+    this.cartFull = false,
   });
 
-  /// Opens the prefilled review screen. Hidden when [showImport] is false.
+  final VoidCallback? onAddToCart;
+  final VoidCallback? onGoToCart;
   final VoidCallback? onImport;
-
-  /// Batch collection like for selected listings.
   final VoidCallback? onWishlist;
 
   final bool wishlistBusy;
+  final bool cartBusy;
   final bool showImport;
   final int importCount;
-
-  /// Unlocked selected photos (instant publish) — drives approval strip.
   final int importInstantCount;
-
-  /// Locked selected photos (need approval) — drives approval strip.
   final int importPendingCount;
+  final CartSelectionBreakdown cartBreakdown;
+  final bool cartFull;
 
   @override
   Widget build(BuildContext context) {
@@ -97,6 +106,9 @@ class VisitorPhotoActionDock extends StatelessWidget {
     final instant = importInstantCount < 0 ? 0 : importInstantCount;
     final importLabel = count <= 0 ? 'Import' : 'Import $count';
     final showApprovalStrip = showImport && pending > 0;
+
+    final cartState = _cartCtaState();
+
     return Column(
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -107,8 +119,19 @@ class VisitorPhotoActionDock extends StatelessWidget {
         ],
         Row(
           children: [
+            Expanded(
+              flex: showImport ? 3 : 4,
+              child: _CartActionButton(
+                label: cartState.label,
+                mode: cartState.mode,
+                busy: cartBusy,
+                onTap: cartState.onTap,
+              ),
+            ),
             if (showImport) ...[
+              const SizedBox(width: 8),
               Expanded(
+                flex: 2,
                 child: _VisitorActionButton(
                   label: importLabel,
                   icon: Icons.download_rounded,
@@ -116,35 +139,72 @@ class VisitorPhotoActionDock extends StatelessWidget {
                   border: chrome.border,
                   foreground: chrome.foreground,
                   onTap:
-                      wishlistBusy || onImport == null
+                      wishlistBusy || cartBusy || onImport == null
                           ? null
                           : () => onImport?.call(),
                 ),
               ),
-              const SizedBox(width: 10),
             ],
-            Expanded(
-              child: _VisitorActionButton(
-                label: 'Wishlist',
-                icon: Icons.favorite_border_rounded,
-                fill: chrome.fill,
-                border: chrome.border,
-                foreground: chrome.foreground,
-                // Keep label; show a compact spinner on the heart while the
-                // collection-like batch runs (no "Saving…" text).
-                busy: wishlistBusy,
-                onTap:
-                    wishlistBusy || onWishlist == null
-                        ? null
-                        : () => onWishlist?.call(),
-              ),
+            const SizedBox(width: 8),
+            _HeartActionButton(
+              busy: wishlistBusy,
+              onTap:
+                  wishlistBusy || cartBusy || onWishlist == null
+                      ? null
+                      : () => onWishlist?.call(),
+              fill: chrome.fill,
+              border: chrome.border,
+              foreground: chrome.foreground,
             ),
           ],
         ),
       ],
     );
   }
+
+  ({String label, _CartCtaMode mode, VoidCallback? onTap}) _cartCtaState() {
+    CartQa.noteDockMode(
+      selected: cartBreakdown.selected,
+      addable: cartBreakdown.addable,
+      alreadyInCart: cartBreakdown.alreadyInCart,
+      outOfStock: cartBreakdown.outOfStock,
+      allInCart: cartBreakdown.allInCart,
+      allOutOfStock: cartBreakdown.allOutOfStock,
+    );
+    if (cartFull && cartBreakdown.addable > 0) {
+      return (
+        label: 'Cart is full',
+        mode: _CartCtaMode.disabled,
+        onTap: null,
+      );
+    }
+    if (cartBreakdown.allOutOfStock) {
+      return (
+        label: 'Out of stock',
+        mode: _CartCtaMode.disabled,
+        onTap: null,
+      );
+    }
+    if (cartBreakdown.allInCart) {
+      return (
+        label: 'Go to cart',
+        mode: _CartCtaMode.goToCart,
+        onTap: cartBusy ? null : onGoToCart,
+      );
+    }
+    final n = cartBreakdown.addable;
+    final label = n <= 0
+        ? 'Add to cart'
+        : (n == 1 ? 'Add 1 to cart' : 'Add $n to cart');
+    return (
+      label: label,
+      mode: _CartCtaMode.add,
+      onTap: (cartBusy || n <= 0 || onAddToCart == null) ? null : onAddToCart,
+    );
+  }
 }
+
+enum _CartCtaMode { add, goToCart, disabled }
 
 /// Compact orange notice above Import when locked photos need owner approval.
 class _ImportApprovalStrip extends StatelessWidget {
@@ -198,26 +258,41 @@ class _ImportApprovalStrip extends StatelessWidget {
   }
 }
 
-/// Bottom Import / Wishlist buttons while visitor photo selection is active.
+/// Bottom Add to cart / Import / Heart while visitor photo selection is active.
 class VisitorPhotoSelectionOverlay extends StatelessWidget {
   const VisitorPhotoSelectionOverlay({
     super.key,
+    this.onAddToCart,
+    this.onGoToCart,
     this.onImport,
     this.onWishlist,
     this.wishlistBusy = false,
+    this.cartBusy = false,
     this.showImport = true,
     this.importCount = 0,
     this.importInstantCount = 0,
     this.importPendingCount = 0,
+    this.cartBreakdown = const CartSelectionBreakdown(
+      addable: 0,
+      alreadyInCart: 0,
+      outOfStock: 0,
+      selected: 0,
+    ),
+    this.cartFull = false,
   });
 
+  final VoidCallback? onAddToCart;
+  final VoidCallback? onGoToCart;
   final VoidCallback? onImport;
   final VoidCallback? onWishlist;
   final bool wishlistBusy;
+  final bool cartBusy;
   final bool showImport;
   final int importCount;
   final int importInstantCount;
   final int importPendingCount;
+  final CartSelectionBreakdown cartBreakdown;
+  final bool cartFull;
 
   @override
   Widget build(BuildContext context) {
@@ -227,13 +302,18 @@ class VisitorPhotoSelectionOverlay extends StatelessWidget {
       right: AppPadding.horizontal,
       bottom: safeBottom + 16,
       child: VisitorPhotoActionDock(
+        onAddToCart: onAddToCart,
+        onGoToCart: onGoToCart,
         onImport: onImport,
         onWishlist: onWishlist,
         wishlistBusy: wishlistBusy,
+        cartBusy: cartBusy,
         showImport: showImport,
         importCount: importCount,
         importInstantCount: importInstantCount,
         importPendingCount: importPendingCount,
+        cartBreakdown: cartBreakdown,
+        cartFull: cartFull,
       ),
     );
   }
@@ -255,7 +335,6 @@ class VisitorPhotoSelectionOverlay extends StatelessWidget {
     final imageIndex = int.tryParse(key.substring(bar + 1)) ?? 0;
     final product = byId[key.substring(0, bar)];
     if (product == null) continue;
-    // Group collage: lock is per cell (photoAssetIds), not card rollup.
     if (product.isLockedAt(imageIndex)) {
       pending++;
     } else {
@@ -265,7 +344,7 @@ class VisitorPhotoSelectionOverlay extends StatelessWidget {
   return (instant: instant, pending: pending);
 }
 
-/// Lock / stock / import flags. Shown on source photos only while selecting.
+/// Lock / stock / import / in-cart flags. Shown on source photos only while selecting.
 class VisitorImportStatusMarks extends StatelessWidget {
   const VisitorImportStatusMarks({
     super.key,
@@ -273,12 +352,14 @@ class VisitorImportStatusMarks extends StatelessWidget {
     this.stock,
     this.alreadyImported = false,
     this.selectionBlocked = false,
+    this.inCart = false,
   });
 
   final bool locked;
   final CatalogStockStatus? stock;
   final bool alreadyImported;
   final bool selectionBlocked;
+  final bool inCart;
 
   @override
   Widget build(BuildContext context) {
@@ -288,7 +369,8 @@ class VisitorImportStatusMarks extends StatelessWidget {
         !out &&
         !toOrder &&
         !alreadyImported &&
-        !selectionBlocked) {
+        !selectionBlocked &&
+        !inCart) {
       return const SizedBox.shrink();
     }
     return Column(
@@ -318,9 +400,31 @@ class VisitorImportStatusMarks extends StatelessWidget {
             ),
           ),
         ],
+        if (inCart) ...[
+          if (alreadyImported || selectionBlocked || locked)
+            const SizedBox(height: 4),
+          Container(
+            width: 22,
+            height: 22,
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+              color: Colors.black.withValues(alpha: 0.55),
+              shape: BoxShape.circle,
+              border: Border.all(color: Colors.white, width: 1.2),
+            ),
+            child: const Icon(
+              Icons.shopping_cart_rounded,
+              size: 11,
+              color: Colors.white,
+            ),
+          ),
+        ],
         if (out || toOrder) ...[
           const SizedBox(height: 4),
-          _pill(out ? 'Out of stock' : 'To order', out ? AppColors.error : Colors.black54),
+          _pill(
+            out ? 'Out of stock' : 'To order',
+            out ? AppColors.error : Colors.black54,
+          ),
         ],
       ],
     );
@@ -362,10 +466,113 @@ class VisitorImportStatusMarks extends StatelessWidget {
   );
 }
 
-class _VisitorActionButton extends StatelessWidget {
-  const _VisitorActionButton({
+class _CartActionButton extends StatelessWidget {
+  const _CartActionButton({
     required this.label,
-    required this.icon,
+    required this.mode,
+    required this.onTap,
+    this.busy = false,
+  });
+
+  final String label;
+  final _CartCtaMode mode;
+  final VoidCallback? onTap;
+  final bool busy;
+
+  @override
+  Widget build(BuildContext context) {
+    AppearanceScope.maybeOf(context);
+    final night = AppColors.isNight;
+    final Color fill;
+    final Color border;
+    final Color foreground;
+    switch (mode) {
+      // Solid primary CTA — night textOnPrimary == textPrimary, so never use
+      // that pair as fill+label (label vanishes).
+      case _CartCtaMode.add:
+        fill = night ? AppColors.primary : AppColors.accent;
+        border = fill;
+        foreground = AppColors.textOnPrimary;
+      case _CartCtaMode.goToCart:
+        fill = night ? AppColors.primary : AppColors.textPrimary;
+        border =
+            night
+                ? AppColors.border.withValues(alpha: 0.7)
+                : AppColors.textPrimary;
+        foreground = AppColors.textOnPrimary;
+      case _CartCtaMode.disabled:
+        fill = AppColors.surfaceSecondary;
+        border = AppColors.border.withValues(alpha: 0.5);
+        foreground = AppColors.textSecondary;
+    }
+
+    final enabled = onTap != null;
+    return Opacity(
+      opacity: enabled || busy || mode == _CartCtaMode.disabled ? 1 : 0.55,
+      child: Material(
+        type: MaterialType.transparency,
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(14),
+          splashColor: Colors.transparent,
+          highlightColor: Colors.transparent,
+          child: DecoratedBox(
+            decoration: BoxDecoration(
+              color: fill,
+              borderRadius: BorderRadius.circular(14),
+              border: Border.all(color: border, width: 0.8),
+            ),
+            child: SizedBox(
+              height: 52,
+              width: double.infinity,
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 12),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    if (busy)
+                      SizedBox(
+                        width: 18,
+                        height: 18,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: foreground,
+                        ),
+                      )
+                    else
+                      Icon(
+                        mode == _CartCtaMode.goToCart
+                            ? Icons.shopping_cart_outlined
+                            : Icons.shopping_cart_rounded,
+                        size: 20,
+                        color: foreground,
+                      ),
+                    const SizedBox(width: 8),
+                    Flexible(
+                      child: Text(
+                        label,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        textAlign: TextAlign.center,
+                        style: AppTextStyles.body(
+                          fontWeight: FontWeight.w700,
+                          color: foreground,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _HeartActionButton extends StatelessWidget {
+  const _HeartActionButton({
     required this.fill,
     required this.border,
     required this.foreground,
@@ -373,8 +580,6 @@ class _VisitorActionButton extends StatelessWidget {
     this.busy = false,
   });
 
-  final String label;
-  final IconData icon;
   final Color fill;
   final Color border;
   final Color foreground;
@@ -383,9 +588,76 @@ class _VisitorActionButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    return Opacity(
+      opacity: onTap != null || busy ? 1 : 0.55,
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(14),
+        child: BackdropFilter(
+          filter: ImageFilter.blur(sigmaX: 18, sigmaY: 18),
+          child: Material(
+            type: MaterialType.transparency,
+            child: InkWell(
+              onTap: onTap,
+              splashColor: Colors.transparent,
+              highlightColor: Colors.transparent,
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  color: fill,
+                  borderRadius: BorderRadius.circular(14),
+                  border: Border.all(color: border, width: 0.8),
+                ),
+                child: SizedBox(
+                  width: 52,
+                  height: 52,
+                  child: Center(
+                    child:
+                        busy
+                            ? SizedBox(
+                              width: 18,
+                              height: 18,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                color: foreground,
+                              ),
+                            )
+                            : Icon(
+                              Icons.favorite_border_rounded,
+                              size: 22,
+                              color: foreground,
+                            ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _VisitorActionButton extends StatelessWidget {
+  const _VisitorActionButton({
+    required this.label,
+    required this.icon,
+    required this.fill,
+    required this.border,
+    required this.foreground,
+    required this.onTap,
+  });
+
+  final String label;
+  final IconData icon;
+  final Color fill;
+  final Color border;
+  final Color foreground;
+  final VoidCallback? onTap;
+
+  @override
+  Widget build(BuildContext context) {
     final enabled = onTap != null;
     return Opacity(
-      opacity: enabled || busy ? 1 : 0.55,
+      opacity: enabled ? 1 : 0.55,
       child: ClipRRect(
         borderRadius: BorderRadius.circular(14),
         child: BackdropFilter(
@@ -408,25 +680,17 @@ class _VisitorActionButton extends StatelessWidget {
                     child: Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        if (busy)
-                          SizedBox(
-                            width: 18,
-                            height: 18,
-                            child: CircularProgressIndicator(
-                              strokeWidth: 2,
+                        Icon(icon, size: 20, color: foreground),
+                        const SizedBox(width: 8),
+                        Flexible(
+                          child: Text(
+                            label,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: AppTextStyles.body(
+                              fontWeight: FontWeight.w700,
                               color: foreground,
                             ),
-                          )
-                        else
-                          Icon(icon, size: 20, color: foreground),
-                        const SizedBox(width: 8),
-                        Text(
-                          label,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: AppTextStyles.body(
-                            fontWeight: FontWeight.w700,
-                            color: foreground,
                           ),
                         ),
                       ],

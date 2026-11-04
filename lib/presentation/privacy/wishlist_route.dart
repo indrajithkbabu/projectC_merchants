@@ -32,6 +32,7 @@ class WishlistRoute extends StatefulWidget {
     this.onBack,
     this.bottomInset = 0,
     this.embeddedInShell = false,
+    this.hideShellTitle = false,
     this.refreshSignal = 0,
   });
 
@@ -42,6 +43,10 @@ class WishlistRoute extends StatefulWidget {
 
   /// Shell tab: match Stores/Contacts title size + status-bar padding.
   final bool embeddedInShell;
+
+  /// When true (Wishlist hub), parent owns [ShellTabTitleBar] + pills — only
+  /// search / filters chrome is drawn here (no second status-bar inset).
+  final bool hideShellTitle;
 
   /// Bump from the shell when the Wishlist tab is selected so likes appear
   /// without remounting (quiet refresh when items already painted).
@@ -1002,59 +1007,69 @@ class _WishlistRouteState extends State<WishlistRoute>
 
     final collapsedActions = _collapsedChromeActions();
 
+    final hideTitle = widget.hideShellTitle && widget.embeddedInShell;
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         Padding(
           padding:
-              widget.embeddedInShell
+              hideTitle
+                  ? AppPadding.screen(top: 0, bottom: 8)
+                  : widget.embeddedInShell
                   ? ShellTabTitleBar.padding(context)
                   : AppPadding.screen(top: 4, bottom: 8),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              if (widget.embeddedInShell)
-                ShellTabTitleBar(
-                  title: 'Wishlist',
-                  titleBadge: countBadge,
-                  trailing: collapsedActions,
-                )
-              else
-                SizedBox(
-                  height: ShellTabTitleBar.rowHeight,
-                  child: Row(
-                    children: [
-                      if (widget.onBack != null)
-                        AppBackButton(onPressed: widget.onBack),
-                      Expanded(
-                        child: Align(
-                          alignment: Alignment.centerLeft,
-                          child: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Flexible(
-                                child: Text(
-                                  'Wishlist',
-                                  style: AppTextStyles.headline(
-                                    fontSize: 18,
-                                    fontWeight: FontWeight.w700,
-                                    height: 1.2,
+              if (!hideTitle) ...[
+                if (widget.embeddedInShell)
+                  ShellTabTitleBar(
+                    title: 'Wishlist',
+                    titleBadge: countBadge,
+                    trailing: collapsedActions,
+                  )
+                else
+                  SizedBox(
+                    height: ShellTabTitleBar.rowHeight,
+                    child: Row(
+                      children: [
+                        if (widget.onBack != null)
+                          AppBackButton(onPressed: widget.onBack),
+                        Expanded(
+                          child: Align(
+                            alignment: Alignment.centerLeft,
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Flexible(
+                                  child: Text(
+                                    'Wishlist',
+                                    style: AppTextStyles.headline(
+                                      fontSize: 18,
+                                      fontWeight: FontWeight.w700,
+                                      height: 1.2,
+                                    ),
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
                                   ),
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
                                 ),
-                              ),
-                              if (countBadge != null) ...[
-                                const SizedBox(width: 8),
-                                countBadge,
+                                if (countBadge != null) ...[
+                                  const SizedBox(width: 8),
+                                  countBadge,
+                                ],
                               ],
-                            ],
+                            ),
                           ),
                         ),
-                      ),
-                      collapsedActions,
-                    ],
+                        collapsedActions,
+                      ],
+                    ),
                   ),
+              ] else
+                Align(
+                  alignment: Alignment.centerRight,
+                  child: collapsedActions,
                 ),
               SizeTransition(
                 sizeFactor: _chromeFactor,
@@ -1066,7 +1081,7 @@ class _WishlistRouteState extends State<WishlistRoute>
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        const SizedBox(height: 10),
+                        SizedBox(height: hideTitle ? 0 : 10),
                         SearchAppBarField(
                           controller: _searchCtrl,
                           focusNode: _searchFocus,

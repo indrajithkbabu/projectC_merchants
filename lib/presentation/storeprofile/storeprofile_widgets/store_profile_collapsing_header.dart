@@ -7,14 +7,17 @@ import 'package:project_c/helper/app_padding.dart';
 import 'package:project_c/helper/colors.dart';
 import 'package:project_c/helper/text_styles.dart';
 import 'package:project_c/helper/widgets/appearance_scope.dart';
+import 'package:project_c/helper/widgets/cart_icon_button.dart';
+import 'package:project_c/di/service_locator.dart';
 import 'package:project_c/presentation/storeprofile/storeprofile_widgets/store_profile_header_card.dart';
 import 'package:project_c/presentation/storeprofile/storeprofile_widgets/visitor_photo_selection_chrome.dart';
+import 'package:project_c/services/cart_store.dart';
 
 /// Telegram floating-capsule store profile header (pinned overlay).
 ///
 /// Three frosted pills over the product grid (not a full-width bar):
 /// back circle · identity (DP + name + followers) · actions.
-/// Actions: own store → add + search; visitor browse → search only.
+/// Actions: own store → add + search; visitor browse → cart + search.
 /// Visitor Import is long-press selection (forward + bottom dock), not toolbar.
 class StoreProfileTelegramHeader extends StatelessWidget {
   const StoreProfileTelegramHeader({
@@ -26,6 +29,8 @@ class StoreProfileTelegramHeader extends StatelessWidget {
     required this.onAddProducts,
     required this.onImport,
     required this.onSearch,
+    this.onCart,
+    this.onDeleteSelected,
     this.selectedPhotoCount,
     this.showSelectionImport = true,
   });
@@ -37,9 +42,13 @@ class StoreProfileTelegramHeader extends StatelessWidget {
   final VoidCallback onAddProducts;
   final VoidCallback onImport;
   final VoidCallback onSearch;
+  final VoidCallback? onCart;
 
-  /// When non-null, visitor photo multi-select chrome: close icon, forward
-  /// (import) action, subtitle shows followers · N selected.
+  /// Own-store photo multi-select: replaces add/search with delete.
+  final VoidCallback? onDeleteSelected;
+
+  /// When non-null, photo multi-select chrome: close icon, subtitle shows
+  /// followers · N selected. Visitor may also show forward (import).
   final int? selectedPhotoCount;
 
   /// False for accounts with no store of their own (Wishlist only).
@@ -59,9 +68,18 @@ class StoreProfileTelegramHeader extends StatelessWidget {
 
   bool get _showSearch => !_photoSelecting && !state.isContentLocked;
 
-  /// Browse only — selection mode puts forward inside the identity pill.
+  /// Visitor cart badge — browse + selection (own store hides it).
+  bool get _showCart => !state.isOwnStore && onCart != null;
+
+  /// Own-store item select → delete in the actions pill (no Cancel/Delete bar).
+  bool get _showOwnerDelete =>
+      _photoSelecting && state.isOwnStore && onDeleteSelected != null;
+
+  /// Browse actions; cart / owner-delete also show during selection.
   bool get _showActionsPill =>
-      !_photoSelecting && (_showPrimaryAction || _showSearch);
+      _showCart ||
+      _showOwnerDelete ||
+      (!_photoSelecting && (_showPrimaryAction || _showSearch));
 
   @override
   Widget build(BuildContext context) {
@@ -226,6 +244,19 @@ class StoreProfileTelegramHeader extends StatelessWidget {
                   child: Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
+                      if (_showCart)
+                        _CartPillButton(
+                          color: onPill,
+                          onTap: onCart!,
+                        ),
+                      if (_showOwnerDelete)
+                        _PillIconButton(
+                          icon: Icons.delete_outline_rounded,
+                          color: AppColors.error,
+                          size: 22,
+                          tooltip: 'Delete',
+                          onTap: onDeleteSelected!,
+                        ),
                       if (_showPrimaryAction)
                         _PillIconButton(
                           icon: Icons.add_rounded,
@@ -363,6 +394,47 @@ class _PillIconButton extends StatelessWidget {
       hoverColor: Colors.transparent,
       focusColor: Colors.transparent,
       icon: Icon(icon, size: size, color: color),
+    );
+  }
+}
+
+class _CartPillButton extends StatelessWidget {
+  const _CartPillButton({required this.color, required this.onTap});
+
+  final Color color;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final cart = ServiceLocator.get<CartStore>();
+    return ListenableBuilder(
+      listenable: cart,
+      builder: (context, _) {
+        final count = cart.count;
+        return IconButton(
+          onPressed: onTap,
+          tooltip: 'Cart',
+          padding: EdgeInsets.zero,
+          visualDensity: VisualDensity.compact,
+          constraints: const BoxConstraints.tightFor(width: 40, height: 42),
+          splashColor: Colors.transparent,
+          highlightColor: Colors.transparent,
+          hoverColor: Colors.transparent,
+          focusColor: Colors.transparent,
+          icon: Stack(
+            clipBehavior: Clip.none,
+            children: [
+              Icon(Icons.shopping_cart_outlined, size: 22, color: color),
+              if (count > 0)
+                Positioned(
+                  right: -6,
+                  top: -4,
+                  child: CartCountBadge(count: count),
+                ),
+            ],
+          ),
+        );
+      },
     );
   }
 }

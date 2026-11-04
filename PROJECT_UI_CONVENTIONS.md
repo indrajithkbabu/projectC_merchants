@@ -115,6 +115,7 @@ Common picks:
   - Own-store shell: My store gear → `settings_route` (Appearance, View products, screenshots, logout/delete, **Account privacy**, **Import requests**). Profile tab (no-store only) still hosts Create store.
   - Stores home (own store): notification icon → `activity_route`. Store profile (pushed) is Discover-only for owner and visitor (no owner bottom nav). Shell Wishlist + My store tabs; product-details like snack **View** → shell Wishlist via `ShellNav` (quiet refresh).
   - From another store profile (only if viewer has own store): long-press photos → Import opens Quick upload prefilled (`quick_import_flow`). No visitor app-bar download/import icon beside search (browse = search only).
+  - Visitor store browse: long-press → selection dock **Add to cart** (+ Import when merchant, + Heart). Header cart badge → `cart_route` (Catalog `GET/POST /me/cart`; `CartStore` is badge cache only).
   - `country_picker_route` is opened from phone screen.
 
 ## Floating bottom navigation
@@ -207,6 +208,7 @@ Do not duplicate these widgets inside feature folders.
   `CatalogMediaDBG`. FE-only review cases: Logcat filter `FE_QA`.
   R2 responsive low+medium QA: Logcat filter `R2_QA` (L1 CDN tier,
   M1 presign renew, M2 batch `images[]`, M3 Accept webp).
+  Add-to-cart QA: Logcat filter CART_QA (docs/CART_QA.md, TC-00…TC-12).
   Paint via `ProductMediaImage` / `CatalogImageCache` (not a bare
   `CachedNetworkImage` sample). Presign renew uses BE `expiresIn`
   (default 300s) minus 50s buffer.

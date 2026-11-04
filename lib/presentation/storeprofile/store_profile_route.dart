@@ -16,6 +16,8 @@ import 'package:project_c/helper/import_qa.dart';
 import 'package:project_c/helper/product_gallery_picker.dart';
 import 'package:project_c/helper/product_image.dart';
 import 'package:project_c/helper/text_styles.dart';
+import 'package:project_c/helper/cart_qa.dart';
+import 'package:project_c/helper/visitor_cart_batch.dart';
 import 'package:project_c/helper/visitor_wishlist_batch.dart';
 import 'package:project_c/helper/widgets/appearance_scope.dart';
 import 'package:project_c/helper/widgets/catalog_image_edge_fades.dart';
@@ -26,6 +28,7 @@ import 'package:project_c/models/store_product.dart';
 import 'package:project_c/navigation/routes.dart';
 import 'package:project_c/navigation/smooth_fade_page_route.dart';
 import 'package:project_c/navigation/telegram_photo_page_route.dart';
+import 'package:project_c/presentation/cart/cart_route.dart';
 import 'package:project_c/presentation/privacy/privacy_widgets/follow_requests_banner.dart';
 import 'package:project_c/presentation/store_import/quick_import_flow.dart';
 import 'package:project_c/presentation/storeprofile/storeprofile_widgets/gallery_pinch_host.dart';
@@ -35,8 +38,10 @@ import 'package:project_c/presentation/storeprofile/storeprofile_widgets/store_p
 import 'package:project_c/presentation/storeprofile/storeprofile_widgets/store_product_grid.dart';
 import 'package:project_c/presentation/storeprofile/storeprofile_widgets/store_profile_collapsing_header.dart';
 import 'package:project_c/presentation/storeprofile/storeprofile_widgets/visitor_photo_selection_chrome.dart';
+import 'package:project_c/services/cart_store.dart';
 import 'package:project_c/services/product_view_preferences.dart';
 import 'package:project_c/storage/store_profile_scroll_cache.dart';
+import 'package:project_c/webservice/cart/cart_repository.dart';
 import 'package:project_c/webservice/catalog_error_mapper.dart';
 import 'package:project_c/webservice/wishlist/wishlist_repository.dart';
 
@@ -62,6 +67,7 @@ class _StoreProfileRouteState extends State<StoreProfileRoute> {
   /// True while selecting collage/gallery photos (owner or visitor).
   bool _visitorPhotoSelecting = false;
   bool _visitorWishlistBusy = false;
+  bool _visitorCartBusy = false;
   final GlobalKey _focusProductKey = GlobalKey();
   bool _didScrollToFocus = false;
 
@@ -705,74 +711,84 @@ class _StoreProfileRouteState extends State<StoreProfileRoute> {
 
   Future<void> _addProducts(BuildContext context) async {
     // Telegram gallery → WhatsApp compose (edit + title) → group form.
-    ProductGalleryPickResult pick = ProductGalleryPickResult.empty;
-    try {
-      pick = await ProductGalleryPicker.pickImages(
-        context,
-        includeCamera: true,
-        confirmAsSend: true,
+    // Compose back re-opens the sheet with the same selection (asset ids).
+    List<String>? restoreAssetIds;
+    while (context.mounted) {
+      ProductGalleryPickResult pick = ProductGalleryPickResult.empty;
+      try {
+        pick = await ProductGalleryPicker.pickImages(
+          context,
+          includeCamera: true,
+          confirmAsSend: true,
+          initialAssetIds: restoreAssetIds,
+        );
+      } catch (_) {
+        if (!context.mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Unable to open image picker right now.'),
+          ),
+        );
+        return;
+      }
+      if (!context.mounted || pick.paths.isEmpty) return;
+
+      final storeId = context.read<StoreProfileBloc>().state.storeId;
+      // Continue hero warm during route push (picker may already have started).
+      final heroIdx = pick.initialIndex.clamp(0, pick.paths.length - 1);
+      final heroPath = pick.paths[heroIdx];
+      final dpr = MediaQuery.devicePixelRatioOf(context);
+      final logicalW = MediaQuery.sizeOf(context).width;
+      final cacheWidth = ProductGalleryPicker.composeHeroDecodeWidth(
+        logicalWidth: logicalW,
+        dpr: dpr,
       );
-    } catch (_) {
+      unawaited(
+        precacheImage(
+          ResizeImage(FileImage(File(heroPath)), width: cacheWidth),
+          context,
+        ).then((_) {}, onError: (Object _, StackTrace __) {}),
+      );
+      assert(() {
+        debugPrint(
+          '[ComposeNavPerf] compose_route_push n=${pick.paths.length}',
+        );
+        return true;
+      }());
+      final composed = await Navigator.of(context).pushNamed(
+        Routes.addProductComposeRoute,
+        arguments: <String, Object?>{
+          'imagePaths': pick.paths,
+          'storeId': storeId,
+          'initialIndex': pick.initialIndex,
+        },
+      );
       if (!context.mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Unable to open image picker right now.')),
+      if (composed is! Map) {
+        // Back / swipe from compose — restore gallery selection, do not drop.
+        restoreAssetIds =
+            pick.assetIds.isEmpty ? null : List<String>.from(pick.assetIds);
+        continue;
+      }
+
+      final published = await Navigator.of(context).pushNamed(
+        Routes.addProductGroupRoute,
+        arguments: Map<String, Object?>.from(composed),
       );
+      if (!context.mounted) return;
+      if (published is Map) {
+        final payload = Map<String, Object?>.from(published);
+        // Background upload already started — shimmer is driven by coordinator.
+        if (payload['uploading'] == true) return;
+        context.read<StoreProfileBloc>().add(
+          StoreProfileProductPublished(StoreProduct.fromMap(payload)),
+        );
+        return;
+      }
+      // Done may popUntil store profile (result is null). Background upload
+      // shimmers via coordinator; avoid a full-grid reload shimmer.
       return;
     }
-    if (!context.mounted || pick.paths.isEmpty) return;
-
-    final storeId = context.read<StoreProfileBloc>().state.storeId;
-    // Continue hero warm during route push (picker may already have started).
-    final heroIdx =
-        pick.initialIndex.clamp(0, pick.paths.length - 1);
-    final heroPath = pick.paths[heroIdx];
-    final dpr = MediaQuery.devicePixelRatioOf(context);
-    final logicalW = MediaQuery.sizeOf(context).width;
-    final cacheWidth = ProductGalleryPicker.composeHeroDecodeWidth(
-      logicalWidth: logicalW,
-      dpr: dpr,
-    );
-    unawaited(
-      precacheImage(
-        ResizeImage(
-          FileImage(File(heroPath)),
-          width: cacheWidth,
-        ),
-        context,
-      ).then((_) {}, onError: (Object _, StackTrace __) {}),
-    );
-    assert(() {
-      debugPrint(
-        '[ComposeNavPerf] compose_route_push n=${pick.paths.length}',
-      );
-      return true;
-    }());
-    final composed = await Navigator.of(context).pushNamed(
-      Routes.addProductComposeRoute,
-      arguments: <String, Object?>{
-        'imagePaths': pick.paths,
-        'storeId': storeId,
-        'initialIndex': pick.initialIndex,
-      },
-    );
-    if (!context.mounted || composed is! Map) return;
-
-    final published = await Navigator.of(context).pushNamed(
-      Routes.addProductGroupRoute,
-      arguments: Map<String, Object?>.from(composed),
-    );
-    if (!context.mounted) return;
-    if (published is Map) {
-      final payload = Map<String, Object?>.from(published);
-      // Background upload already started — shimmer is driven by coordinator.
-      if (payload['uploading'] == true) return;
-      context.read<StoreProfileBloc>().add(
-        StoreProfileProductPublished(StoreProduct.fromMap(payload)),
-      );
-      return;
-    }
-    // Done may popUntil store profile (result is null). Background upload
-    // shimmers via coordinator; avoid a full-grid reload shimmer.
   }
 
   Future<void> _openCollectionBrowse(
@@ -1532,16 +1548,15 @@ class _StoreProfileRouteState extends State<StoreProfileRoute> {
   }) {
     final topPad = ScreenWrapper.statusBarTop(context);
     final headerExtent = StoreProfileTelegramHeader.extentFor(topPad);
-    // Owner delete selection bar sits under the Telegram header
-    // (whole-product select OR photo-item select).
+    // Whole-product select still uses a Cancel/Delete bar under the header.
+    // Owner item (photo) select uses header delete icon (replaces add/search).
     // Visitor photo select uses the header itself (close · DP · count).
     const selectionBarBlock = 56.0;
-    final showOwnerSelectionBar =
-        state.isOwnStore &&
-        ((_selectionMode && !_visitorPhotoSelecting) ||
-            _visitorPhotoSelecting);
+    final showOwnerListingSelectionBar =
+        state.isOwnStore && _selectionMode && !_visitorPhotoSelecting;
     final scrollTop =
-        headerExtent + (showOwnerSelectionBar ? selectionBarBlock : 0);
+        headerExtent +
+        (showOwnerListingSelectionBar ? selectionBarBlock : 0);
     // Prefer viewPadding — body extends under the home indicator.
     final safeBottom = MediaQuery.viewPaddingOf(context).bottom;
     // Visitor photo select → Import / Wishlist dock (hides Follow while active).
@@ -1610,6 +1625,14 @@ class _StoreProfileRouteState extends State<StoreProfileRoute> {
             // Selection-mode forward only (no visitor browse toolbar Import).
             onImport: () => _onVisitorSelectionImport(state),
             onSearch: () => _openStoreSearch(context, state),
+            onCart: () => Navigator.of(context).pushNamed(Routes.cartRoute),
+            // Own-store item select: delete replaces add/search (no extra bar).
+            onDeleteSelected:
+                state.isOwnStore &&
+                        _visitorPhotoSelecting &&
+                        _selectedPhotoKeys.isNotEmpty
+                    ? () => _confirmDeleteSelectedItems(context)
+                    : null,
             // Never offer Import while owning this store (item delete instead).
             showSelectionImport: state.canImport && !state.isOwnStore,
           ),
@@ -1634,46 +1657,56 @@ class _StoreProfileRouteState extends State<StoreProfileRoute> {
               ),
             ),
           ),
-        // Owner photo multi-select → Delete selected items (not whole listing).
-        if (_visitorPhotoSelecting && state.isOwnStore)
-          Positioned(
-            top: headerExtent,
-            left: 0,
-            right: 0,
-            child: Material(
-              color: AppColors.background.withValues(alpha: 0.96),
-              child: Padding(
-                padding: AppPadding.screenHorizontal,
-                child: _SelectionBar(
-                  count: _selectedPhotoKeys.length,
-                  selectLabel: 'Select items',
-                  onCancel: _exitSelection,
-                  onDelete:
-                      _selectedPhotoKeys.isEmpty
-                          ? null
-                          : () => _confirmDeleteSelectedItems(context),
-                ),
-              ),
-            ),
-          ),
         if (_visitorPhotoSelecting && !state.isOwnStore)
           Builder(
             builder: (context) {
+              final products = [...state.products, ...state.productsForMedia];
               final split = visitorImportSelectionSplit(
                 photoKeys: _selectedPhotoKeys,
-                products: [...state.products, ...state.productsForMedia],
+                products: products,
               );
-              return VisitorPhotoSelectionOverlay(
-                onImport:
-                    state.canImport
-                        ? () => _onVisitorSelectionImport(state)
-                        : null,
-                onWishlist: _onVisitorSelectionWishlist,
-                wishlistBusy: _visitorWishlistBusy,
-                showImport: state.canImport,
-                importCount: _selectedPhotoKeys.length,
-                importInstantCount: split.instant,
-                importPendingCount: split.pending,
+              final cart = ServiceLocator.get<CartStore>();
+              return ListenableBuilder(
+                listenable: cart,
+                builder: (context, _) {
+                  final breakdown = VisitorCartBatch.breakdown(
+                    photoKeys: _selectedPhotoKeys,
+                    products: products,
+                    cart: cart,
+                  );
+                  return VisitorPhotoSelectionOverlay(
+                    onAddToCart: () => _onVisitorSelectionAddToCart(state),
+                    onGoToCart: () {
+                      CartQa.caseStart(
+                        'TC-03',
+                        'Go to cart from selection dock '
+                        'inCart=${breakdown.alreadyInCart}',
+                      );
+                      Navigator.of(context).pushNamed(Routes.cartRoute).then((
+                        _,
+                      ) {
+                        CartQa.caseEnd(
+                          'TC-03',
+                          pass: true,
+                          detail: 'returned from cart',
+                        );
+                      });
+                    },
+                    onImport:
+                        state.canImport
+                            ? () => _onVisitorSelectionImport(state)
+                            : null,
+                    onWishlist: _onVisitorSelectionWishlist,
+                    wishlistBusy: _visitorWishlistBusy,
+                    cartBusy: _visitorCartBusy,
+                    showImport: state.canImport,
+                    importCount: _selectedPhotoKeys.length,
+                    importInstantCount: split.instant,
+                    importPendingCount: split.pending,
+                    cartBreakdown: breakdown,
+                    cartFull: cart.isFull && breakdown.addable > 0,
+                  );
+                },
               );
             },
           ),
@@ -1783,11 +1816,72 @@ class _StoreProfileRouteState extends State<StoreProfileRoute> {
             msg.isEmpty
                 ? 'Could not update wishlist. Please try again.'
                 : msg,
+          ),
         ),
-      ),
-    );
+      );
+    }
   }
-}
+
+  Future<void> _onVisitorSelectionAddToCart(StoreProfileState state) async {
+    if (_visitorCartBusy || _selectedPhotoKeys.isEmpty) return;
+    final products = [...state.products, ...state.productsForMedia];
+    final breakdown = VisitorCartBatch.breakdown(
+      photoKeys: _selectedPhotoKeys,
+      products: products,
+      cart: ServiceLocator.get<CartStore>(),
+    );
+    final tc =
+        (breakdown.alreadyInCart > 0 || breakdown.outOfStock > 0)
+            ? 'TC-02'
+            : 'TC-01';
+    CartQa.caseStart(
+      tc,
+      'Selection Add to cart '
+      'sel=${breakdown.selected} addable=${breakdown.addable} '
+      'inCart=${breakdown.alreadyInCart} oos=${breakdown.outOfStock}',
+    );
+    setState(() => _visitorCartBusy = true);
+    try {
+      final cart = ServiceLocator.get<CartRepository>();
+      final result = await VisitorCartBatch.addSelected(
+        cart: cart,
+        photoKeys: Set<String>.from(_selectedPhotoKeys),
+        products: products,
+        storeId: state.storeId,
+        storeName: state.storeName,
+        storeAvatarUrl: state.coverImageUrl,
+      );
+      if (!mounted) return;
+      setState(() {
+        _selectedPhotoKeys.clear();
+        _selectionMode = false;
+        _visitorPhotoSelecting = false;
+        _visitorCartBusy = false;
+      });
+      showCartAddSnack(
+        context,
+        result,
+        storeCountAfter: result.storeCount ?? cart.storeCount,
+      );
+      CartQa.caseEnd(
+        tc,
+        pass: true,
+        detail: 'toast="${result.toastMessage}" stores=${result.storeCount}',
+      );
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _visitorCartBusy = false);
+      CartQa.caseEnd(tc, pass: false, detail: '$e');
+      final msg = CatalogErrorMapper.toUserMessage(e).trim();
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            msg.isEmpty ? 'Could not update cart. Please try again.' : msg,
+          ),
+        ),
+      );
+    }
+  }
 
   /// Back from owner tabs / visitor header → store listing home.
   void _goHome(BuildContext context) {
@@ -1964,13 +2058,11 @@ class _SelectionBar extends StatelessWidget {
     required this.count,
     required this.onCancel,
     required this.onDelete,
-    this.selectLabel = 'Select products',
   });
 
   final int count;
   final VoidCallback onCancel;
   final VoidCallback? onDelete;
-  final String selectLabel;
 
   @override
   Widget build(BuildContext context) {
@@ -1994,7 +2086,9 @@ class _SelectionBar extends StatelessWidget {
               ),
               Expanded(
                 child: Text(
-                  count == 0 ? selectLabel : '$count selected',
+                  count == 0
+                      ? 'Select products'
+                      : '$count selected',
                   textAlign: TextAlign.center,
                   style: AppTextStyles.body(fontWeight: FontWeight.w600),
                 ),

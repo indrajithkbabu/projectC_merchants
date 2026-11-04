@@ -91,6 +91,11 @@ This file defines what to follow for UI and logic inside `lib/presentation/produ
   refreshes chips without a snackbar. No snackbar on like/unlike; like stays
   interactive (no spinner) while the short API call runs (`isLikeBusy`
   still guards double-submit). Double-tap zoom is unchanged.
+- **Cart (visitors):** trolley icon beside heart calls
+  `POST /products/:id/cart` (alias → `POST /me/cart`) or
+  `DELETE /me/cart/:id`. Out-of-stock dims the control. In-cart state shows
+  a check; snack prefers server `toastMessage` + **View** → `cart_route`.
+  Long-press the icon also opens the cart. Own-store chrome has no cart.
 - **Photo views:** after ≥1s dwell on the current photo, enqueue
   `photo` (+ `collection` / `subgroup` when applicable) via `ViewBeacon`
   (`POST /views`). Chrome shows **photo `viewCount`** (eye chip) when the

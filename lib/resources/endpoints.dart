@@ -61,6 +61,10 @@ class Endpoints {
   static String storeProducts(String storeId) => '/stores/$storeId/products';
   static String storeProductsBatch(String storeId) =>
       '/stores/$storeId/products/batch';
+  /// Multi-select soft-delete — `POST` body `{ productIds }` (max 100).
+  /// Prefer over `DELETE …/products/batch` so mobile proxies keep the JSON body.
+  static String storeProductsDeleteBatch(String storeId) =>
+      '/stores/$storeId/products/delete-batch';
   static String storeFeed(String storeId) => '/stores/$storeId/feed';
   static String productById(String productId) => '/products/$productId';
   static String productPatch(String productId) => '/products/$productId';
@@ -123,6 +127,15 @@ class Endpoints {
 
   /// Alias kept for older call sites → product-level like.
   static String productListingLike(String listingId) => productLike(listingId);
+
+  // Cart (`CATALOG_CART_API.md`)
+  static const String meCart = '/me/cart';
+  static const String meCartCount = '/me/cart/count';
+  static const String meCartBatch = '/me/cart/batch';
+  static String meCartItem(String productId) => '/me/cart/$productId';
+  static String meCartItemWishlist(String productId) =>
+      '/me/cart/$productId/wishlist';
+  static String productCart(String productId) => '/products/$productId/cart';
 
   // Private wishlist (no notifications / no public counters)
   static const String wishlist = '/wishlist';

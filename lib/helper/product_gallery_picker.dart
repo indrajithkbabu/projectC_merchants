@@ -51,30 +51,42 @@ void _composeNavPerf(String stage, {int? n, Stopwatch? sw}) {
 
 /// Paths from [ProductGalleryPicker.pickImages], plus which photo to show
 /// first on the next screen (Telegram: body tap opens that image).
+///
+/// [assetIds] mirrors library selections (same order as [paths] when both
+/// resolve). Used to restore badges if compose is dismissed with back.
 class ProductGalleryPickResult {
   const ProductGalleryPickResult({
     required this.paths,
     this.initialIndex = 0,
+    this.assetIds = const [],
   });
 
   final List<String> paths;
   final int initialIndex;
+
+  /// `photo_manager` asset ids for gallery picks (empty for camera-only).
+  final List<String> assetIds;
 
   static const empty = ProductGalleryPickResult(paths: []);
 }
 
 /// Result from the gallery sheet (paths or “open full camera after dismiss”).
 class _GallerySheetResult {
-  const _GallerySheetResult.paths(this.paths, {this.initialIndex = 0})
-    : openCamera = false;
+  const _GallerySheetResult.paths(
+    this.paths, {
+    this.initialIndex = 0,
+    this.assetIds = const [],
+  }) : openCamera = false;
 
   const _GallerySheetResult.openCamera()
     : paths = const [],
       initialIndex = 0,
+      assetIds = const [],
       openCamera = true;
 
   final List<String> paths;
   final int initialIndex;
+  final List<String> assetIds;
   final bool openCamera;
 }
 
@@ -184,17 +196,22 @@ class ProductGalleryPicker {
     BuildContext context, {
     bool includeCamera = false,
     bool confirmAsSend = false,
+    List<String>? initialAssetIds,
   }) async {
     final result = await pickImages(
       context,
       includeCamera: includeCamera,
       confirmAsSend: confirmAsSend,
+      initialAssetIds: initialAssetIds,
     );
     return result.paths;
   }
 
   /// Same as [pickImagePaths], plus [ProductGalleryPickResult.initialIndex]
   /// for the photo that should open first on the next screen.
+  ///
+  /// [initialAssetIds]: restore numbered selection after compose back — applied
+  /// once after the first page paints (not on scroll). Max [maxAssets].
   ///
   /// Lightweight bottom-sheet [PopupRoute]: dimmed barrier, slide-up, rounded
   /// sheet, drag handle, tap-outside / back to dismiss — same look as
@@ -204,12 +221,17 @@ class ProductGalleryPicker {
     BuildContext context, {
     bool includeCamera = false,
     bool confirmAsSend = false,
+    List<String>? initialAssetIds,
   }) async {
     if (!context.mounted) return ProductGalleryPickResult.empty;
 
     // Start album + first page before the route is pushed so thumbs are often
     // ready as the sheet finishes sliding up (avoids empty→photos flicker).
     final warm = _warmFirstPage();
+    final restoreIds = [
+      for (final id in (initialAssetIds ?? const <String>[]))
+        if (id.trim().isNotEmpty) id.trim(),
+    ].take(maxAssets).toList(growable: false);
 
     final result = await Navigator.of(context, rootNavigator: true)
         .push<_GallerySheetResult>(
@@ -217,6 +239,7 @@ class ProductGalleryPicker {
         includeCamera: includeCamera,
         confirmAsSend: confirmAsSend,
         warm: warm,
+        initialAssetIds: restoreIds,
       ),
     );
     _composeNavPerf(
@@ -228,6 +251,7 @@ class ProductGalleryPicker {
       return ProductGalleryPickResult(
         paths: result.paths,
         initialIndex: result.initialIndex,
+        assetIds: result.assetIds,
       );
     }
 
@@ -344,11 +368,13 @@ class _GallerySheetPopupRoute extends PopupRoute<_GallerySheetResult> {
     required this.includeCamera,
     required this.confirmAsSend,
     required this.warm,
+    this.initialAssetIds = const [],
   });
 
   final bool includeCamera;
   final bool confirmAsSend;
   final Future<_GalleryWarmResult> warm;
+  final List<String> initialAssetIds;
 
   /// Matches Material modal bottom sheet enter (~250–280ms).
   @override
@@ -386,6 +412,7 @@ class _GallerySheetPopupRoute extends PopupRoute<_GallerySheetResult> {
         includeCamera: includeCamera,
         confirmAsSend: confirmAsSend,
         warm: warm,
+        initialAssetIds: initialAssetIds,
       ),
     );
   }
@@ -420,11 +447,15 @@ class _ProductGallerySheet extends StatefulWidget {
     this.includeCamera = false,
     this.confirmAsSend = false,
     required this.warm,
+    this.initialAssetIds = const [],
   });
 
   final bool includeCamera;
   final bool confirmAsSend;
   final Future<_GalleryWarmResult> warm;
+
+  /// Restore selection once after first page (compose-back). Not used in scroll.
+  final List<String> initialAssetIds;
 
   @override
   State<_ProductGallerySheet> createState() => _ProductGallerySheetState();
@@ -477,6 +508,7 @@ class _ProductGallerySheetState extends State<_ProductGallerySheet> {
   bool _albumMenuOpen = false;
   bool _ignoreGridListener = false;
   bool _openingCamera = false;
+  bool _didRestoreInitialSelection = false;
 
   @override
   void initState() {
@@ -649,6 +681,46 @@ class _ProductGallerySheetState extends State<_ProductGallerySheet> {
         ..addAll(result.assets);
     });
     _syncGridFromSelected();
+    // Restore after first paint — never during scroll. fromId is one-shot.
+    unawaited(_restoreInitialSelectionIfNeeded());
+  }
+
+  /// Re-select assets after compose back. Runs once; parallel [AssetEntity.fromId]
+  /// only (no library scan, no path IO on the scroll path).
+  Future<void> _restoreInitialSelectionIfNeeded() async {
+    if (_didRestoreInitialSelection) return;
+    final ids = widget.initialAssetIds;
+    if (ids.isEmpty) {
+      _didRestoreInitialSelection = true;
+      return;
+    }
+    _didRestoreInitialSelection = true;
+
+    final entities = await Future.wait([
+      for (final id in ids.take(ProductGalleryPicker.maxAssets))
+        AssetEntity.fromId(id),
+    ]);
+    if (!mounted) return;
+
+    final restored = <AssetEntity>[
+      for (final e in entities)
+        if (e != null) e,
+    ];
+    if (restored.isEmpty) return;
+
+    _selected
+      ..clear()
+      ..addAll(restored);
+    _selectedIds
+      ..clear()
+      ..addAll([for (final e in restored) e.id]);
+    _rebuildSelectionOrder();
+    if (_selectedCount.value != _selected.length) {
+      _selectedCount.value = _selected.length;
+    }
+    _syncGridFromSelected();
+    // One rebuild for badge paints on visible cells — not per-scroll.
+    if (mounted) setState(() {});
   }
 
   /// Album covers/counts only when the dropdown opens (not on every sheet open).
@@ -1023,6 +1095,7 @@ class _ProductGallerySheetState extends State<_ProductGallerySheet> {
       ]);
     }
     final paths = <String>[];
+    final assetIds = <String>[];
     var resolvedInitial = 0;
     for (var i = 0; i < selected.length; i++) {
       final path = files[i]?.path.trim() ?? '';
@@ -1031,6 +1104,7 @@ class _ProductGallerySheetState extends State<_ProductGallerySheet> {
         resolvedInitial = paths.length;
       }
       paths.add(path);
+      assetIds.add(selected[i].id);
     }
     // If hero file failed but others succeeded, still warm the shown path.
     if (heroPath.isEmpty && paths.isNotEmpty) {
@@ -1048,7 +1122,11 @@ class _ProductGallerySheetState extends State<_ProductGallerySheet> {
     }
     _composeNavPerf('gallery_pop', n: paths.length, sw: sw);
     Navigator.of(context).pop(
-      _GallerySheetResult.paths(paths, initialIndex: resolvedInitial),
+      _GallerySheetResult.paths(
+        paths,
+        initialIndex: resolvedInitial,
+        assetIds: assetIds,
+      ),
     );
   }
 

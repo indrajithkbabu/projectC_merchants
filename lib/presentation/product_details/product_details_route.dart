@@ -7,6 +7,7 @@ import 'package:project_c/bloc/product_details/product_details_bloc.dart';
 import 'package:project_c/di/service_locator.dart';
 import 'package:project_c/helper/app_padding.dart';
 import 'package:project_c/helper/be_verify.dart';
+import 'package:project_c/helper/cart_qa.dart';
 import 'package:project_c/helper/catalog_ui_mapper.dart';
 import 'package:project_c/helper/colors.dart';
 import 'package:project_c/helper/product_image.dart';
@@ -15,14 +16,16 @@ import 'package:project_c/helper/widgets/app_back_button.dart';
 import 'package:project_c/helper/widgets/screen_wrapper.dart';
 import 'package:project_c/models/bulk_upload.dart';
 import 'package:project_c/models/catalog/catalog_product_models.dart';
-import 'package:project_c/models/catalog/collection_models.dart';
 import 'package:project_c/models/catalog/collection_specifications.dart';
 import 'package:project_c/models/store_product.dart';
 import 'package:project_c/navigation/routes.dart';
 import 'package:project_c/navigation/telegram_photo_page_route.dart';
+import 'package:project_c/presentation/cart/cart_route.dart';
 import 'package:project_c/presentation/product_details/product_details_widgets/product_details_widgets.dart';
+import 'package:project_c/services/cart_store.dart';
 import 'package:project_c/services/product_details_preferences.dart';
 import 'package:project_c/services/view_beacon.dart';
+import 'package:project_c/webservice/cart/cart_repository.dart';
 import 'package:project_c/webservice/catalog_error_mapper.dart';
 import 'package:project_c/webservice/collection/collection_repository.dart';
 
@@ -687,6 +690,69 @@ class _ProductDetailsRouteState extends State<ProductDetailsRoute> {
     }
   }
 
+  Future<void> _toggleCartFromPhoto(
+    ProductDetailsState state,
+    int photoIndex,
+  ) async {
+    final productId = state.catalogProductIdForPhoto(photoIndex).trim();
+    if (productId.isEmpty) return;
+    final stock = state.product.stockStatusAt(photoIndex);
+    if (stock == CatalogStockStatus.outOfStock) {
+      CartQa.caseStart(
+        'TC-05b',
+        'Photo OOS add blocked id=${CartQa.shortId(productId)}',
+      );
+      CartQa.caseEnd('TC-05b', pass: true, detail: 'add blocked');
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Out of stock')),
+      );
+      return;
+    }
+    final cart = ServiceLocator.get<CartRepository>();
+    try {
+      if (cart.contains(productId)) {
+        CartQa.caseStart(
+          'TC-05',
+          'Photo remove id=${CartQa.shortId(productId)}',
+        );
+        await cart.removeProduct(productId);
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Removed from cart')),
+        );
+        CartQa.caseEnd('TC-05', pass: true, detail: 'removed');
+        return;
+      }
+      CartQa.caseStart(
+        'TC-05',
+        'Photo add id=${CartQa.shortId(productId)}',
+      );
+      final result = await cart.addProductId(productId);
+      if (!mounted) return;
+      showCartAddSnack(
+        context,
+        result,
+        storeCountAfter: result.storeCount ?? cart.storeCount,
+      );
+      CartQa.caseEnd(
+        'TC-05',
+        pass: true,
+        detail: 'toast="${result.toastMessage}"',
+      );
+    } catch (e) {
+      if (!mounted) return;
+      CartQa.caseEnd('TC-05', pass: false, detail: '$e');
+      final msg = CatalogErrorMapper.toUserMessage(e).trim();
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            msg.isEmpty ? 'Could not update cart. Please try again.' : msg,
+          ),
+        ),
+      );
+    }
+  }
+
   void _popDetails() {
     // So Telegram close continues from the dragged frame (not a full-size flash).
     if (_dismissDy > 0) {
@@ -1243,6 +1309,24 @@ class _ProductDetailsRouteState extends State<ProductDetailsRoute> {
                                               ),
                                             );
                                       },
+                                    ),
+                                    const SizedBox(width: 4),
+                                    _CartToggleIconButton(
+                                      productId: state.catalogProductIdForPhoto(
+                                        photoIndex,
+                                      ),
+                                      stock: state.product.stockStatusAt(
+                                        photoIndex,
+                                      ),
+                                      onToggle:
+                                          () => _toggleCartFromPhoto(
+                                            state,
+                                            photoIndex,
+                                          ),
+                                      onOpenCart:
+                                          () => Navigator.of(
+                                            context,
+                                          ).pushNamed(Routes.cartRoute),
                                     ),
                                     const SizedBox(width: 4),
                                   ],
@@ -1873,6 +1957,63 @@ class _WishlistIconButton extends StatelessWidget {
           ),
         ),
       ),
+    );
+  }
+}
+
+/// Add / remove cart for the current photo (FE-local [CartStore]).
+class _CartToggleIconButton extends StatelessWidget {
+  const _CartToggleIconButton({
+    required this.productId,
+    required this.onToggle,
+    required this.onOpenCart,
+    this.stock,
+  });
+
+  final String productId;
+  final CatalogStockStatus? stock;
+  final VoidCallback onToggle;
+  final VoidCallback onOpenCart;
+
+  @override
+  Widget build(BuildContext context) {
+    final cart = ServiceLocator.get<CartStore>();
+    final out = stock == CatalogStockStatus.outOfStock;
+    return ListenableBuilder(
+      listenable: cart,
+      builder: (context, _) {
+        final inCart = productId.isNotEmpty && cart.contains(productId);
+        // Photo overlay: fixed white/black so Night textOnPrimary==textPrimary
+        // never washes out the in-cart check.
+        return Material(
+          color:
+              inCart
+                  ? Colors.white
+                  : Colors.black.withValues(alpha: 0.35),
+          shape: const CircleBorder(),
+          child: InkWell(
+            onTap: out ? null : onToggle,
+            onLongPress: onOpenCart,
+            customBorder: const CircleBorder(),
+            child: SizedBox(
+              width: 36,
+              height: 36,
+              child: Center(
+                child: Opacity(
+                  opacity: out ? 0.4 : 1,
+                  child: Icon(
+                    inCart
+                        ? Icons.check_rounded
+                        : Icons.shopping_cart_outlined,
+                    size: 18,
+                    color: inCart ? Colors.black : Colors.white,
+                  ),
+                ),
+              ),
+            ),
+          ),
+        );
+      },
     );
   }
 }

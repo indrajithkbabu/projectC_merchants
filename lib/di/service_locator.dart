@@ -30,6 +30,9 @@ import 'package:project_c/webservice/store/store_repository.dart';
 import 'package:project_c/webservice/store/store_request.dart';
 import 'package:project_c/webservice/views/views_repository.dart';
 import 'package:project_c/webservice/views/views_request.dart';
+import 'package:project_c/services/cart_store.dart';
+import 'package:project_c/webservice/cart/cart_repository.dart';
+import 'package:project_c/webservice/cart/cart_request.dart';
 import 'package:project_c/webservice/wishlist/wishlist_repository.dart';
 import 'package:project_c/webservice/wishlist/wishlist_request.dart';
 
@@ -211,6 +214,19 @@ class ServiceLocator {
     );
     injector.map<WishlistRepository>(
       (i) => WishlistRepositoryImpl(request: i.get<WishlistRequest>()),
+      isSingleton: true,
+    );
+
+    injector.map<CartStore>((_) => CartStore(), isSingleton: true);
+    injector.map<CartRequest>(
+      (i) => CartRequest(apiClient: i.get<CatalogApiClient>()),
+      isSingleton: true,
+    );
+    injector.map<CartRepository>(
+      (i) => CartRepositoryImpl(
+        request: i.get<CartRequest>(),
+        store: i.get<CartStore>(),
+      ),
       isSingleton: true,
     );
 

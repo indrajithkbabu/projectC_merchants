@@ -9,11 +9,13 @@ import 'package:project_c/helper/product_image.dart';
 import 'package:project_c/models/catalog/catalog_profile.dart';
 import 'package:project_c/models/country_model.dart';
 import 'package:project_c/navigation/routes.dart';
+import 'package:project_c/services/cart_store.dart';
 import 'package:project_c/services/push_notification_service.dart';
 import 'package:project_c/services/store_home_prefetcher.dart';
 import 'package:project_c/services/view_beacon.dart';
 import 'package:project_c/services/wishlist_prefetcher.dart';
 import 'package:project_c/webservice/auth/auth_repository.dart';
+import 'package:project_c/webservice/cart/cart_repository.dart';
 import 'package:project_c/webservice/catalog_error_mapper.dart';
 import 'package:project_c/webservice/profile/profile_repository.dart';
 
@@ -238,6 +240,9 @@ class AuthBloc extends Bloc<AuthEvent, AuthState> {
         if (ownId.isNotEmpty) {
           WishlistPrefetcher.instance.prefetch();
         }
+        // Badge count for cart icon across store browse.
+        // ignore: discarded_futures
+        ServiceLocator.get<CartRepository>().hydrate();
       }
       final profileImage = profile.effectiveProfileImageUrl.trim();
       if (profileImage.isNotEmpty) {
@@ -343,6 +348,8 @@ class AuthBloc extends Bloc<AuthEvent, AuthState> {
       if (ownId.isNotEmpty) {
         WishlistPrefetcher.instance.prefetch();
       }
+      // ignore: discarded_futures
+      ServiceLocator.get<CartRepository>().hydrate();
       // Await avatar decode before shell mounts — nav profile must not flash.
       final profileImage = profile.effectiveProfileImageUrl.trim();
       if (profileImage.isNotEmpty) {
@@ -386,6 +393,7 @@ class AuthBloc extends Bloc<AuthEvent, AuthState> {
       );
       StoreHomePrefetcher.instance.invalidate();
       WishlistPrefetcher.instance.invalidate();
+      ServiceLocator.get<CartStore>().clear();
       ViewBeacon.instance.reset();
       DeviceContactNames.invalidate();
       await _authRepository.logout();
@@ -454,6 +462,7 @@ class AuthBloc extends Bloc<AuthEvent, AuthState> {
     );
     StoreHomePrefetcher.instance.invalidate();
     WishlistPrefetcher.instance.invalidate();
+    ServiceLocator.get<CartStore>().clear();
     ViewBeacon.instance.reset();
     DeviceContactNames.invalidate();
     // Unregister FCM while Bearer is still valid, then clear session.

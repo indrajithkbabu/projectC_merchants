@@ -38,6 +38,7 @@ import 'package:project_c/presentation/auth/otp_route.dart';
 import 'package:project_c/presentation/auth/phone_route.dart';
 import 'package:project_c/presentation/home/home_placeholder_route.dart';
 import 'package:project_c/presentation/bootstrap/bootstrap_route.dart';
+import 'package:project_c/presentation/cart/cart_route.dart';
 import 'package:project_c/presentation/main_shell/invite_friends_route.dart';
 import 'package:project_c/presentation/main_shell/main_shell_route.dart';
 import 'package:project_c/presentation/main_shell/tabs/settings_tab.dart';
@@ -117,6 +118,8 @@ PageRoute? onGenerateRoutes(RouteSettings settings) {
       return _collectionBrowseRoute(settings);
     case Routes.productDetailsRoute:
       return _productDetailsRoute(settings);
+    case Routes.cartRoute:
+      return _cartRoute(settings);
     case Routes.globalSearchRoute:
       return _globalSearchRoute(settings);
     case Routes.storeSearchRoute:
@@ -1131,6 +1134,13 @@ PageRoute? _collectionBrowseRoute(RouteSettings settings) {
           isOwnStore: isOwnStore,
           seedProducts: seedProducts,
         ),
+  );
+}
+
+PageRoute? _cartRoute(RouteSettings settings) {
+  return _buildAnimatedRoute(
+    settings: settings,
+    builder: (context) => const CartRoute(),
   );
 }
 

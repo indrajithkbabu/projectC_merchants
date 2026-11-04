@@ -14,6 +14,8 @@ import 'package:project_c/helper/catalog_ui_mapper.dart';
 import 'package:project_c/helper/colors.dart';
 import 'package:project_c/helper/product_image.dart';
 import 'package:project_c/helper/text_styles.dart';
+import 'package:project_c/helper/cart_qa.dart';
+import 'package:project_c/helper/visitor_cart_batch.dart';
 import 'package:project_c/helper/visitor_wishlist_batch.dart';
 import 'package:project_c/helper/whatsapp_invite.dart';
 import 'package:project_c/helper/widgets/app_back_button.dart';
@@ -26,12 +28,15 @@ import 'package:project_c/models/store_product.dart';
 import 'package:project_c/navigation/routes.dart';
 import 'package:project_c/navigation/smooth_fade_page_route.dart';
 import 'package:project_c/navigation/telegram_photo_page_route.dart';
+import 'package:project_c/presentation/cart/cart_route.dart';
 import 'package:project_c/presentation/storeprofile/storeprofile_widgets/gallery_pinch_host.dart';
 import 'package:project_c/presentation/storeprofile/storeprofile_widgets/store_product_gallery_sliver.dart';
 import 'package:project_c/presentation/storeprofile/storeprofile_widgets/store_product_grid.dart';
 import 'package:project_c/presentation/storeprofile/storeprofile_widgets/store_profile_header_card.dart';
 import 'package:project_c/presentation/storeprofile/storeprofile_widgets/store_visitor_follow_bar.dart';
 import 'package:project_c/presentation/storeprofile/storeprofile_widgets/visitor_photo_selection_chrome.dart';
+import 'package:project_c/services/cart_store.dart';
+import 'package:project_c/webservice/cart/cart_repository.dart';
 import 'package:project_c/webservice/catalog_error_mapper.dart';
 import 'package:project_c/webservice/wishlist/wishlist_repository.dart';
 
@@ -115,6 +120,7 @@ class _StoreChannelRouteState extends State<StoreChannelRoute>
   final Set<String> _selectedPhotoKeys = {};
   bool _visitorPhotoSelecting = false;
   bool _visitorWishlistBusy = false;
+  bool _visitorCartBusy = false;
 
   /// Local product list so wishlist like-count bumps paint without rebuild args.
   late List<StoreProduct> _products;
@@ -254,6 +260,64 @@ class _StoreChannelRouteState extends State<StoreChannelRoute>
             msg.isEmpty
                 ? 'Could not update wishlist. Please try again.'
                 : msg,
+          ),
+        ),
+      );
+    }
+  }
+
+  Future<void> _onVisitorSelectionAddToCart() async {
+    if (_visitorCartBusy || _selectedPhotoKeys.isEmpty) return;
+    final breakdown = VisitorCartBatch.breakdown(
+      photoKeys: _selectedPhotoKeys,
+      products: _products,
+      cart: ServiceLocator.get<CartStore>(),
+    );
+    final tc =
+        (breakdown.alreadyInCart > 0 || breakdown.outOfStock > 0)
+            ? 'TC-02'
+            : 'TC-01';
+    CartQa.caseStart(
+      tc,
+      'Channel selection Add '
+      'sel=${breakdown.selected} addable=${breakdown.addable} '
+      'inCart=${breakdown.alreadyInCart} oos=${breakdown.outOfStock}',
+    );
+    setState(() => _visitorCartBusy = true);
+    try {
+      final cart = ServiceLocator.get<CartRepository>();
+      final result = await VisitorCartBatch.addSelected(
+        cart: cart,
+        photoKeys: Set<String>.from(_selectedPhotoKeys),
+        products: _products,
+        storeId: widget.storeId,
+        storeName: widget.storeName,
+      );
+      if (!mounted) return;
+      setState(() {
+        _selectedPhotoKeys.clear();
+        _visitorPhotoSelecting = false;
+        _visitorCartBusy = false;
+      });
+      showCartAddSnack(
+        context,
+        result,
+        storeCountAfter: result.storeCount ?? cart.storeCount,
+      );
+      CartQa.caseEnd(
+        tc,
+        pass: true,
+        detail: 'toast="${result.toastMessage}"',
+      );
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _visitorCartBusy = false);
+      CartQa.caseEnd(tc, pass: false, detail: '$e');
+      final msg = CatalogErrorMapper.toUserMessage(e).trim();
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            msg.isEmpty ? 'Could not update cart. Please try again.' : msg,
           ),
         ),
       );
@@ -996,17 +1060,50 @@ class _StoreChannelRouteState extends State<StoreChannelRoute>
               builder: (context) {
                 final split = visitorImportSelectionSplit(
                   photoKeys: _selectedPhotoKeys,
-                  products: widget.products,
+                  products: _products,
                 );
-                return VisitorPhotoSelectionOverlay(
-                  onImport:
-                      _viewerCanImport ? _onVisitorSelectionImport : null,
-                  onWishlist: _onVisitorSelectionWishlist,
-                  wishlistBusy: _visitorWishlistBusy,
-                  showImport: _viewerCanImport,
-                  importCount: _selectedPhotoKeys.length,
-                  importInstantCount: split.instant,
-                  importPendingCount: split.pending,
+                final cart = ServiceLocator.get<CartStore>();
+                return ListenableBuilder(
+                  listenable: cart,
+                  builder: (context, _) {
+                    final breakdown = VisitorCartBatch.breakdown(
+                      photoKeys: _selectedPhotoKeys,
+                      products: _products,
+                      cart: cart,
+                    );
+                    return VisitorPhotoSelectionOverlay(
+                      onAddToCart: _onVisitorSelectionAddToCart,
+                      onGoToCart: () {
+                        CartQa.caseStart(
+                          'TC-03',
+                          'Channel Go to cart '
+                          'inCart=${breakdown.alreadyInCart}',
+                        );
+                        Navigator.of(context).pushNamed(Routes.cartRoute).then((
+                          _,
+                        ) {
+                          CartQa.caseEnd(
+                            'TC-03',
+                            pass: true,
+                            detail: 'returned from cart',
+                          );
+                        });
+                      },
+                      onImport:
+                          _viewerCanImport
+                              ? _onVisitorSelectionImport
+                              : null,
+                      onWishlist: _onVisitorSelectionWishlist,
+                      wishlistBusy: _visitorWishlistBusy,
+                      cartBusy: _visitorCartBusy,
+                      showImport: _viewerCanImport,
+                      importCount: _selectedPhotoKeys.length,
+                      importInstantCount: split.instant,
+                      importPendingCount: split.pending,
+                      cartBreakdown: breakdown,
+                      cartFull: cart.isFull && breakdown.addable > 0,
+                    );
+                  },
                 );
               },
             ),
