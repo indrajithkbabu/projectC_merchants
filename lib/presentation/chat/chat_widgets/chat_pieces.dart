@@ -7,6 +7,27 @@ import 'package:project_c/presentation/chat/chat_models.dart';
 const chatReadTick = Color(0xFF3B9BE8);
 const chatSwitchOn = Color(0xFF16A34A);
 
+/// Thread chrome uses the app palette. Night stays graphite; day uses the
+/// Telegram blue only for your bubble and the send button.
+Color get chatWallpaper => AppColors.scaffold;
+
+Color get chatBar => AppColors.surface;
+
+Color get chatIncoming =>
+    AppColors.isNight ? AppColors.surfaceSecondary : AppColors.surface;
+
+Color get chatSenderName =>
+    AppColors.isNight ? const Color(0xFF8FB9AE) : const Color(0xFF2E7D6B);
+
+Color get chatField =>
+    AppColors.isNight ? AppColors.surfaceSecondary : AppColors.scaffold;
+
+Color get chatInk => AppColors.textPrimary;
+
+Color get chatMuted => AppColors.textSecondary;
+
+Color get chatSend => AppColors.isNight ? AppColors.accent : AppColors.primary;
+
 const _avatarPalette = <Color>[
   Color(0xFF2AABEE),
   Color(0xFFE67E22),
@@ -25,10 +46,16 @@ Color chatAvatarColor(String seed) {
 }
 
 class ChatAvatar extends StatelessWidget {
-  const ChatAvatar({super.key, required this.actor, this.size = 48});
+  const ChatAvatar({
+    super.key,
+    required this.actor,
+    this.size = 48,
+    this.group = false,
+  });
 
   final ChatActor actor;
   final double size;
+  final bool group;
 
   @override
   Widget build(BuildContext context) {
@@ -40,14 +67,21 @@ class ChatAvatar extends StatelessWidget {
         color: chatAvatarColor(actor.id),
         shape: BoxShape.circle,
       ),
-      child: Text(
-        actor.initials,
-        style: AppTextStyles.caption(
-          fontSize: size < 36 ? 11 : 15,
-          fontWeight: FontWeight.w700,
-          color: Colors.white,
-        ),
-      ),
+      child:
+          group
+              ? Icon(
+                Icons.groups_rounded,
+                color: Colors.white,
+                size: size * 0.5,
+              )
+              : Text(
+                actor.initials,
+                style: AppTextStyles.caption(
+                  fontSize: size < 36 ? 11 : 15,
+                  fontWeight: FontWeight.w700,
+                  color: Colors.white,
+                ),
+              ),
     );
   }
 }
@@ -295,53 +329,95 @@ class _ChatTypingDotsState extends State<ChatTypingDots>
   }
 }
 
-Color _ownBubble() =>
-    AppColors.isNight ? AppColors.grey700 : const Color(0xFFF3F3F5);
-
-Color _otherBubble() =>
-    AppColors.isNight ? AppColors.grey900 : AppColors.grey850;
-
-Color _ownText() =>
-    AppColors.isNight ? AppColors.grey100 : AppColors.textPrimary;
+Color _otherBubble() => chatIncoming;
 
 class ChatBubble extends StatelessWidget {
   const ChatBubble({
     super.key,
     required this.message,
     required this.onReply,
+    this.onLongPress,
     this.onProductTap,
-    this.showStaffName = true,
+    this.senderLabel,
     this.alignRight,
-    this.showAutomaticLabel = true,
   });
 
   final ChatMessage message;
   final VoidCallback onReply;
+  final VoidCallback? onLongPress;
   final ValueChanged<ChatProductRef>? onProductTap;
-  final bool showStaffName;
+  final String? senderLabel;
 
   /// Right side is your own bubble. Defaults to store-side messages.
   final bool? alignRight;
 
-  /// Merchants see "Sent automatically". Customers see a normal store reply.
-  final bool showAutomaticLabel;
-
   @override
   Widget build(BuildContext context) {
     final mineSide = alignRight ?? message.side == ChatSenderSide.merchant;
-    final maxWidth = MediaQuery.sizeOf(context).width * 0.74;
+    final team = message.teamOnly;
+    final onWhite = mineSide && !team;
+    final textColor = onWhite ? const Color(0xFF111111) : chatInk;
+    final timeColor = onWhite ? const Color(0xFF667781) : chatMuted;
+    final maxWidth = MediaQuery.sizeOf(context).width * 0.78;
+    final label = senderLabel?.trim() ?? '';
     final bubble = ConstrainedBox(
       constraints: BoxConstraints(maxWidth: maxWidth),
       child: DecoratedBox(
         decoration: BoxDecoration(
-          color: mineSide ? _ownBubble() : _otherBubble(),
-          borderRadius: BorderRadius.circular(16),
+          color:
+              team
+                  ? (AppColors.isNight
+                      ? const Color(0xFF241F14)
+                      : const Color(0xFFFFF8EC))
+                  : (onWhite ? Colors.white : _otherBubble()),
+          borderRadius: BorderRadius.circular(18),
+          border:
+              team || onWhite || AppColors.isNight
+                  ? null
+                  : Border.all(color: AppColors.border),
         ),
         child: Padding(
-          padding: const EdgeInsets.fromLTRB(12, 8, 12, 6),
-          child: Column(
+          padding: const EdgeInsets.fromLTRB(12, 8, 10, 6),
+          child: DefaultTextStyle.merge(
+            style: TextStyle(color: textColor),
+            child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
+              if (team)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 4),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Icon(
+                        Icons.lock_rounded,
+                        size: 13,
+                        color: chatTeamNote,
+                      ),
+                      const SizedBox(width: 4),
+                      Text(
+                        'Only your team',
+                        style: AppTextStyles.caption(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w700,
+                          color: chatTeamNote,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              if (label.isNotEmpty)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 2),
+                  child: Text(
+                    label,
+                    style: AppTextStyles.caption(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w700,
+                      color: chatSenderName,
+                    ),
+                  ),
+                ),
               if (message.quote != null) _QuoteBlock(quote: message.quote!),
               if (message.kind == ChatMessageKind.basket)
                 _BasketGrid(message: message, onProductTap: onProductTap)
@@ -352,12 +428,13 @@ class ChatBubble extends StatelessWidget {
                 ),
               if (message.text.trim().isNotEmpty &&
                   message.kind != ChatMessageKind.productShare)
-                Text(
-                  message.text,
+                _MentionText(
+                  text: message.text,
+                  mentions: message.mentions,
                   style: AppTextStyles.body(
-                    fontSize: 15,
-                    height: 1.35,
-                    color: mineSide ? _ownText() : AppColors.grey100,
+                    fontSize: 15.5,
+                    height: 1.25,
+                    color: textColor,
                   ),
                 ),
               if (message.kind == ChatMessageKind.productShare &&
@@ -369,13 +446,13 @@ class ChatBubble extends StatelessWidget {
                   child: Text(
                     message.text,
                     style: AppTextStyles.body(
-                      fontSize: 15,
-                      height: 1.35,
-                      color: mineSide ? _ownText() : AppColors.grey100,
+                      fontSize: 15.5,
+                      height: 1.25,
+                      color: textColor,
                     ),
                   ),
                 ),
-              const SizedBox(height: 2),
+              const SizedBox(height: 1),
               Align(
                 alignment: Alignment.centerRight,
                 child: Row(
@@ -384,13 +461,8 @@ class ChatBubble extends StatelessWidget {
                     Text(
                       chatClock(message.at),
                       style: AppTextStyles.caption(
-                        fontSize: 10,
-                        color:
-                            mineSide
-                                ? (AppColors.isNight
-                                    ? AppColors.grey300
-                                    : AppColors.textSecondary)
-                                : AppColors.grey300,
+                        fontSize: 11,
+                        color: timeColor,
                       ),
                     ),
                     if (message.mine) ...[
@@ -401,49 +473,121 @@ class ChatBubble extends StatelessWidget {
                 ),
               ),
             ],
+            ),
           ),
         ),
       ),
     );
+    final framed = team ? _DashedOutline(child: bubble) : bubble;
 
     return ChatSwipeToReply(
       onReply: onReply,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(vertical: 2),
-        child: Column(
-          crossAxisAlignment:
-              mineSide ? CrossAxisAlignment.end : CrossAxisAlignment.start,
-          children: [
-            if (showStaffName &&
-                !message.mine &&
-                (message.staffName?.trim().isNotEmpty ?? false))
-              Padding(
-                padding: const EdgeInsets.only(bottom: 2, left: 4, right: 4),
-                child: Text(
-                  message.staffName!,
-                  style: AppTextStyles.caption(
-                    fontSize: 11,
-                    fontWeight: FontWeight.w600,
-                    color: AppColors.textSecondary,
-                  ),
-                ),
-              ),
-            bubble,
-            if (message.automatic && showAutomaticLabel)
-              Padding(
-                padding: const EdgeInsets.only(top: 2, right: 4),
-                child: Text(
-                  'Sent automatically',
-                  style: AppTextStyles.caption(
-                    fontSize: 11,
-                    color: AppColors.textHint,
-                  ),
-                ),
-              ),
-          ],
+      child: GestureDetector(
+        onLongPress: onLongPress,
+        child: Padding(
+          padding: EdgeInsets.fromLTRB(mineSide ? 0 : 6, 1, mineSide ? 6 : 0, 1),
+          child: framed,
         ),
       ),
     );
+  }
+}
+
+class _DashedOutline extends StatelessWidget {
+  const _DashedOutline({required this.child});
+
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    return CustomPaint(
+      foregroundPainter: const _DashedRRectPainter(color: chatTeamNote),
+      child: child,
+    );
+  }
+}
+
+class _DashedRRectPainter extends CustomPainter {
+  const _DashedRRectPainter({required this.color});
+
+  final Color color;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final rrect = RRect.fromRectAndRadius(
+      Rect.fromLTWH(0.8, 0.8, size.width - 1.6, size.height - 1.6),
+      const Radius.circular(18),
+    );
+    final path = Path()..addRRect(rrect);
+    final paint =
+        Paint()
+          ..color = color
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 1.2;
+    const dash = 5.0;
+    const gap = 3.5;
+    for (final metric in path.computeMetrics()) {
+      var distance = 0.0;
+      while (distance < metric.length) {
+        final end = (distance + dash).clamp(0.0, metric.length);
+        canvas.drawPath(metric.extractPath(distance, end), paint);
+        distance += dash + gap;
+      }
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _DashedRRectPainter oldDelegate) =>
+      oldDelegate.color != color;
+}
+
+class _MentionText extends StatelessWidget {
+  const _MentionText({
+    required this.text,
+    required this.mentions,
+    required this.style,
+  });
+
+  final String text;
+  final List<String> mentions;
+  final TextStyle style;
+
+  @override
+  Widget build(BuildContext context) {
+    if (mentions.isEmpty || !text.contains('@')) {
+      return Text(text, style: style);
+    }
+    final tokens = mentions
+        .map((name) => name.split(RegExp(r'\s+')).first)
+        .where((name) => name.isNotEmpty)
+        .toSet();
+    final pattern = RegExp(r'@([A-Za-z][A-Za-z0-9]*)');
+    final spans = <InlineSpan>[];
+    var cursor = 0;
+    for (final match in pattern.allMatches(text)) {
+      if (match.start > cursor) {
+        spans.add(TextSpan(text: text.substring(cursor, match.start)));
+      }
+      final token = match.group(1)!;
+      final hit = tokens.any((name) => name.toLowerCase() == token.toLowerCase());
+      spans.add(
+        TextSpan(
+          text: match.group(0),
+          style:
+              hit
+                  ? style.copyWith(
+                    color: chatReadTick,
+                    fontWeight: FontWeight.w700,
+                  )
+                  : style,
+        ),
+      );
+      cursor = match.end;
+    }
+    if (cursor < text.length) {
+      spans.add(TextSpan(text: text.substring(cursor)));
+    }
+    return Text.rich(TextSpan(style: style, children: spans));
   }
 }
 
@@ -583,10 +727,7 @@ class ChatStatusLine extends StatelessWidget {
       child: Text(
         text,
         textAlign: TextAlign.center,
-        style: AppTextStyles.caption(
-          fontSize: 12,
-          color: AppColors.textSecondary,
-        ),
+        style: AppTextStyles.caption(fontSize: 12, color: chatMuted),
       ),
     );
   }
@@ -606,13 +747,14 @@ class ChatDayChip extends StatelessWidget {
           padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
           decoration: BoxDecoration(
             color: AppColors.surfaceSecondary,
-            borderRadius: BorderRadius.circular(10),
+            borderRadius: BorderRadius.circular(8),
           ),
           child: Text(
             label,
             style: AppTextStyles.caption(
-              fontSize: 11,
-              fontWeight: FontWeight.w600,
+              fontSize: 12,
+              fontWeight: FontWeight.w500,
+              color: chatMuted,
             ),
           ),
         ),

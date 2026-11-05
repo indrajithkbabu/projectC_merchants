@@ -17,7 +17,10 @@ import 'package:project_c/services/store_products_prefetcher.dart';
 /// Contacts tab: Invite Friends + Stores. Phone contacts appear only while
 /// searching (or on the dedicated Invite Friends screen).
 class ContactsTab extends StatefulWidget {
-  const ContactsTab({super.key});
+  const ContactsTab({super.key, this.showBack = false});
+
+  /// Pushed from New chat as Find stores. The shell no longer hosts this tab.
+  final bool showBack;
 
   @override
   State<ContactsTab> createState() => _ContactsTabState();
@@ -43,6 +46,13 @@ class _ContactsTabState extends State<ContactsTab> {
   void initState() {
     super.initState();
     _searchController = TextEditingController();
+    if (widget.showBack) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        context.read<ContactsBloc>().add(const ContactsRefreshed());
+        context.read<StoreListingBloc>().add(const StoreListingRefreshed());
+      });
+    }
   }
 
   @override
@@ -119,7 +129,10 @@ class _ContactsTabState extends State<ContactsTab> {
 
   @override
   Widget build(BuildContext context) {
-    final bottomPad = FloatingBottomNavBar.reservedHeight(context) + 8;
+    final bottomPad =
+        widget.showBack
+            ? MediaQuery.paddingOf(context).bottom + 8
+            : FloatingBottomNavBar.reservedHeight(context) + 8;
 
     return BlocListener<ContactsBloc, ContactsState>(
       listenWhen:
@@ -144,7 +157,31 @@ class _ContactsTabState extends State<ContactsTab> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const ShellTabTitleBar(title: 'Contacts'),
+                  if (widget.showBack)
+                    Row(
+                      children: [
+                        IconButton(
+                          tooltip: 'Back',
+                          onPressed: () => Navigator.of(context).maybePop(),
+                          icon: Icon(
+                            Icons.arrow_back_ios_new_rounded,
+                            size: 20,
+                            color: AppColors.backIcon,
+                          ),
+                        ),
+                        Expanded(
+                          child: Text(
+                            'Find stores',
+                            style: AppTextStyles.headline(
+                              fontSize: 22,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                        ),
+                      ],
+                    )
+                  else
+                    const ShellTabTitleBar(title: 'Contacts'),
                   const SizedBox(height: 12),
                   _ContactsSearchField(
                     controller: _searchController,

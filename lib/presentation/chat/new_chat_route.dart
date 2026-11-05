@@ -1,4 +1,7 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:project_c/bloc/contacts/contacts_bloc.dart';
+import 'package:project_c/bloc/store_listing/store_listing_bloc.dart';
 import 'package:project_c/helper/app_padding.dart';
 import 'package:project_c/helper/colors.dart';
 import 'package:project_c/helper/text_styles.dart';
@@ -7,11 +10,19 @@ import 'package:project_c/navigation/routes.dart';
 import 'package:project_c/presentation/chat/chat_mock_store.dart';
 import 'package:project_c/presentation/chat/chat_models.dart';
 import 'package:project_c/presentation/chat/chat_widgets/chat_pieces.dart';
+import 'package:project_c/presentation/chat/new_group_route.dart';
+import 'package:project_c/presentation/main_shell/tabs/contacts_tab.dart';
 
-/// Searchable list of customers who follow the store. Opens the existing
-/// chat or starts an empty one that stays off the list until a message is sent.
+/// New chat: group, find stores, invite, then stores and followers.
 class NewChatRoute extends StatefulWidget {
-  const NewChatRoute({super.key});
+  const NewChatRoute({
+    super.key,
+    this.contactsBloc,
+    this.storeListingBloc,
+  });
+
+  final ContactsBloc? contactsBloc;
+  final StoreListingBloc? storeListingBloc;
 
   @override
   State<NewChatRoute> createState() => _NewChatRouteState();
@@ -33,8 +44,12 @@ class _NewChatRouteState extends State<NewChatRoute> {
     final people =
         ChatMockStore.instance.followers.where((person) {
           if (query.isEmpty) return true;
-          return person.name.toLowerCase().contains(query);
+          final phone = person.phone.replaceAll(RegExp(r'\s+'), '');
+          return person.name.toLowerCase().contains(query) ||
+              phone.contains(query);
         }).toList();
+    final stores = people.where((person) => person.isStoreAccount).toList();
+    final followers = people.where((person) => !person.isStoreAccount).toList();
 
     return ScreenWrapper(
       backgroundColor: AppColors.scaffold,
@@ -72,13 +87,6 @@ class _NewChatRouteState extends State<NewChatRoute> {
             ),
           ),
           Padding(
-            padding: AppPadding.screen(bottom: 8),
-            child: Text(
-              'Customers who follow the store',
-              style: AppTextStyles.caption(),
-            ),
-          ),
-          Padding(
             padding: AppPadding.screenHorizontal,
             child: TextField(
               controller: _search,
@@ -86,7 +94,7 @@ class _NewChatRouteState extends State<NewChatRoute> {
               style: AppTextStyles.body(fontSize: 15),
               textInputAction: TextInputAction.search,
               decoration: InputDecoration(
-                hintText: 'Search',
+                hintText: 'Search name or number',
                 hintStyle: AppTextStyles.hint(
                   fontSize: 15,
                   fontWeight: FontWeight.w400,
@@ -104,65 +112,99 @@ class _NewChatRouteState extends State<NewChatRoute> {
               ),
             ),
           ),
-          const SizedBox(height: 8),
+          if (query.isEmpty) ...[
+            _Action(
+              icon: Icons.group_add_outlined,
+              label: 'New group',
+              onTap: () {
+                Navigator.of(context).push(
+                  MaterialPageRoute<void>(builder: (_) => const NewGroupRoute()),
+                );
+              },
+            ),
+            _Action(
+              icon: Icons.storefront_outlined,
+              label: 'Find stores',
+              onTap: _findStores,
+            ),
+            _Action(
+              icon: Icons.person_add_alt_1_outlined,
+              label: 'Invite friends',
+              onTap: () {
+                Navigator.of(context).pushNamed(
+                  Routes.inviteFriendsRoute,
+                  arguments: <String, Object?>{
+                    'contactsBloc': widget.contactsBloc,
+                  },
+                );
+              },
+            ),
+          ],
           Expanded(
             child:
                 people.isEmpty
                     ? Center(
                       child: Text(
-                        'No matching customers',
+                        'No matching people',
                         style: AppTextStyles.bodySecondary(),
                       ),
                     )
-                    : ListView.separated(
-                      itemCount: people.length,
-                      separatorBuilder:
-                          (_, _) => Divider(
-                            height: 1,
-                            indent: 72,
-                            color: AppColors.divider,
-                          ),
-                      itemBuilder: (context, index) {
-                        final person = people[index];
-                        return InkWell(
-                          onTap: () => _open(person),
-                          child: Padding(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: AppPadding.horizontal,
-                              vertical: 10,
-                            ),
-                            child: Row(
-                              children: [
-                                ChatAvatar(actor: person, size: 44),
-                                const SizedBox(width: 12),
-                                Expanded(
-                                  child: Row(
-                                    children: [
-                                      Flexible(
-                                        child: Text(
-                                          person.name,
-                                          maxLines: 1,
-                                          overflow: TextOverflow.ellipsis,
-                                          style: AppTextStyles.label(
-                                            fontSize: 16,
-                                          ),
-                                        ),
-                                      ),
-                                      if (person.isStoreAccount) ...[
-                                        const SizedBox(width: 6),
-                                        const ChatStoreTag(),
-                                      ],
-                                    ],
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        );
-                      },
+                    : ListView(
+                      children: [
+                        if (stores.isNotEmpty) _label('Stores'),
+                        for (final person in stores) _person(person),
+                        if (followers.isNotEmpty) _label('Followers'),
+                        for (final person in followers) _person(person),
+                      ],
                     ),
           ),
         ],
+      ),
+    );
+  }
+
+  Widget _label(String text) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 14, 16, 4),
+      child: Text(
+        text,
+        style: AppTextStyles.caption(fontSize: 12, fontWeight: FontWeight.w700),
+      ),
+    );
+  }
+
+  Widget _person(ChatActor person) {
+    return ListTile(
+      leading: ChatAvatar(actor: person, size: 44),
+      title: Text(person.name, style: AppTextStyles.label(fontSize: 16)),
+      subtitle:
+          person.phone.isEmpty
+              ? null
+              : Text(person.phone, style: AppTextStyles.caption(fontSize: 12)),
+      onTap: () => _open(person),
+    );
+  }
+
+  void _findStores() {
+    final contacts = widget.contactsBloc;
+    final listing = widget.storeListingBloc;
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (context) {
+          return MultiBlocProvider(
+            providers: [
+              if (contacts != null)
+                BlocProvider<ContactsBloc>.value(value: contacts)
+              else
+                BlocProvider(create: (_) => ContactsBloc()),
+              if (listing != null)
+                BlocProvider<StoreListingBloc>.value(value: listing)
+              else
+                BlocProvider(create: (_) => StoreListingBloc()),
+            ],
+            child: const ContactsTab(showBack: true),
+          );
+        },
       ),
     );
   }
@@ -172,6 +214,27 @@ class _NewChatRouteState extends State<NewChatRoute> {
     Navigator.of(context).pushReplacementNamed(
       Routes.chatThreadRoute,
       arguments: <String, String?>{'chatId': chatId},
+    );
+  }
+}
+
+class _Action extends StatelessWidget {
+  const _Action({
+    required this.icon,
+    required this.label,
+    required this.onTap,
+  });
+
+  final IconData icon;
+  final String label;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return ListTile(
+      leading: Icon(icon, color: AppColors.textPrimary),
+      title: Text(label, style: AppTextStyles.label(fontSize: 16)),
+      onTap: onTap,
     );
   }
 }

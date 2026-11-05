@@ -4,8 +4,8 @@ import 'package:project_c/helper/text_styles.dart';
 
 /// Shell bottom-nav destinations.
 ///
-/// No-store users: [stores] · [contacts] · [settings] · [profile].
-/// Own-store users: [stores] · [contacts] · [wishlist] · [myStore] · [chats]
+/// No-store users: [stores] · [contacts] (Message) · [settings] · [profile].
+/// Own-store users: [stores] · [contacts] (Message) · [wishlist] · [myStore].
 /// (Settings lives under My store, not as its own tab).
 enum FloatingNavTab {
   stores,

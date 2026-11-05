@@ -3,7 +3,6 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:project_c/bloc/account_profile/account_profile_bloc.dart';
 import 'package:project_c/di/service_locator.dart';
-import 'package:project_c/helper/app_log.dart';
 import 'package:project_c/helper/app_padding.dart';
 import 'package:project_c/helper/colors.dart';
 import 'package:project_c/helper/merchant_profile_link.dart';
@@ -17,7 +16,6 @@ import 'package:project_c/navigation/routes.dart';
 import 'package:project_c/presentation/profile/profile_widgets/profile_photo_picker.dart';
 import 'package:project_c/services/store_privacy_preferences.dart';
 import 'package:project_c/services/store_products_prefetcher.dart';
-import 'package:project_c/webservice/import/import_repository.dart';
 
 class ProfileTab extends StatefulWidget {
   const ProfileTab({super.key});
@@ -27,7 +25,7 @@ class ProfileTab extends StatefulWidget {
 }
 
 class _ProfileTabState extends State<ProfileTab> {
-  static const _tag = 'ProfileTab';
+  // static const _tag = 'ProfileTab';
 
   int _pendingImportCount = 0;
   String? _countStoreId;
@@ -91,10 +89,7 @@ class _ProfileTabState extends State<ProfileTab> {
   }) async {
     await Navigator.of(context).pushNamed(
       Routes.storeImportRequestsRoute,
-      arguments: <String, Object?>{
-        'storeId': storeId,
-        'storeName': storeName,
-      },
+      arguments: <String, Object?>{'storeId': storeId, 'storeName': storeName},
     );
     if (!mounted) return;
     await _loadImportRequestCount(storeId);
@@ -160,14 +155,10 @@ class _ProfileTabState extends State<ProfileTab> {
     final bloc = context.read<AccountProfileBloc>();
     switch (action) {
       case _ProfileTabPhotoAction.gallery:
-        bloc.add(
-          const AccountProfilePickImageRequested(ImageSource.gallery),
-        );
+        bloc.add(const AccountProfilePickImageRequested(ImageSource.gallery));
         return;
       case _ProfileTabPhotoAction.camera:
-        bloc.add(
-          const AccountProfilePickImageRequested(ImageSource.camera),
-        );
+        bloc.add(const AccountProfilePickImageRequested(ImageSource.camera));
         return;
       case _ProfileTabPhotoAction.delete:
         bloc.add(const AccountProfileRemoveImageRequested());
@@ -282,10 +273,7 @@ class _ProfileTabState extends State<ProfileTab> {
                         ),
                         if (ownStore != null) ...[
                           const SizedBox(height: 14),
-                          _InfoLine(
-                            value: ownStore.name,
-                            label: 'Store',
-                          ),
+                          _InfoLine(value: ownStore.name, label: 'Store'),
                           const SizedBox(height: 14),
                           _InfoLine(
                             value:
@@ -421,10 +409,7 @@ class _AccountPrivacyTile extends StatelessWidget {
                           ),
                         ),
                         const SizedBox(height: 2),
-                        Text(
-                          prefs.mode.label,
-                          style: AppTextStyles.caption(),
-                        ),
+                        Text(prefs.mode.label, style: AppTextStyles.caption()),
                       ],
                     ),
                   ),
@@ -443,10 +428,7 @@ class _AccountPrivacyTile extends StatelessWidget {
 }
 
 class _ImportRequestsTile extends StatelessWidget {
-  const _ImportRequestsTile({
-    required this.pendingCount,
-    required this.onTap,
-  });
+  const _ImportRequestsTile({required this.pendingCount, required this.onTap});
 
   final int pendingCount;
   final VoidCallback onTap;
@@ -542,10 +524,7 @@ class _InfoLine extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(
-            value,
-            style: AppTextStyles.body(fontWeight: FontWeight.w600),
-          ),
+          Text(value, style: AppTextStyles.body(fontWeight: FontWeight.w600)),
           const SizedBox(height: 2),
           Text(label, style: AppTextStyles.caption()),
         ],

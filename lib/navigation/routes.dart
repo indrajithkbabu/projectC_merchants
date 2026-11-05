@@ -48,6 +48,9 @@ class Routes {
 
   /// New merchant chat: customers who follow the store.
   static const String chatNewRoute = 'chat_new_route';
+
+  /// Discussion list for a chat that has more than one conversation.
+  static const String chatDiscussionsRoute = 'chat_discussions_route';
   static const String accountPrivacyRoute = 'account_privacy_route';
   static const String followRequestsRoute = 'follow_requests_route';
   static const String followRequesterProfileRoute =

@@ -3,7 +3,6 @@ import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:project_c/bloc/account_profile/account_profile_bloc.dart';
 import 'package:project_c/bloc/auth/auth_bloc.dart';
-import 'package:project_c/bloc/contacts/contacts_bloc.dart';
 import 'package:project_c/bloc/store_listing/store_listing_bloc.dart';
 import 'package:project_c/bloc/storeprofile/store_profile_bloc.dart';
 import 'package:project_c/helper/colors.dart';
@@ -15,7 +14,6 @@ import 'package:project_c/navigation/routes.dart';
 import 'package:project_c/presentation/main_shell/shell_nav.dart';
 import 'package:project_c/presentation/chat/chat_mock_store.dart';
 import 'package:project_c/presentation/chat/chat_tab.dart';
-import 'package:project_c/presentation/main_shell/tabs/contacts_tab.dart';
 import 'package:project_c/presentation/main_shell/tabs/my_store_tab.dart';
 import 'package:project_c/presentation/main_shell/tabs/profile_tab.dart';
 import 'package:project_c/presentation/main_shell/tabs/settings_tab.dart';
@@ -26,8 +24,8 @@ import 'package:project_c/services/wishlist_prefetcher.dart';
 
 /// Post-onboarding root: Telegram-style floating nav with Stores as home.
 ///
-/// No store yet: Stores · Contacts · Settings · Profile.
-/// Own store: Stores · Contacts · Wishlist · My store · Chats
+/// No store yet: Stores · Message · Settings · Profile.
+/// Own store: Stores · Message · Wishlist · My store
 /// (Settings under My store).
 class MainShellRoute extends StatefulWidget {
   const MainShellRoute({super.key});
@@ -38,6 +36,7 @@ class MainShellRoute extends StatefulWidget {
 
 class _MainShellRouteState extends State<MainShellRoute> {
   /// Always 0..3 for the visible tab set (IndexedStack index).
+  /// Slot 1 is Message for every account.
   int _index = 0;
   int _wishlistRefreshSignal = 0;
   final GlobalKey<MyStoreTabState> _myStoreKey = GlobalKey<MyStoreTabState>();
@@ -72,7 +71,7 @@ class _MainShellRouteState extends State<MainShellRoute> {
       ShellNavTab.wishlist => hasStore ? 2 : null,
       ShellNavTab.cart => hasStore ? 2 : null,
       ShellNavTab.myStore => hasStore ? 3 : null,
-      ShellNavTab.chats => hasStore ? 4 : null,
+      ShellNavTab.chats => 1,
     };
     if (index == null) return;
     _onTabChanged(context, index, hasStore: hasStore);
@@ -93,9 +92,7 @@ class _MainShellRouteState extends State<MainShellRoute> {
         _wishlistRefreshSignal++;
       }
     });
-    if (value == 1) {
-      context.read<ContactsBloc>().add(const ContactsRefreshed());
-    } else if (value == 0) {
+    if (value == 0) {
       context.read<StoreListingBloc>().add(const StoreListingRefreshed());
     } else if (!hasStore && (value == 2 || value == 3)) {
       context.read<AccountProfileBloc>().add(const AccountProfileRefreshed());
@@ -149,11 +146,12 @@ class _MainShellRouteState extends State<MainShellRoute> {
           icon: Icons.home_outlined,
           activeIcon: Icons.home_rounded,
         ),
-        const FloatingNavItem(
+        FloatingNavItem(
           tab: FloatingNavTab.contacts,
-          label: 'Contacts',
-          icon: Icons.person_outline_rounded,
-          activeIcon: Icons.person_rounded,
+          label: 'Message',
+          icon: Icons.chat_bubble_outline_rounded,
+          activeIcon: Icons.chat_bubble_rounded,
+          badgeCount: chatUnread,
         ),
         const FloatingNavItem(
           tab: FloatingNavTab.settings,
@@ -182,11 +180,12 @@ class _MainShellRouteState extends State<MainShellRoute> {
         icon: Icons.home_outlined,
         activeIcon: Icons.home_rounded,
       ),
-      const FloatingNavItem(
+      FloatingNavItem(
         tab: FloatingNavTab.contacts,
-        label: 'Contacts',
-        icon: Icons.person_outline_rounded,
-        activeIcon: Icons.person_rounded,
+        label: 'Message',
+        icon: Icons.chat_bubble_outline_rounded,
+        activeIcon: Icons.chat_bubble_rounded,
+        badgeCount: chatUnread,
       ),
       const FloatingNavItem(
         tab: FloatingNavTab.wishlist,
@@ -209,13 +208,6 @@ class _MainShellRouteState extends State<MainShellRoute> {
                   selected: profileOrMyStoreSelected,
                 ),
       ),
-      // FloatingNavItem(
-      //   tab: FloatingNavTab.chats,
-      //   label: 'Chats',
-      //   icon: Icons.chat_bubble_outline_rounded,
-      //   activeIcon: Icons.chat_bubble_rounded,
-      //   badgeCount: chatUnread,
-      // ),
     ];
   }
 
@@ -276,7 +268,7 @@ class _MainShellRouteState extends State<MainShellRoute> {
               profileState.profile?.effectiveProfileImageUrl.trim() ?? '';
 
           // Clamp index if tab set changed (e.g. store created mid-session).
-          final safeIndex = _index.clamp(0, hasStore ? 4 : 3);
+          final safeIndex = _index.clamp(0, 3);
 
           Widget body = ScreenWrapper(
             backgroundColor: AppColors.background,
@@ -296,7 +288,7 @@ class _MainShellRouteState extends State<MainShellRoute> {
                           setState(() => _index = 3);
                         },
                       ),
-                      const ContactsTab(),
+                      const ChatTab(),
                       if (hasStore)
                         WishlistTab(refreshSignal: _wishlistRefreshSignal)
                       else
@@ -305,7 +297,6 @@ class _MainShellRouteState extends State<MainShellRoute> {
                         MyStoreTab(key: _myStoreKey)
                       else
                         const ProfileTab(),
-                      if (hasStore) const ChatTab(),
                     ],
                   ),
                 ),
@@ -345,10 +336,13 @@ class _MainShellRouteState extends State<MainShellRoute> {
                                     profileImageUrl: imageUrl,
                                     storeCoverUrl: storeCover,
                                     profileOrMyStoreSelected: safeIndex == 3,
-                                    chatUnread:
-                                        hasStore
-                                            ? ChatMockStore.instance.totalUnread
-                                            : 0,
+                                    chatUnread: ChatMockStore.instance
+                                        .inbox(storesOnly: !hasStore)
+                                        .fold<int>(
+                                          0,
+                                          (sum, thread) =>
+                                              sum + thread.unreadCount,
+                                        ),
                                   ),
                                 );
                               },
