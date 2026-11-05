@@ -39,6 +39,7 @@ import 'package:project_c/presentation/auth/otp_route.dart';
 import 'package:project_c/presentation/auth/phone_route.dart';
 import 'package:project_c/presentation/home/home_placeholder_route.dart';
 import 'package:project_c/presentation/bootstrap/bootstrap_route.dart';
+import 'package:project_c/presentation/chat/chat_discussions_route.dart';
 import 'package:project_c/presentation/chat/chat_thread_route.dart';
 import 'package:project_c/presentation/chat/new_chat_route.dart';
 import 'package:project_c/presentation/main_shell/invite_friends_route.dart';
@@ -138,6 +139,8 @@ PageRoute? onGenerateRoutes(RouteSettings settings) {
       return _activityRoute(settings);
     case Routes.chatThreadRoute:
       return _chatThreadRoute(settings);
+    case Routes.chatDiscussionsRoute:
+      return _chatDiscussionsRoute(settings);
     case Routes.chatNewRoute:
       return _chatNewRoute(settings);
     case Routes.accountPrivacyRoute:
@@ -312,10 +315,33 @@ PageRoute? _chatThreadRoute(RouteSettings settings) {
   );
 }
 
-PageRoute? _chatNewRoute(RouteSettings settings) {
+PageRoute? _chatDiscussionsRoute(RouteSettings settings) {
+  final args = settings.arguments;
+  final map = args is Map ? args : const <dynamic, dynamic>{};
+  final chatId =
+      map['chatId'] is String ? (map['chatId'] as String).trim() : '';
+  if (chatId.isEmpty) return null;
   return _buildAnimatedRoute(
     settings: settings,
-    builder: (_) => const NewChatRoute(),
+    builder: (_) => ChatDiscussionsRoute(chatId: chatId),
+  );
+}
+
+PageRoute? _chatNewRoute(RouteSettings settings) {
+  final args = settings.arguments;
+  final map = args is Map ? args : const <dynamic, dynamic>{};
+  final contacts =
+      map['contactsBloc'] is ContactsBloc
+          ? map['contactsBloc'] as ContactsBloc
+          : null;
+  final listing =
+      map['storeListingBloc'] is StoreListingBloc
+          ? map['storeListingBloc'] as StoreListingBloc
+          : null;
+  return _buildAnimatedRoute(
+    settings: settings,
+    builder:
+        (_) => NewChatRoute(contactsBloc: contacts, storeListingBloc: listing),
   );
 }
 

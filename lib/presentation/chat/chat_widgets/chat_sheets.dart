@@ -74,7 +74,7 @@ class _ChatDetailsSheet extends StatelessWidget {
                     thread.discussions.isEmpty
                         ? 'None yet'
                         : thread.discussions
-                            .map((item) => item.product.name)
+                            .map((item) => item.title)
                             .join(', '),
               ),
               _DetailRow(label: 'Replied by', value: repliedLabel),
@@ -458,4 +458,132 @@ InputDecoration _fieldDecoration(String hint) {
       borderSide: BorderSide.none,
     ),
   );
+}
+
+Future<void> showChatProfileSheet(BuildContext context, ChatThread thread) {
+  return showModalBottomSheet<void>(
+    context: context,
+    useRootNavigator: true,
+    backgroundColor: Colors.transparent,
+    barrierColor: Colors.black.withValues(alpha: 0.45),
+    isScrollControlled: true,
+    useSafeArea: true,
+    builder: (sheetContext) {
+      return ListenableBuilder(
+        listenable: ChatMockStore.instance,
+        builder: (context, _) {
+          final current =
+              ChatMockStore.instance.threadById(thread.id) ?? thread;
+          return _ChatProfileSheet(thread: current);
+        },
+      );
+    },
+  );
+}
+
+class _ChatProfileSheet extends StatelessWidget {
+  const _ChatProfileSheet({required this.thread});
+
+  final ChatThread thread;
+
+  @override
+  Widget build(BuildContext context) {
+    final bottom = MediaQuery.paddingOf(context).bottom;
+    final groups = <String, List<ChatMember>>{};
+    for (final member in thread.members) {
+      final key =
+          member.storeName.trim().isEmpty ? 'People' : member.storeName.trim();
+      groups.putIfAbsent(key, () => []).add(member);
+    }
+    final phone = thread.phone.trim();
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          color: AppColors.surface,
+          borderRadius: BorderRadius.circular(20),
+        ),
+        child: Padding(
+          padding: EdgeInsets.fromLTRB(16, 12, 16, 16 + bottom),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              const _SheetHandle(),
+              Row(
+                children: [
+                  ChatAvatar(
+                    actor: thread.customer,
+                    size: 52,
+                    group: thread.kind == ChatKind.group,
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          thread.customer.name,
+                          style: AppTextStyles.label(
+                            fontSize: 18,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                        if (phone.isNotEmpty)
+                          Text(phone, style: AppTextStyles.caption()),
+                        if (thread.muted)
+                          Text(
+                            'Muted',
+                            style: AppTextStyles.caption(
+                              fontSize: 12,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              SwitchListTile(
+                contentPadding: EdgeInsets.zero,
+                title: Text('Mute', style: AppTextStyles.body(fontSize: 16)),
+                subtitle: Text(
+                  'Stays muted until you turn it off',
+                  style: AppTextStyles.caption(fontSize: 12),
+                ),
+                value: thread.muted,
+                onChanged:
+                    (value) =>
+                        ChatMockStore.instance.setMuted(thread.id, value),
+              ),
+              if (groups.isNotEmpty) ...[
+                const SizedBox(height: 4),
+                for (final entry in groups.entries) ...[
+                  Padding(
+                    padding: const EdgeInsets.only(top: 8, bottom: 4),
+                    child: Text(
+                      entry.key,
+                      style: AppTextStyles.caption(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
+                  for (final member in entry.value)
+                    Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 4),
+                      child: Text(
+                        member.name,
+                        style: AppTextStyles.body(fontSize: 15),
+                      ),
+                    ),
+                ],
+              ],
+            ],
+          ),
+        ),
+      ),
+    );
+  }
 }

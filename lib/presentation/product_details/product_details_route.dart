@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:project_c/bloc/bulk_upload/bulk_upload_bloc.dart';
 import 'package:project_c/bloc/product_details/product_details_bloc.dart';
@@ -23,7 +24,6 @@ import 'package:project_c/navigation/routes.dart';
 import 'package:project_c/navigation/telegram_photo_page_route.dart';
 import 'package:project_c/presentation/chat/chat_mock_store.dart';
 import 'package:project_c/presentation/chat/chat_models.dart';
-import 'package:project_c/presentation/chat/chat_widgets/enquiry_basket_sheet.dart';
 import 'package:project_c/presentation/product_details/product_details_widgets/product_details_widgets.dart';
 import 'package:project_c/services/product_details_preferences.dart';
 import 'package:share_plus/share_plus.dart';
@@ -49,6 +49,7 @@ class _ProductDetailsRouteState extends State<ProductDetailsRoute> {
   late bool _previewAll;
   late bool _previewDetails;
   bool _imageZoomed = false;
+
   /// Two fingers on the photo — lock [PageView] so pinch can start at 1×.
   bool _multiTouchLockingPage = false;
   Map<String, Object?>? _popResult;
@@ -74,14 +75,19 @@ class _ProductDetailsRouteState extends State<ProductDetailsRoute> {
   bool _pageSwipePreferred = false;
   double _dismissVelocityY = 0;
 
-  /// Visitor ask-about set for the full-size photo. Hidden after the first
-  /// long-press; cleared after the enquiry is sent.
-  bool _showAskHint = true;
-  final Map<String, _AskTarget> _asks = {};
+  /// Visitor composer for the photo on screen. Tap opens it; send starts
+  /// that store's chat. Hidden on the owner's own store.
+  bool _askComposerOpen = false;
+
+  /// Weight chrome stays hidden while this is true (keyboard is up).
+  bool _askShowKeyboard = false;
+  final TextEditingController _askController = TextEditingController();
+  final FocusNode _askFocus = FocusNode();
 
   @override
   void initState() {
     super.initState();
+    _askFocus.addListener(_onAskFocusChanged);
     final blocState = context.read<ProductDetailsBloc>().state;
     final initialPage =
         blocState.hasGalleryFeed
@@ -141,6 +147,9 @@ class _ProductDetailsRouteState extends State<ProductDetailsRoute> {
 
   @override
   void dispose() {
+    _askFocus.removeListener(_onAskFocusChanged);
+    _askController.dispose();
+    _askFocus.dispose();
     _viewDwellTimer?.cancel();
     // ignore: unawaited_futures
     ViewBeacon.instance.flush();
@@ -276,7 +285,16 @@ class _ProductDetailsRouteState extends State<ProductDetailsRoute> {
     _thumbUserScrolling = false;
     _syncingPageFromThumb = false;
     // One chrome rebuild after free-flow settles (title / meta / highlight).
-    if (mounted) setState(() {});
+    if (mounted) {
+      setState(() {
+        final current = context.read<ProductDetailsBloc>().state;
+        if (_askComposerOpen && _askTargetFor(current) == null) {
+          _askComposerOpen = false;
+          _askShowKeyboard = false;
+        }
+      });
+      if (!_askComposerOpen) _askFocus.unfocus();
+    }
     final state = context.read<ProductDetailsBloc>().state;
     final pendingGallery = _pendingGalleryActivateIndex;
     _pendingGalleryActivateIndex = null;
@@ -290,10 +308,7 @@ class _ProductDetailsRouteState extends State<ProductDetailsRoute> {
     }
   }
 
-  void _activateGalleryProductIfNeeded(
-    int index,
-    ProductDetailsState state,
-  ) {
+  void _activateGalleryProductIfNeeded(int index, ProductDetailsState state) {
     if (!state.hasGalleryFeed) return;
     if (index < 0 || index >= state.galleryFeed!.length) return;
     final entry = state.galleryFeed![index];
@@ -362,79 +377,100 @@ class _ProductDetailsRouteState extends State<ProductDetailsRoute> {
     );
   }
 
-  void _toggleAskPhoto(ProductDetailsState state) {
-    final target = _askTargetFor(state);
-    if (target == null || _imageZoomed) return;
+  void _onAskFocusChanged() {
+    if (!mounted || !_askComposerOpen) return;
+    if (_askFocus.hasFocus == _askShowKeyboard) return;
+    setState(() => _askShowKeyboard = _askFocus.hasFocus);
+  }
+
+  void _openAskComposer() {
     setState(() {
-      _showAskHint = false;
+      _askComposerOpen = true;
+      _askShowKeyboard = true;
+      _showInfo = true;
+    });
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !_askComposerOpen) return;
+      _askFocus.requestFocus();
+    });
+  }
+
+  void _closeAskComposer() {
+    _askFocus.unfocus();
+    if (!_askComposerOpen && !_askShowKeyboard) return;
+    setState(() {
+      _askComposerOpen = false;
+      _askShowKeyboard = false;
       _showInfo = false;
-      final id = target.product.id;
-      if (_asks.containsKey(id)) {
-        _asks.remove(id);
-      } else {
-        _asks[id] = target;
+    });
+  }
+
+  /// Visitors who can ask: tap opens the composer. A second tap drops the
+  /// keyboard so weight details can show; a third tap closes it.
+  /// Own-store and zoomed photos keep the chrome toggle.
+  void _onPhotoTap(ProductDetailsState state) {
+    if (_imageZoomed) {
+      setState(() => _showInfo = !_showInfo);
+      return;
+    }
+    final canAsk = _askTargetFor(state) != null;
+    if (_askComposerOpen) {
+      if (_askShowKeyboard || _askFocus.hasFocus) {
+        _askFocus.unfocus();
+        if (_askShowKeyboard) {
+          setState(() => _askShowKeyboard = false);
+        }
+        return;
+      }
+      _closeAskComposer();
+      return;
+    }
+    if (canAsk) {
+      _openAskComposer();
+      return;
+    }
+    setState(() => _showInfo = !_showInfo);
+  }
+
+  void _onPhotoZoomChanged(int index, bool zoomed) {
+    if (!mounted) return;
+    if (index != _pageIndex && zoomed) return;
+    final closeAsk = zoomed && _askComposerOpen;
+    if (_imageZoomed == zoomed && !closeAsk) return;
+    if (closeAsk) _askFocus.unfocus();
+    setState(() {
+      _imageZoomed = zoomed;
+      if (zoomed) {
+        _askComposerOpen = false;
+        _askShowKeyboard = false;
       }
     });
   }
 
-  Future<void> _openAskBasket(ProductDetailsState state) async {
-    if (_asks.isEmpty) return;
-    final items = [for (final target in _asks.values) target.product];
-    final currentStore = _askTargetFor(state)?.storeId;
-    await showEnquiryBasketSheet(
-      context: context,
-      products: items,
-      onRemove: (id) {
-        if (!mounted) return;
-        setState(() => _asks.remove(id));
-      },
-      onAddMore: () {
-        if (!mounted) return;
-        setState(() => _showInfo = false);
-      },
-      onSend: (text, remaining) {
-        if (!mounted) return;
-        final grouped = <String, List<ChatProductRef>>{};
-        final names = <String, String>{};
-        for (final product in remaining) {
-          final target = _asks[product.id];
-          if (target == null) continue;
-          grouped.putIfAbsent(target.storeId, () => []).add(product);
-          names[target.storeId] = target.storeName;
-        }
-        if (grouped.isEmpty) {
-          setState(() => _asks.clear());
-          return;
-        }
-        final preferred =
-            currentStore != null && grouped.containsKey(currentStore)
-                ? currentStore
-                : grouped.keys.first;
-        String? opened;
-        for (final entry in grouped.entries) {
-          final chatId = ChatMockStore.instance.sendEnquiry(
-            storeId: entry.key,
-            storeName: names[entry.key] ?? 'Store',
-            text: text,
-            products: entry.value,
-          );
-          if (entry.key == preferred) opened = chatId;
-        }
-        setState(() {
-          _asks.clear();
-          _showAskHint = false;
-          _showInfo = false;
-        });
-        if (opened == null) return;
-        final openId =
-            ChatMockStore.instance.threadById(opened)?.openDiscussionId;
-        Navigator.of(context).pushNamed(
-          Routes.chatThreadRoute,
-          arguments: <String, String?>{
-            'chatId': opened,
-            'openDiscussionId': openId,
-          },
-        );
+  void _sendAsk(ProductDetailsState state) {
+    final target = _askTargetFor(state);
+    final text = _askController.text.trim();
+    if (target == null || text.isEmpty) return;
+    HapticFeedback.selectionClick();
+    final chatId = ChatMockStore.instance.sendEnquiry(
+      storeId: target.storeId,
+      storeName: target.storeName,
+      text: text,
+      products: [target.product],
+    );
+    _askController.clear();
+    _askFocus.unfocus();
+    setState(() {
+      _askComposerOpen = false;
+      _askShowKeyboard = false;
+      _showInfo = false;
+    });
+    final openId = ChatMockStore.instance.threadById(chatId)?.openDiscussionId;
+    Navigator.of(context).pushNamed(
+      Routes.chatThreadRoute,
+      arguments: <String, String?>{
+        'chatId': chatId,
+        'openDiscussionId': openId,
       },
     );
   }
@@ -482,7 +518,12 @@ class _ProductDetailsRouteState extends State<ProductDetailsRoute> {
       // Re-enable swipe after leaving a zoomed page (page itself resets on dispose).
       _imageZoomed = false;
       _multiTouchLockingPage = false;
+      if (_askComposerOpen && _askTargetFor(state) == null) {
+        _askComposerOpen = false;
+        _askShowKeyboard = false;
+      }
     });
+    if (!_askComposerOpen) _askFocus.unfocus();
     _warmMedia(state);
     _restartViewDwell(state);
     // PageView swipe syncs the strip via [_onPageScroll]; settle align here.
@@ -636,7 +677,9 @@ class _ProductDetailsRouteState extends State<ProductDetailsRoute> {
           'stock=${stock.apiValue} locked=$locked',
     );
     if (productIds.isEmpty) {
-      BeVerify.fail('availability — no product ids (would 404 on collection id)');
+      BeVerify.fail(
+        'availability — no product ids (would 404 on collection id)',
+      );
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text(
@@ -697,10 +740,7 @@ class _ProductDetailsRouteState extends State<ProductDetailsRoute> {
         ),
       );
       // So store profile grid keeps lock/stock after pop → reopen.
-      _popResult = <String, Object?>{
-        'updated': true,
-        ...nextProduct.toMap(),
-      };
+      _popResult = <String, Object?>{'updated': true, ...nextProduct.toMap()};
     } catch (e) {
       BeVerify.fail('availability apply', detail: '$e');
       if (!mounted) return;
@@ -801,10 +841,7 @@ class _ProductDetailsRouteState extends State<ProductDetailsRoute> {
         // Keep payload product; details still get ApplyEditedProduct below.
       }
 
-      _popResult = <String, Object?>{
-        'updated': true,
-        ...product.toMap(),
-      };
+      _popResult = <String, Object?>{'updated': true, ...product.toMap()};
       context.read<ProductDetailsBloc>().add(
         ProductDetailsApplyEditedProduct(
           product: product,
@@ -830,10 +867,7 @@ class _ProductDetailsRouteState extends State<ProductDetailsRoute> {
     // So Telegram close continues from the dragged frame (not a full-size flash).
     if (_dismissDy > 0) {
       final dismissT = (_dismissDy / 240).clamp(0.0, 1.0);
-      TelegramPhotoCloseAnchor.arm(
-        dy: _dismissDy,
-        scale: 1 - dismissT * 0.08,
-      );
+      TelegramPhotoCloseAnchor.arm(dy: _dismissDy, scale: 1 - dismissT * 0.08);
     } else {
       TelegramPhotoCloseAnchor.clear();
     }
@@ -853,10 +887,7 @@ class _ProductDetailsRouteState extends State<ProductDetailsRoute> {
           if (wish > 0) 'wishlistCount': wish,
         };
       } else if (result != null && wish > 0) {
-        result = <String, Object?>{
-          ...result,
-          'wishlistCount': wish,
-        };
+        result = <String, Object?>{...result, 'wishlistCount': wish};
       }
     }
     Navigator.of(context).pop(result);
@@ -870,7 +901,7 @@ class _ProductDetailsRouteState extends State<ProductDetailsRoute> {
   }
 
   void _onDismissPointerDown(PointerDownEvent event) {
-    if (_imageZoomed) return;
+    if (_imageZoomed || _askComposerOpen) return;
     _dismissPointer = event.pointer;
     _dismissStart = event.position;
     _dismissArmed = false;
@@ -952,9 +983,7 @@ class _ProductDetailsRouteState extends State<ProductDetailsRoute> {
     );
     if (!mounted || confirmed != true) return;
     context.read<ProductDetailsBloc>().add(
-      ProductDetailsDeletePressed(
-        imageIndex: _productImageIndex(state),
-      ),
+      ProductDetailsDeletePressed(imageIndex: _productImageIndex(state)),
     );
   }
 
@@ -979,7 +1008,8 @@ class _ProductDetailsRouteState extends State<ProductDetailsRoute> {
           },
         ),
         BlocListener<ProductDetailsBloc, ProductDetailsState>(
-          listenWhen: (prev, curr) => curr.shouldOpenEdit && !prev.shouldOpenEdit,
+          listenWhen:
+              (prev, curr) => curr.shouldOpenEdit && !prev.shouldOpenEdit,
           listener: (context, state) => _openEdit(state),
         ),
         BlocListener<ProductDetailsBloc, ProductDetailsState>(
@@ -1105,634 +1135,703 @@ class _ProductDetailsRouteState extends State<ProductDetailsRoute> {
         backgroundColor: Colors.black,
         statusBarIconBrightness: Brightness.light,
         // Full-bleed photo (Telegram flyer lands on contain frame, then chrome).
+        // The ask composer lifts itself over the keyboard; the photo stays full-size.
         extendBodyBehindBottom: true,
+        resizeToAvoidBottomInset: false,
         child: PopScope(
           canPop: false,
           onPopInvokedWithResult: (didPop, result) {
             if (didPop) return;
+            if (_askComposerOpen) {
+              _closeAskComposer();
+              return;
+            }
             _popDetails();
           },
           child: BlocBuilder<ProductDetailsBloc, ProductDetailsState>(
-          builder: (context, state) {
-            if (state.isContentLocked) {
-              return ScreenWrapper(
-                backgroundColor: AppColors.background,
-                child: SafeArea(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      Padding(
-                        padding: AppPadding.screen(top: 8, bottom: 0),
-                        child: Align(
-                          alignment: Alignment.centerLeft,
-                          child: AppBackButton(
-                            onPressed: () => Navigator.of(context).maybePop(),
-                          ),
-                        ),
-                      ),
-                      Expanded(
-                        child: Center(
-                          child: Padding(
-                            padding: AppPadding.screenHorizontal,
-                            child: Column(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Icon(
-                                  Icons.lock_rounded,
-                                  size: 48,
-                                  color: AppColors.textSecondary,
-                                ),
-                                const SizedBox(height: 16),
-                                Text(
-                                  'Locked product',
-                                  style: AppTextStyles.title(fontSize: 20),
-                                  textAlign: TextAlign.center,
-                                ),
-                                const SizedBox(height: 8),
-                                Text(
-                                  'Follow this store and get approved to view locked products.',
-                                  style: AppTextStyles.bodySecondary(),
-                                  textAlign: TextAlign.center,
-                                ),
-                              ],
+            builder: (context, state) {
+              if (state.isContentLocked) {
+                return ScreenWrapper(
+                  backgroundColor: AppColors.background,
+                  child: SafeArea(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        Padding(
+                          padding: AppPadding.screen(top: 8, bottom: 0),
+                          child: Align(
+                            alignment: Alignment.centerLeft,
+                            child: AppBackButton(
+                              onPressed: () => Navigator.of(context).maybePop(),
                             ),
                           ),
                         ),
-                      ),
-                    ],
-                  ),
-                ),
-              );
-            }
-
-            final product = state.product;
-            final imagePaths = product.imagePaths;
-            final feed = state.galleryFeed;
-            final useFeed = state.hasGalleryFeed;
-            final askTarget = _askTargetFor(state);
-            final pageCount =
-                useFeed
-                    ? feed!.length
-                    : (imagePaths.isEmpty ? 1 : imagePaths.length);
-            final photoIndex = _productImageIndex(state);
-            final importPending =
-                useFeed &&
-                        feed != null &&
-                        _pageIndex >= 0 &&
-                        _pageIndex < feed.length
-                    ? feed[_pageIndex].product.isImportPendingAt(
-                      feed[_pageIndex].imageIndex,
-                    )
-                    : product.isImportPendingAt(photoIndex);
-            final importDeclined =
-                useFeed &&
-                        feed != null &&
-                        _pageIndex >= 0 &&
-                        _pageIndex < feed.length
-                    ? feed[_pageIndex].product.isImportDeclinedAt(
-                      feed[_pageIndex].imageIndex,
-                    )
-                    : product.isImportDeclinedAt(photoIndex);
-            final dismissT = (_dismissDy / 240).clamp(0.0, 1.0);
-
-            return Listener(
-              behavior: HitTestBehavior.deferToChild,
-              onPointerDown: _onDismissPointerDown,
-              onPointerMove: _onDismissPointerMove,
-              onPointerUp: _onDismissPointerEnd,
-              onPointerCancel: _onDismissPointerEnd,
-              child: Opacity(
-                opacity: 1 - dismissT * 0.35,
-                child: Transform.translate(
-                  offset: Offset(0, _dismissDy),
-                  child: Transform.scale(
-                    scale: 1 - dismissT * 0.08,
-                    child: Stack(
-                      children: [
-                        Positioned.fill(
-                          child: PageView.builder(
-                            controller: _pageController,
-                            allowImplicitScrolling: true,
-                            physics:
-                                _imageZoomed ||
-                                        _multiTouchLockingPage ||
-                                        _dismissArmed
-                                    ? const NeverScrollableScrollPhysics()
-                                    : const BouncingScrollPhysics(
-                                      decelerationRate:
-                                          ScrollDecelerationRate.fast,
-                                      parent: PageScrollPhysics(),
-                                    ),
-                            itemCount: pageCount,
-                            onPageChanged:
-                                (index) => _onPageChanged(index, state),
-                            itemBuilder: (context, index) {
-                              final path =
-                                  useFeed
-                                      ? feed![index].path
-                                      : (imagePaths.isEmpty
-                                          ? null
-                                          : imagePaths[index]);
-                              final tone =
-                                  useFeed
-                                      ? feed![index].product.toneIndex
-                                      : product.toneIndex;
-
-                              final askHere =
-                                  index == _pageIndex &&
-                                  _askTargetFor(state) != null &&
-                                  !_imageZoomed;
-                              if (path == null ||
-                                  path.isEmpty ||
-                                  !ProductImagePaths.isDisplayable(path)) {
-                                return GestureDetector(
-                                  behavior: HitTestBehavior.opaque,
-                                  onTap:
-                                      () => setState(
-                                        () => _showInfo = !_showInfo,
-                                      ),
-                                  onLongPress:
-                                      askHere
-                                          ? () => _toggleAskPhoto(state)
-                                          : null,
-                                  child: _ImagePlaceholder(tone: tone),
-                                );
-                              }
-
-                              return ProductDetailsZoomablePhoto(
-                                key: ValueKey<String>(
-                                  'pd-zoom-$index-$path',
-                                ),
-                                path: path,
-                                isActive: index == _pageIndex,
-                                onTap:
-                                    () => setState(
-                                      () => _showInfo = !_showInfo,
-                                    ),
-                                onLongPress:
-                                    askHere
-                                        ? () => _toggleAskPhoto(state)
-                                        : null,
-                                onZoomChanged: (zoomed) {
-                                  if (!mounted) return;
-                                  if (index != _pageIndex && zoomed) {
-                                    return;
-                                  }
-                                  if (_imageZoomed == zoomed) return;
-                                  setState(() => _imageZoomed = zoomed);
-                                },
-                                onMultiTouchChanged: (multi) {
-                                  if (!mounted) return;
-                                  if (index != _pageIndex && multi) {
-                                    return;
-                                  }
-                                  if (_multiTouchLockingPage == multi) return;
-                                  setState(
-                                    () => _multiTouchLockingPage = multi,
-                                  );
-                                },
-                              );
-                            },
-                          ),
-                        ),
-                // Tap-to-show chrome: back + title + menu, then store / category.
-                Positioned(
-                  top: 0,
-                  left: 0,
-                  right: 0,
-                  child: IgnorePointer(
-                    ignoring: !_showInfo,
-                    child: AnimatedOpacity(
-                      duration: const Duration(milliseconds: 180),
-                      opacity: _showInfo ? 1 : 0,
-                      child: DecoratedBox(
-                        decoration: BoxDecoration(
-                          gradient: LinearGradient(
-                            begin: Alignment.topCenter,
-                            end: Alignment.bottomCenter,
-                            colors: [
-                              Colors.black.withValues(alpha: 0.72),
-                              Colors.black.withValues(alpha: 0.28),
-                              Colors.transparent,
-                            ],
-                          ),
-                        ),
-                        child: Padding(
-                          padding: AppPadding.screen(
-                            top: ScreenWrapper.statusBarTop(context),
-                            bottom: 16,
-                          ),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Row(
+                        Expanded(
+                          child: Center(
+                            child: Padding(
+                              padding: AppPadding.screenHorizontal,
+                              child: Column(
+                                mainAxisSize: MainAxisSize.min,
                                 children: [
-                                  _RoundIconButton(
-                                    icon: Icons.arrow_back_ios_new_rounded,
-                                    onTap: _popDetails,
+                                  Icon(
+                                    Icons.lock_rounded,
+                                    size: 48,
+                                    color: AppColors.textSecondary,
                                   ),
-                                  Expanded(
-                                    child: Padding(
-                                      padding: const EdgeInsets.only(
-                                        left: 10,
-                                        right: 8,
+                                  const SizedBox(height: 16),
+                                  Text(
+                                    'Locked product',
+                                    style: AppTextStyles.title(fontSize: 20),
+                                    textAlign: TextAlign.center,
+                                  ),
+                                  const SizedBox(height: 8),
+                                  Text(
+                                    'Follow this store and get approved to view locked products.',
+                                    style: AppTextStyles.bodySecondary(),
+                                    textAlign: TextAlign.center,
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                );
+              }
+
+              final product = state.product;
+              final imagePaths = product.imagePaths;
+              final feed = state.galleryFeed;
+              final useFeed = state.hasGalleryFeed;
+              final askTarget = _askTargetFor(state);
+              final pageCount =
+                  useFeed
+                      ? feed!.length
+                      : (imagePaths.isEmpty ? 1 : imagePaths.length);
+              final photoIndex = _productImageIndex(state);
+              final importPending =
+                  useFeed &&
+                          feed != null &&
+                          _pageIndex >= 0 &&
+                          _pageIndex < feed.length
+                      ? feed[_pageIndex].product.isImportPendingAt(
+                        feed[_pageIndex].imageIndex,
+                      )
+                      : product.isImportPendingAt(photoIndex);
+              final importDeclined =
+                  useFeed &&
+                          feed != null &&
+                          _pageIndex >= 0 &&
+                          _pageIndex < feed.length
+                      ? feed[_pageIndex].product.isImportDeclinedAt(
+                        feed[_pageIndex].imageIndex,
+                      )
+                      : product.isImportDeclinedAt(photoIndex);
+              final dismissT = (_dismissDy / 240).clamp(0.0, 1.0);
+              final keyboard = MediaQuery.viewInsetsOf(context).bottom;
+              final safeBottom = MediaQuery.viewPaddingOf(context).bottom;
+              final askPhotoPath = _currentImagePath(state);
+
+              Widget detailsPanel({required double bottom}) {
+                return DecoratedBox(
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      begin: Alignment.topCenter,
+                      end: Alignment.bottomCenter,
+                      colors: [
+                        Colors.transparent,
+                        Colors.black.withValues(alpha: 0.55),
+                        Colors.black.withValues(alpha: 0.8),
+                      ],
+                    ),
+                  ),
+                  child: Padding(
+                    padding: AppPadding.screen(top: 56, bottom: bottom),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        _ProductMetaPanel(
+                          product: product,
+                          specDisplay: state.specDisplayForPhoto(photoIndex),
+                          previewDetails: _previewDetails,
+                        ),
+                        if (_previewAll && pageCount > 1) ...[
+                          const SizedBox(height: 12),
+                          ProductDetailsThumbStrip(
+                            paths: [
+                              for (var i = 0; i < pageCount; i++)
+                                useFeed
+                                    ? feed![i].path
+                                    : (imagePaths.isEmpty
+                                        ? null
+                                        : imagePaths[i]),
+                            ],
+                            activeIndex: _pageIndex,
+                            controller: _thumbController,
+                            onTapIndex: _goToPage,
+                            onScrollIndex: _onThumbScrollIndex,
+                            onScrollEnd: _onThumbScrollEnd,
+                          ),
+                        ],
+                      ],
+                    ),
+                  ),
+                );
+              }
+
+              return Listener(
+                behavior: HitTestBehavior.deferToChild,
+                onPointerDown: _onDismissPointerDown,
+                onPointerMove: _onDismissPointerMove,
+                onPointerUp: _onDismissPointerEnd,
+                onPointerCancel: _onDismissPointerEnd,
+                child: Opacity(
+                  opacity: 1 - dismissT * 0.35,
+                  child: Transform.translate(
+                    offset: Offset(0, _dismissDy),
+                    child: Transform.scale(
+                      scale: 1 - dismissT * 0.08,
+                      child: Stack(
+                        children: [
+                          Positioned.fill(
+                            child: PageView.builder(
+                              controller: _pageController,
+                              allowImplicitScrolling: true,
+                              physics:
+                                  _imageZoomed ||
+                                          _multiTouchLockingPage ||
+                                          _dismissArmed
+                                      ? const NeverScrollableScrollPhysics()
+                                      : const BouncingScrollPhysics(
+                                        decelerationRate:
+                                            ScrollDecelerationRate.fast,
+                                        parent: PageScrollPhysics(),
                                       ),
-                                      child: Text(
-                                        state
-                                            .titlePartsForPhoto(photoIndex)
-                                            .title,
-                                        maxLines: 1,
-                                        overflow: TextOverflow.ellipsis,
-                                        style: AppTextStyles.body(
-                                          fontSize: 16,
-                                          fontWeight: FontWeight.w600,
-                                          color: AppColors.textOnPrimary,
-                                        ),
-                                      ),
+                              itemCount: pageCount,
+                              onPageChanged:
+                                  (index) => _onPageChanged(index, state),
+                              itemBuilder: (context, index) {
+                                final path =
+                                    useFeed
+                                        ? feed![index].path
+                                        : (imagePaths.isEmpty
+                                            ? null
+                                            : imagePaths[index]);
+                                final tone =
+                                    useFeed
+                                        ? feed![index].product.toneIndex
+                                        : product.toneIndex;
+
+                                if (path == null ||
+                                    path.isEmpty ||
+                                    !ProductImagePaths.isDisplayable(path)) {
+                                  return GestureDetector(
+                                    behavior: HitTestBehavior.opaque,
+                                    onTap: () => _onPhotoTap(state),
+                                    child: _ImagePlaceholder(tone: tone),
+                                  );
+                                }
+
+                                return ProductDetailsZoomablePhoto(
+                                  key: ValueKey<String>('pd-zoom-$index-$path'),
+                                  path: path,
+                                  isActive: index == _pageIndex,
+                                  onTap: () => _onPhotoTap(state),
+                                  onZoomChanged:
+                                      (zoomed) =>
+                                          _onPhotoZoomChanged(index, zoomed),
+                                  onMultiTouchChanged: (multi) {
+                                    if (!mounted) return;
+                                    if (index != _pageIndex && multi) {
+                                      return;
+                                    }
+                                    if (_multiTouchLockingPage == multi) return;
+                                    setState(
+                                      () => _multiTouchLockingPage = multi,
+                                    );
+                                  },
+                                );
+                              },
+                            ),
+                          ),
+                          // Tap-to-show chrome: back + title + menu, then store / category.
+                          Positioned(
+                            top: 0,
+                            left: 0,
+                            right: 0,
+                            child: IgnorePointer(
+                              ignoring: !_showInfo,
+                              child: AnimatedOpacity(
+                                duration: const Duration(milliseconds: 180),
+                                opacity: _showInfo ? 1 : 0,
+                                child: DecoratedBox(
+                                  decoration: BoxDecoration(
+                                    gradient: LinearGradient(
+                                      begin: Alignment.topCenter,
+                                      end: Alignment.bottomCenter,
+                                      colors: [
+                                        Colors.black.withValues(alpha: 0.72),
+                                        Colors.black.withValues(alpha: 0.28),
+                                        Colors.transparent,
+                                      ],
                                     ),
                                   ),
-                                  if (state.isDeleting)
-                                    Padding(
-                                      padding: EdgeInsets.only(right: 8),
-                                      child: SizedBox(
-                                        width: 22,
-                                        height: 22,
-                                        child: CircularProgressIndicator(
-                                          strokeWidth: 2,
-                                          color: AppColors.textOnPrimary,
-                                        ),
-                                      ),
+                                  child: Padding(
+                                    padding: AppPadding.screen(
+                                      top: ScreenWrapper.statusBarTop(context),
+                                      bottom: 16,
                                     ),
-                                  _ViewCountChip(
-                                    count: state.viewCountForPhoto(photoIndex),
-                                  ),
-                                  _LikeIconButton(
-                                    liked: state.isPhotoLiked(photoIndex),
-                                    likeCount: state.likeCountForPhoto(
-                                      photoIndex,
-                                    ),
-                                    onTap: () {
-                                      context.read<ProductDetailsBloc>().add(
-                                        ProductDetailsLikePressed(
-                                          imageIndex: photoIndex,
-                                        ),
-                                      );
-                                    },
-                                  ),
-                                  const SizedBox(width: 4),
-                                  if (!state.isOwnStore) ...[
-                                    _WishlistIconButton(
-                                      wishlisted: state.isPhotoWishlisted(
-                                        photoIndex,
-                                      ),
-                                      busy: state.isWishlistBusy,
-                                      onTap: () {
-                                        context
-                                            .read<ProductDetailsBloc>()
-                                            .add(
-                                              ProductDetailsWishlistPressed(
-                                                imageIndex: photoIndex,
-                                              ),
-                                            );
-                                      },
-                                    ),
-                                    const SizedBox(width: 4),
-                                  ],
-                                  PopupMenuButton<_OverflowAction>(
-                                    tooltip: 'More',
-                                    color: AppColors.surface,
-                                    elevation: 8,
-                                    offset: const Offset(0, 40),
-                                    shape: RoundedRectangleBorder(
-                                      borderRadius: BorderRadius.circular(12),
-                                    ),
-                                    onSelected: (action) {
-                                      final prefs =
-                                          ServiceLocator.get<
-                                            ProductDetailsPreferences
-                                          >();
-                                      switch (action) {
-                                        case _OverflowAction.edit:
-                                          context
-                                              .read<ProductDetailsBloc>()
-                                              .add(
-                                                const ProductDetailsEditPressed(),
-                                              );
-                                        case _OverflowAction.availability:
-                                          unawaited(
-                                            _editAvailability(state),
-                                          );
-                                        case _OverflowAction.share:
-                                          final path = _currentImagePath(state);
-                                          context
-                                              .read<ProductDetailsBloc>()
-                                              .add(
-                                                ProductDetailsSharePressed(
-                                                  imagePath: path ?? '',
-                                                ),
-                                              );
-                                        case _OverflowAction.shareLink:
-                                          final message =
-                                              MerchantProfileLink.productShareMessage(
-                                                storeLinkOrSlug: state.storeLink,
-                                                productId: state.product.id,
-                                              );
-                                          if (message.isEmpty) {
-                                            ScaffoldMessenger.of(
-                                              context,
-                                            ).showSnackBar(
-                                              const SnackBar(
-                                                content: Text(
-                                                  'Could not share this product link.',
-                                                ),
-                                              ),
-                                            );
-                                          } else {
-                                            unawaited(Share.share(message));
-                                          }
-                                        case _OverflowAction.delete:
-                                          if (!state.isDeleting) {
-                                            _confirmDeletePhoto(state);
-                                          }
-                                        case _OverflowAction.previewAll:
-                                          setState(
-                                            () => _previewAll = !_previewAll,
-                                          );
-                                          prefs.setPreviewAll(_previewAll);
-                                          if (_previewAll) {
-                                            _scheduleThumbScroll();
-                                          }
-                                        case _OverflowAction.previewDetails:
-                                          setState(
-                                            () =>
-                                                _previewDetails =
-                                                    !_previewDetails,
-                                          );
-                                          prefs.setPreviewDetails(
-                                            _previewDetails,
-                                          );
-                                      }
-                                    },
-                                    itemBuilder: (menuContext) {
-                                      return [
-                                        if (state.canEdit)
-                                          PopupMenuItem(
-                                            value: _OverflowAction.edit,
-                                            child: Row(
-                                              children: [
-                                                Icon(
-                                                  Icons.edit_outlined,
-                                                  size: 20,
-                                                  color: AppColors.textPrimary,
-                                                ),
-                                                const SizedBox(width: 12),
-                                                Text(
-                                                  'Edit',
-                                                  style: AppTextStyles.body(),
-                                                ),
-                                              ],
+                                    child: Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
+                                        Row(
+                                          children: [
+                                            _RoundIconButton(
+                                              icon:
+                                                  Icons
+                                                      .arrow_back_ios_new_rounded,
+                                              onTap: _popDetails,
                                             ),
-                                          ),
-                                        if (state.canEdit)
-                                          PopupMenuItem(
-                                            value: _OverflowAction.availability,
-                                            child: Row(
-                                              children: [
-                                                Icon(
-                                                  Icons.inventory_2_outlined,
-                                                  size: 20,
-                                                  color: AppColors.textPrimary,
+                                            Expanded(
+                                              child: Padding(
+                                                padding: const EdgeInsets.only(
+                                                  left: 10,
+                                                  right: 8,
                                                 ),
-                                                const SizedBox(width: 12),
-                                                Text(
-                                                  'Availability',
-                                                  style: AppTextStyles.body(),
-                                                ),
-                                              ],
-                                            ),
-                                          ),
-                                        PopupMenuItem(
-                                          value: _OverflowAction.share,
-                                          child: Row(
-                                            children: [
-                                              Icon(
-                                                Icons.share_rounded,
-                                                size: 20,
-                                                color: AppColors.textPrimary,
-                                              ),
-                                              const SizedBox(width: 12),
-                                              Text(
-                                                'Share',
-                                                style: AppTextStyles.body(),
-                                              ),
-                                            ],
-                                          ),
-                                        ),
-                                        PopupMenuItem(
-                                          value: _OverflowAction.shareLink,
-                                          child: Row(
-                                            children: [
-                                              Icon(
-                                                Icons.link_rounded,
-                                                size: 20,
-                                                color: AppColors.textPrimary,
-                                              ),
-                                              const SizedBox(width: 12),
-                                              Text(
-                                                'Share link',
-                                                style: AppTextStyles.body(),
-                                              ),
-                                            ],
-                                          ),
-                                        ),
-                                        if (state.canEdit)
-                                          PopupMenuItem(
-                                            value: _OverflowAction.delete,
-                                            child: Row(
-                                              children: [
-                                                Icon(
-                                                  Icons.delete_outline_rounded,
-                                                  size: 20,
-                                                  color: AppColors.error,
-                                                ),
-                                                const SizedBox(width: 12),
-                                                Text(
-                                                  'Delete',
+                                                child: Text(
+                                                  state
+                                                      .titlePartsForPhoto(
+                                                        photoIndex,
+                                                      )
+                                                      .title,
+                                                  maxLines: 1,
+                                                  overflow:
+                                                      TextOverflow.ellipsis,
                                                   style: AppTextStyles.body(
-                                                    color: AppColors.error,
+                                                    fontSize: 16,
+                                                    fontWeight: FontWeight.w600,
+                                                    color:
+                                                        AppColors.textOnPrimary,
                                                   ),
                                                 ),
-                                              ],
+                                              ),
+                                            ),
+                                            if (state.isDeleting)
+                                              Padding(
+                                                padding: EdgeInsets.only(
+                                                  right: 8,
+                                                ),
+                                                child: SizedBox(
+                                                  width: 22,
+                                                  height: 22,
+                                                  child:
+                                                      CircularProgressIndicator(
+                                                        strokeWidth: 2,
+                                                        color:
+                                                            AppColors
+                                                                .textOnPrimary,
+                                                      ),
+                                                ),
+                                              ),
+                                            _ViewCountChip(
+                                              count: state.viewCountForPhoto(
+                                                photoIndex,
+                                              ),
+                                            ),
+                                            _LikeIconButton(
+                                              liked: state.isPhotoLiked(
+                                                photoIndex,
+                                              ),
+                                              likeCount: state
+                                                  .likeCountForPhoto(
+                                                    photoIndex,
+                                                  ),
+                                              onTap: () {
+                                                context
+                                                    .read<ProductDetailsBloc>()
+                                                    .add(
+                                                      ProductDetailsLikePressed(
+                                                        imageIndex: photoIndex,
+                                                      ),
+                                                    );
+                                              },
+                                            ),
+                                            const SizedBox(width: 4),
+                                            if (!state.isOwnStore) ...[
+                                              _WishlistIconButton(
+                                                wishlisted: state
+                                                    .isPhotoWishlisted(
+                                                      photoIndex,
+                                                    ),
+                                                busy: state.isWishlistBusy,
+                                                onTap: () {
+                                                  context
+                                                      .read<
+                                                        ProductDetailsBloc
+                                                      >()
+                                                      .add(
+                                                        ProductDetailsWishlistPressed(
+                                                          imageIndex:
+                                                              photoIndex,
+                                                        ),
+                                                      );
+                                                },
+                                              ),
+                                              const SizedBox(width: 4),
+                                            ],
+                                            PopupMenuButton<_OverflowAction>(
+                                              tooltip: 'More',
+                                              color: AppColors.surface,
+                                              elevation: 8,
+                                              offset: const Offset(0, 40),
+                                              shape: RoundedRectangleBorder(
+                                                borderRadius:
+                                                    BorderRadius.circular(12),
+                                              ),
+                                              onSelected: (action) {
+                                                final prefs =
+                                                    ServiceLocator.get<
+                                                      ProductDetailsPreferences
+                                                    >();
+                                                switch (action) {
+                                                  case _OverflowAction.edit:
+                                                    context
+                                                        .read<
+                                                          ProductDetailsBloc
+                                                        >()
+                                                        .add(
+                                                          const ProductDetailsEditPressed(),
+                                                        );
+                                                  case _OverflowAction
+                                                      .availability:
+                                                    unawaited(
+                                                      _editAvailability(state),
+                                                    );
+                                                  case _OverflowAction.share:
+                                                    final path =
+                                                        _currentImagePath(
+                                                          state,
+                                                        );
+                                                    context
+                                                        .read<
+                                                          ProductDetailsBloc
+                                                        >()
+                                                        .add(
+                                                          ProductDetailsSharePressed(
+                                                            imagePath:
+                                                                path ?? '',
+                                                          ),
+                                                        );
+                                                  case _OverflowAction
+                                                      .shareLink:
+                                                    final message =
+                                                        MerchantProfileLink.productShareMessage(
+                                                          storeLinkOrSlug:
+                                                              state.storeLink,
+                                                          productId:
+                                                              state.product.id,
+                                                        );
+                                                    if (message.isEmpty) {
+                                                      ScaffoldMessenger.of(
+                                                        context,
+                                                      ).showSnackBar(
+                                                        const SnackBar(
+                                                          content: Text(
+                                                            'Could not share this product link.',
+                                                          ),
+                                                        ),
+                                                      );
+                                                    } else {
+                                                      unawaited(
+                                                        Share.share(message),
+                                                      );
+                                                    }
+                                                  case _OverflowAction.delete:
+                                                    if (!state.isDeleting) {
+                                                      _confirmDeletePhoto(
+                                                        state,
+                                                      );
+                                                    }
+                                                  case _OverflowAction
+                                                      .previewAll:
+                                                    setState(
+                                                      () =>
+                                                          _previewAll =
+                                                              !_previewAll,
+                                                    );
+                                                    prefs.setPreviewAll(
+                                                      _previewAll,
+                                                    );
+                                                    if (_previewAll) {
+                                                      _scheduleThumbScroll();
+                                                    }
+                                                  case _OverflowAction
+                                                      .previewDetails:
+                                                    setState(
+                                                      () =>
+                                                          _previewDetails =
+                                                              !_previewDetails,
+                                                    );
+                                                    prefs.setPreviewDetails(
+                                                      _previewDetails,
+                                                    );
+                                                }
+                                              },
+                                              itemBuilder: (menuContext) {
+                                                return [
+                                                  if (state.canEdit)
+                                                    PopupMenuItem(
+                                                      value:
+                                                          _OverflowAction.edit,
+                                                      child: Row(
+                                                        children: [
+                                                          Icon(
+                                                            Icons.edit_outlined,
+                                                            size: 20,
+                                                            color:
+                                                                AppColors
+                                                                    .textPrimary,
+                                                          ),
+                                                          const SizedBox(
+                                                            width: 12,
+                                                          ),
+                                                          Text(
+                                                            'Edit',
+                                                            style:
+                                                                AppTextStyles.body(),
+                                                          ),
+                                                        ],
+                                                      ),
+                                                    ),
+                                                  if (state.canEdit)
+                                                    PopupMenuItem(
+                                                      value:
+                                                          _OverflowAction
+                                                              .availability,
+                                                      child: Row(
+                                                        children: [
+                                                          Icon(
+                                                            Icons
+                                                                .inventory_2_outlined,
+                                                            size: 20,
+                                                            color:
+                                                                AppColors
+                                                                    .textPrimary,
+                                                          ),
+                                                          const SizedBox(
+                                                            width: 12,
+                                                          ),
+                                                          Text(
+                                                            'Availability',
+                                                            style:
+                                                                AppTextStyles.body(),
+                                                          ),
+                                                        ],
+                                                      ),
+                                                    ),
+                                                  PopupMenuItem(
+                                                    value:
+                                                        _OverflowAction.share,
+                                                    child: Row(
+                                                      children: [
+                                                        Icon(
+                                                          Icons.share_rounded,
+                                                          size: 20,
+                                                          color:
+                                                              AppColors
+                                                                  .textPrimary,
+                                                        ),
+                                                        const SizedBox(
+                                                          width: 12,
+                                                        ),
+                                                        Text(
+                                                          'Share',
+                                                          style:
+                                                              AppTextStyles.body(),
+                                                        ),
+                                                      ],
+                                                    ),
+                                                  ),
+                                                  PopupMenuItem(
+                                                    value:
+                                                        _OverflowAction
+                                                            .shareLink,
+                                                    child: Row(
+                                                      children: [
+                                                        Icon(
+                                                          Icons.link_rounded,
+                                                          size: 20,
+                                                          color:
+                                                              AppColors
+                                                                  .textPrimary,
+                                                        ),
+                                                        const SizedBox(
+                                                          width: 12,
+                                                        ),
+                                                        Text(
+                                                          'Share link',
+                                                          style:
+                                                              AppTextStyles.body(),
+                                                        ),
+                                                      ],
+                                                    ),
+                                                  ),
+                                                  if (state.canEdit)
+                                                    PopupMenuItem(
+                                                      value:
+                                                          _OverflowAction
+                                                              .delete,
+                                                      child: Row(
+                                                        children: [
+                                                          Icon(
+                                                            Icons
+                                                                .delete_outline_rounded,
+                                                            size: 20,
+                                                            color:
+                                                                AppColors.error,
+                                                          ),
+                                                          const SizedBox(
+                                                            width: 12,
+                                                          ),
+                                                          Text(
+                                                            'Delete',
+                                                            style:
+                                                                AppTextStyles.body(
+                                                                  color:
+                                                                      AppColors
+                                                                          .error,
+                                                                ),
+                                                          ),
+                                                        ],
+                                                      ),
+                                                    ),
+                                                  if (pageCount > 1)
+                                                    CheckedPopupMenuItem(
+                                                      value:
+                                                          _OverflowAction
+                                                              .previewAll,
+                                                      checked: _previewAll,
+                                                      child: Text(
+                                                        'Preview all',
+                                                        style:
+                                                            AppTextStyles.body(),
+                                                      ),
+                                                    ),
+                                                  CheckedPopupMenuItem(
+                                                    value:
+                                                        _OverflowAction
+                                                            .previewDetails,
+                                                    checked: _previewDetails,
+                                                    child: Text(
+                                                      'Preview details',
+                                                      style:
+                                                          AppTextStyles.body(),
+                                                    ),
+                                                  ),
+                                                ];
+                                              },
+                                              child: Material(
+                                                color: Colors.black.withValues(
+                                                  alpha: 0.35,
+                                                ),
+                                                shape: const CircleBorder(),
+                                                child: SizedBox(
+                                                  width: 36,
+                                                  height: 36,
+                                                  child: Icon(
+                                                    Icons.more_vert_rounded,
+                                                    size: 18,
+                                                    color:
+                                                        AppColors.textOnPrimary,
+                                                  ),
+                                                ),
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                        // Store name, store-group link, and category/
+                                        // title under the toolbar are omitted (owner +
+                                        // visitor). Only exceptional lock / stock /
+                                        // pending-import chrome.
+                                        if (_previewDetails &&
+                                            ProductDetailsLockStockRow.shouldShow(
+                                              isLocked: product.isLocked,
+                                              stockStatus: product.stockStatus,
+                                              importPending: importPending,
+                                              importDeclined: importDeclined,
+                                            ))
+                                          Padding(
+                                            padding: const EdgeInsets.only(
+                                              top: 14,
+                                            ),
+                                            child: ProductDetailsLockStockRow(
+                                              isLocked: product.isLocked,
+                                              stockStatus: product.stockStatus,
+                                              mtoDays: product.mtoDays,
+                                              importPending: importPending,
+                                              importDeclined: importDeclined,
                                             ),
                                           ),
-                                        if (pageCount > 1)
-                                          CheckedPopupMenuItem(
-                                            value: _OverflowAction.previewAll,
-                                            checked: _previewAll,
-                                            child: Text(
-                                              'Preview all',
-                                              style: AppTextStyles.body(),
-                                            ),
-                                          ),
-                                        CheckedPopupMenuItem(
-                                          value:
-                                              _OverflowAction.previewDetails,
-                                          checked: _previewDetails,
-                                          child: Text(
-                                            'Preview details',
-                                            style: AppTextStyles.body(),
-                                          ),
-                                        ),
-                                      ];
-                                    },
-                                    child: Material(
-                                      color: Colors.black.withValues(
-                                        alpha: 0.35,
-                                      ),
-                                      shape: const CircleBorder(),
-                                      child: SizedBox(
-                                        width: 36,
-                                        height: 36,
-                                        child: Icon(
-                                          Icons.more_vert_rounded,
-                                          size: 18,
-                                          color: AppColors.textOnPrimary,
-                                        ),
-                                      ),
+                                      ],
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
+                          if (!_askComposerOpen)
+                            Positioned(
+                              left: 0,
+                              right: 0,
+                              bottom: 0,
+                              child: IgnorePointer(
+                                ignoring: !_showInfo,
+                                child: AnimatedOpacity(
+                                  duration: const Duration(milliseconds: 180),
+                                  opacity: _showInfo ? 1 : 0,
+                                  child: detailsPanel(bottom: 20 + safeBottom),
+                                ),
+                              ),
+                            ),
+                          if (_askComposerOpen && askTarget != null)
+                            Positioned(
+                              left: 0,
+                              right: 0,
+                              bottom:
+                                  _askShowKeyboard && keyboard > 0
+                                      ? keyboard + 6
+                                      : safeBottom + 8,
+                              child: Column(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  if (!_askShowKeyboard && keyboard == 0)
+                                    detailsPanel(bottom: 4),
+                                  Padding(
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 8,
+                                    ),
+                                    child: _AskPhotoComposer(
+                                      controller: _askController,
+                                      focusNode: _askFocus,
+                                      imagePath: askPhotoPath,
+                                      onSend: () => _sendAsk(state),
                                     ),
                                   ),
                                 ],
                               ),
-                              // Store name, store-group link, and category/
-                              // title under the toolbar are omitted (owner +
-                              // visitor). Only exceptional lock / stock /
-                              // pending-import chrome.
-                              if (_previewDetails &&
-                                  ProductDetailsLockStockRow.shouldShow(
-                                    isLocked: product.isLocked,
-                                    stockStatus: product.stockStatus,
-                                    importPending: importPending,
-                                    importDeclined: importDeclined,
-                                  ))
-                                Padding(
-                                  padding: const EdgeInsets.only(top: 14),
-                                  child: ProductDetailsLockStockRow(
-                                    isLocked: product.isLocked,
-                                    stockStatus: product.stockStatus,
-                                    mtoDays: product.mtoDays,
-                                    importPending: importPending,
-                                    importDeclined: importDeclined,
-                                  ),
-                                ),
-                            ],
-                          ),
-                        ),
+                            ),
+                        ],
                       ),
                     ),
                   ),
                 ),
-                Positioned(
-                  left: 0,
-                  right: 0,
-                  bottom: 0,
-                  child: IgnorePointer(
-                    ignoring: !_showInfo,
-                    child: AnimatedOpacity(
-                      duration: const Duration(milliseconds: 180),
-                      opacity: _showInfo ? 1 : 0,
-                      child: DecoratedBox(
-                        decoration: BoxDecoration(
-                          gradient: LinearGradient(
-                            begin: Alignment.topCenter,
-                            end: Alignment.bottomCenter,
-                            colors: [
-                              Colors.transparent,
-                              Colors.black.withValues(alpha: 0.55),
-                              Colors.black.withValues(alpha: 0.8),
-                            ],
-                          ),
-                        ),
-                        child: Padding(
-                          padding: AppPadding.screen(
-                            top: 56,
-                            bottom:
-                                20 + MediaQuery.viewPaddingOf(context).bottom,
-                          ),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.stretch,
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              _ProductMetaPanel(
-                                product: product,
-                                specDisplay: state.specDisplayForPhoto(
-                                  photoIndex,
-                                ),
-                                previewDetails: _previewDetails,
-                              ),
-                              if (_previewAll && pageCount > 1) ...[
-                                const SizedBox(height: 12),
-                                ProductDetailsThumbStrip(
-                                  paths: [
-                                    for (var i = 0; i < pageCount; i++)
-                                      useFeed
-                                          ? feed![i].path
-                                          : (imagePaths.isEmpty
-                                              ? null
-                                              : imagePaths[i]),
-                                  ],
-                                  activeIndex: _pageIndex,
-                                  controller: _thumbController,
-                                  onTapIndex: _goToPage,
-                                  onScrollIndex: _onThumbScrollIndex,
-                                  onScrollEnd: _onThumbScrollEnd,
-                                ),
-                              ],
-                            ],
-                          ),
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-                if (_showAskHint &&
-                    askTarget != null &&
-                    _asks.isEmpty &&
-                    !_showInfo)
-                  Positioned(
-                    left: 24,
-                    right: 24,
-                    bottom: MediaQuery.viewPaddingOf(context).bottom + 18,
-                    child: const Center(child: _AskPhotoHint()),
-                  ),
-                if (_asks.isNotEmpty)
-                  Positioned(
-                    left: 24,
-                    right: 24,
-                    bottom: MediaQuery.viewPaddingOf(context).bottom + 16,
-                    child: Center(
-                      child: _AskAboutPill(
-                        count: _asks.length,
-                        onTap: () => _openAskBasket(state),
-                      ),
-                    ),
-                  ),
-                if (askTarget != null &&
-                    _asks.containsKey(askTarget.product.id))
-                  Positioned(
-                    top:
-                        ScreenWrapper.statusBarTop(context) +
-                        (_showInfo ? 72 : 12),
-                    right: 16,
-                    child: const IgnorePointer(child: _AskCheckBadge()),
-                  ),
-              ],
-            ),
-                  ),
-                ),
-              ),
-            );
-          },
-        ),
+              );
+            },
+          ),
         ),
       ),
     );
@@ -1751,86 +1850,222 @@ class _AskTarget {
   final ChatProductRef product;
 }
 
-class _AskPhotoHint extends StatelessWidget {
-  const _AskPhotoHint();
+/// WhatsApp-style reply bar for the photo on screen. No suggestion chips.
+class _AskPhotoComposer extends StatefulWidget {
+  const _AskPhotoComposer({
+    required this.controller,
+    required this.focusNode,
+    required this.imagePath,
+    required this.onSend,
+  });
+
+  final TextEditingController controller;
+  final FocusNode focusNode;
+  final String? imagePath;
+  final VoidCallback onSend;
 
   @override
-  Widget build(BuildContext context) {
-    return DecoratedBox(
-      decoration: BoxDecoration(
-        color: AppColors.grey900.withValues(alpha: 0.88),
-        borderRadius: BorderRadius.circular(16),
-      ),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
-        child: Text(
-          'Long-press the photo to ask about it',
-          style: AppTextStyles.caption(
-            fontSize: 12,
-            fontWeight: FontWeight.w500,
-            color: Colors.white,
-          ),
-        ),
-      ),
-    );
-  }
+  State<_AskPhotoComposer> createState() => _AskPhotoComposerState();
 }
 
-class _AskAboutPill extends StatelessWidget {
-  const _AskAboutPill({required this.count, required this.onTap});
+class _AskPhotoComposerState extends State<_AskPhotoComposer> {
+  static const _accent = Color(0xFF21C063);
+  static const _button = Color(0xFF00A884);
+  static const _bar = Color(0xFF1F2C34);
+  static const _icon = Color(0xFF8696A0);
+  static const _text = Color(0xFFE9EDEF);
 
-  final int count;
-  final VoidCallback onTap;
+  @override
+  void initState() {
+    super.initState();
+    widget.controller.addListener(_onChanged);
+  }
+
+  @override
+  void didUpdateWidget(covariant _AskPhotoComposer oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.controller == widget.controller) return;
+    oldWidget.controller.removeListener(_onChanged);
+    widget.controller.addListener(_onChanged);
+  }
+
+  @override
+  void dispose() {
+    widget.controller.removeListener(_onChanged);
+    super.dispose();
+  }
+
+  void _onChanged() {
+    if (mounted) setState(() {});
+  }
 
   @override
   Widget build(BuildContext context) {
-    return Material(
-      color: Colors.white,
-      borderRadius: BorderRadius.circular(16),
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(16),
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 14),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(
-                Icons.chat_bubble_outline_rounded,
-                size: 18,
-                color: AppColors.grey900,
+    final canSend = widget.controller.text.trim().isNotEmpty;
+    final path = widget.imagePath?.trim() ?? '';
+    final showPhoto = path.isNotEmpty && ProductImagePaths.isDisplayable(path);
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.end,
+      children: [
+        Expanded(
+          child: DecoratedBox(
+            decoration: BoxDecoration(
+              color: _bar,
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(8, 8, 6, 4),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  DecoratedBox(
+                    decoration: const BoxDecoration(
+                      border: Border(
+                        left: BorderSide(color: _accent, width: 3),
+                      ),
+                    ),
+                    child: Padding(
+                      padding: const EdgeInsets.only(left: 8),
+                      child: Row(
+                        children: [
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  'You',
+                                  style: AppTextStyles.label(
+                                    fontSize: 14,
+                                    fontWeight: FontWeight.w700,
+                                    color: _accent,
+                                  ),
+                                ),
+                                const SizedBox(height: 2),
+                                Row(
+                                  children: [
+                                    const Icon(
+                                      Icons.photo_outlined,
+                                      size: 15,
+                                      color: _icon,
+                                    ),
+                                    const SizedBox(width: 4),
+                                    Text(
+                                      'Photo',
+                                      style: AppTextStyles.body(
+                                        fontSize: 14,
+                                        color: _icon,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ],
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          ClipRRect(
+                            borderRadius: BorderRadius.circular(4),
+                            child: SizedBox(
+                              width: 46,
+                              height: 46,
+                              child:
+                                  showPhoto
+                                      ? ProductMediaImage(
+                                        path: path,
+                                        fit: BoxFit.cover,
+                                        width: 46,
+                                        height: 46,
+                                      )
+                                      : const ColoredBox(
+                                        color: Color(0xFF111B21),
+                                        child: Icon(
+                                          Icons.photo_outlined,
+                                          color: _icon,
+                                          size: 18,
+                                        ),
+                                      ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.end,
+                    children: [
+                      // Smiley — hidden for now.
+                      // const Padding(
+                      //   padding: EdgeInsets.fromLTRB(2, 0, 2, 8),
+                      //   child: Icon(
+                      //     Icons.emoji_emotions_outlined,
+                      //     color: _icon,
+                      //     size: 24,
+                      //   ),
+                      // ),
+                      Expanded(
+                        child: TextField(
+                          controller: widget.controller,
+                          focusNode: widget.focusNode,
+                          minLines: 1,
+                          maxLines: 4,
+                          cursorColor: _accent,
+                          textCapitalization: TextCapitalization.sentences,
+                          style: AppTextStyles.body(fontSize: 16, color: _text),
+                          decoration: const InputDecoration(
+                            isCollapsed: true,
+                            border: InputBorder.none,
+                            contentPadding: EdgeInsets.symmetric(
+                              horizontal: 4,
+                              vertical: 8,
+                            ),
+                          ),
+                        ),
+                      ),
+                      // Attachment — hidden for now.
+                      // const Padding(
+                      //   padding: EdgeInsets.fromLTRB(2, 0, 2, 8),
+                      //   child: Icon(
+                      //     Icons.attach_file,
+                      //     color: _icon,
+                      //     size: 22,
+                      //   ),
+                      // ),
+                      // Camera — hidden for now.
+                      // const Padding(
+                      //   padding: EdgeInsets.fromLTRB(2, 0, 2, 8),
+                      //   child: Icon(
+                      //     Icons.photo_camera_outlined,
+                      //     color: _icon,
+                      //     size: 22,
+                      //   ),
+                      // ),
+                    ],
+                  ),
+                ],
               ),
-              const SizedBox(width: 8),
-              Text(
-                'Ask about $count',
-                style: AppTextStyles.label(
-                  fontSize: 16,
-                  fontWeight: FontWeight.w600,
-                  color: AppColors.grey900,
-                ),
-              ),
-            ],
+            ),
           ),
         ),
-      ),
-    );
-  }
-}
-
-class _AskCheckBadge extends StatelessWidget {
-  const _AskCheckBadge();
-
-  @override
-  Widget build(BuildContext context) {
-    return DecoratedBox(
-      decoration: const BoxDecoration(
-        color: Color(0xFF16A34A),
-        shape: BoxShape.circle,
-      ),
-      child: const Padding(
-        padding: EdgeInsets.all(6),
-        child: Icon(Icons.check_rounded, color: Colors.white, size: 18),
-      ),
+        const SizedBox(width: 6),
+        Material(
+          color: canSend ? _button : _button.withValues(alpha: 0.45),
+          shape: const CircleBorder(),
+          clipBehavior: Clip.antiAlias,
+          child: InkWell(
+            customBorder: const CircleBorder(),
+            onTap: canSend ? widget.onSend : null,
+            child: const SizedBox(
+              width: 48,
+              height: 48,
+              child: Icon(
+                Icons.send_rounded,
+                color: Colors.white,
+                size: 20,
+              ),
+            ),
+          ),
+        ),
+      ],
     );
   }
 }
@@ -1906,9 +2141,8 @@ class _ProductMetaPanelState extends State<_ProductMetaPanel> {
             GestureDetector(
               onTap:
                   hasDetails
-                      ? () => setState(
-                        () => _detailsExpanded = !_detailsExpanded,
-                      )
+                      ? () =>
+                          setState(() => _detailsExpanded = !_detailsExpanded)
                       : null,
               behavior: HitTestBehavior.opaque,
               child: Row(

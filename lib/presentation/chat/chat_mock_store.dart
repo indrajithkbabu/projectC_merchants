@@ -56,10 +56,22 @@ class ChatMockStore extends ChangeNotifier {
       _liveCatalog.isNotEmpty ? _liveCatalog : _mockCatalog;
 
   List<ChatThread> get visibleThreads {
-    final listed =
-        _threads.where((thread) => thread.listed && !thread.outbound).toList();
+    final listed = _threads.where((thread) => thread.listed).toList();
     listed.sort((a, b) => b.lastActivity.compareTo(a.lastActivity));
     return listed;
+  }
+
+  /// Customers see store chats. Store owners see people, stores, and groups.
+  List<ChatThread> inbox({required bool storesOnly}) {
+    if (!storesOnly) return visibleThreads;
+    return visibleThreads
+        .where(
+          (thread) =>
+              thread.kind == ChatKind.store ||
+              thread.outbound ||
+              thread.customer.isStoreAccount,
+        )
+        .toList();
   }
 
   int get totalUnread =>
@@ -77,10 +89,12 @@ class ChatMockStore extends ChangeNotifier {
     for (final thread in _threads) {
       if (!thread.listed || thread.outbound) continue;
       for (final discussion in thread.discussions) {
+        final product = discussion.product;
+        if (product == null) continue;
         final latest = _discussionActivity(thread, discussion);
         final group = groups.putIfAbsent(
-          discussion.product.id,
-          () => ChatProductGroup(product: discussion.product, latestAt: latest),
+          product.id,
+          () => ChatProductGroup(product: product, latestAt: latest),
         );
         if (latest.isAfter(group.latestAt)) group.latestAt = latest;
         group.customers.add(
@@ -104,6 +118,7 @@ class ChatMockStore extends ChangeNotifier {
     if (discussionId != null &&
         thread.discussions.any((item) => item.id == discussionId)) {
       thread.openDiscussionId = discussionId;
+      thread.discussionById(discussionId)?.mentionUnread = false;
     }
     for (final message in thread.messages) {
       final inGeneral = message.discussionId == null;
@@ -124,6 +139,7 @@ class ChatMockStore extends ChangeNotifier {
     if (thread == null) return;
     if (thread.discussionById(discussionId) == null) return;
     thread.openDiscussionId = discussionId;
+    thread.discussionById(discussionId)?.mentionUnread = false;
     for (final message in thread.messages) {
       if (message.discussionId == discussionId) message.unread = false;
     }
@@ -142,14 +158,19 @@ class ChatMockStore extends ChangeNotifier {
     String raw, {
     String? discussionId,
     ChatQuote? quote,
+    bool teamOnly = false,
   }) {
     final text = raw.trim();
     if (text.isEmpty) return;
     final thread = threadById(threadId);
     if (thread == null || thread.status == ChatStatus.closed) return;
-    final target = _sendableDiscussion(thread, discussionId);
+    var target = _sendableDiscussion(thread, discussionId);
+    if (target == null && teamOnly) {
+      target = _addDiscussion(thread, name: '', product: null);
+    }
     thread.listed = true;
     thread.customerTyping = false;
+    final mentions = _mentionsIn(thread, text);
     thread.messages.add(
       ChatMessage(
         id: _id('msg'),
@@ -161,6 +182,9 @@ class ChatMockStore extends ChangeNotifier {
         discussionId: target,
         receipt: ChatReceipt.sent,
         quote: quote,
+        teamOnly: teamOnly,
+        mentions: mentions,
+        writerStore: teamOnly ? storeName : '',
       ),
     );
     if (target != null) {
@@ -287,6 +311,17 @@ class ChatMockStore extends ChangeNotifier {
       ticket: _nextTicket,
       openedAt: DateTime.now(),
       listed: false,
+      kind: follower.isStoreAccount ? ChatKind.store : ChatKind.person,
+      phone: follower.phone,
+      members: [
+        ChatMember(id: 'self', name: staffName, storeName: storeName),
+        ChatMember(
+          id: follower.id,
+          name: follower.name,
+          storeName: follower.isStoreAccount ? follower.name : '',
+          phone: follower.phone,
+        ),
+      ],
       discussions: [],
       messages: [],
     );
@@ -341,6 +376,16 @@ class ChatMockStore extends ChangeNotifier {
         openedAt: DateTime.now(),
         listed: false,
         outbound: true,
+        kind: ChatKind.store,
+        phone: '',
+        members: [
+          ChatMember(id: 'self', name: staffName, storeName: this.storeName),
+          ChatMember(
+            id: id,
+            name: storeName.trim().isEmpty ? 'Store' : storeName.trim(),
+            storeName: storeName.trim(),
+          ),
+        ],
         discussions: [],
         messages: [],
       ),
@@ -411,6 +456,7 @@ class ChatMockStore extends ChangeNotifier {
         id: discussionId,
         product: product,
         status: DiscussionStatus.open,
+        sortOrder: _topOrder(thread),
       ),
     );
     if (autoReplyOn && autoReplyText.trim().isNotEmpty) {
@@ -461,6 +507,240 @@ class ChatMockStore extends ChangeNotifier {
       color: _swatches[toneIndex.abs() % _swatches.length],
       imageUrl: imageUrl,
     );
+  }
+
+  String inboxPreview(ChatThread thread) {
+    for (var i = thread.messages.length - 1; i >= 0; i--) {
+      final message = thread.messages[i];
+      if (message.isStatus) continue;
+      if (!chatMessageVisible(message, storeName)) continue;
+      final body = message.previewBody();
+      if (body.isEmpty) continue;
+      if (message.mine) return 'You: $body';
+      final staff = message.staffName?.trim() ?? '';
+      final name = staff.isNotEmpty ? staff : thread.customer.name;
+      return '$name: $body';
+    }
+    return 'No messages yet';
+  }
+
+  String discussionPreview(ChatThread thread, ProductDiscussion discussion) {
+    for (var i = thread.messages.length - 1; i >= 0; i--) {
+      final message = thread.messages[i];
+      if (message.discussionId != discussion.id || message.isStatus) continue;
+      if (!chatMessageVisible(message, storeName)) continue;
+      final body = message.previewBody();
+      if (body.isEmpty) continue;
+      if (message.mine) return 'You: $body';
+      final staff = message.staffName?.trim() ?? '';
+      final name = staff.isNotEmpty ? staff : thread.customer.name;
+      return '$name: $body';
+    }
+    return 'No messages yet';
+  }
+
+  DateTime discussionActivity(ChatThread thread, ProductDiscussion discussion) {
+    return _discussionActivity(thread, discussion);
+  }
+
+  void setMuted(String threadId, bool muted) {
+    final thread = threadById(threadId);
+    if (thread == null || thread.muted == muted) return;
+    thread.muted = muted;
+    notifyListeners();
+  }
+
+  int closeDiscussions(String threadId, Iterable<String> ids) {
+    final thread = threadById(threadId);
+    if (thread == null) return 0;
+    var count = 0;
+    for (final id in ids) {
+      final discussion = thread.discussionById(id);
+      if (discussion == null || discussion.status == DiscussionStatus.closed) {
+        continue;
+      }
+      discussion.status = DiscussionStatus.closed;
+      discussion.closedBy = staffName;
+      count++;
+    }
+    if (count > 0) notifyListeners();
+    return count;
+  }
+
+  void markDiscussionsRead(String threadId, Iterable<String> ids) {
+    final thread = threadById(threadId);
+    if (thread == null) return;
+    final selected = ids.toSet();
+    for (final discussion in thread.discussions) {
+      if (selected.contains(discussion.id)) discussion.mentionUnread = false;
+    }
+    for (final message in thread.messages) {
+      final id = message.discussionId;
+      if (id != null && selected.contains(id)) message.unread = false;
+    }
+    notifyListeners();
+  }
+
+  void reorderOpenDiscussions(String threadId, int oldIndex, int newIndex) {
+    final thread = threadById(threadId);
+    if (thread == null) return;
+    final open = thread.discussionsByOrder(open: true);
+    if (oldIndex < 0 || oldIndex >= open.length) return;
+    var target = newIndex;
+    if (target > oldIndex) target -= 1;
+    if (target < 0 || target >= open.length) return;
+    final moved = open.removeAt(oldIndex);
+    open.insert(target, moved);
+    for (var i = 0; i < open.length; i++) {
+      open[i].sortOrder = i;
+    }
+    notifyListeners();
+  }
+
+  void reopenDiscussionById(String threadId, String discussionId) {
+    final thread = threadById(threadId);
+    final discussion = thread?.discussionById(discussionId);
+    if (thread == null || discussion == null) return;
+    if (discussion.status == DiscussionStatus.open) return;
+    discussion.status = DiscussionStatus.open;
+    discussion.closedBy = '';
+    discussion.mentionUnread = false;
+    discussion.sortOrder = _topOrder(thread);
+    for (final message in thread.messages) {
+      if (message.discussionId == discussionId) message.unread = false;
+    }
+    notifyListeners();
+  }
+
+  String startDiscussion(
+    String threadId, {
+    String name = '',
+    ChatProductRef? product,
+  }) {
+    final thread = threadById(threadId);
+    if (thread == null) return '';
+    final id = _addDiscussion(thread, name: name, product: product);
+    thread.listed = true;
+    thread.openDiscussionId = id;
+    notifyListeners();
+    return id;
+  }
+
+  String createGroup({
+    required String name,
+    required List<ChatActor> picked,
+  }) {
+    final members = <ChatMember>[
+      ChatMember(id: 'self', name: staffName, storeName: storeName),
+    ];
+    for (final actor in picked) {
+      if (actor.isStoreAccount) {
+        members.add(
+          ChatMember(
+            id: actor.id,
+            name: actor.name,
+            storeName: actor.name,
+            phone: actor.phone,
+          ),
+        );
+        members.addAll(actor.team);
+      } else {
+        members.add(
+          ChatMember(
+            id: actor.id,
+            name: actor.name,
+            storeName: storeName,
+            phone: actor.phone,
+          ),
+        );
+      }
+    }
+    final label = name.trim().isEmpty ? 'Group' : name.trim();
+    final now = DateTime.now();
+    final thread = ChatThread(
+      id: _id('group'),
+      customer: ChatActor(id: _id('group-actor'), name: label),
+      status: ChatStatus.open,
+      ticket: _nextTicket,
+      openedAt: now,
+      listed: true,
+      kind: ChatKind.group,
+      createdBy: staffName,
+      members: members,
+      discussions: [],
+      messages: [
+        ChatMessage(
+          id: _id('status'),
+          kind: ChatMessageKind.status,
+          side: ChatSenderSide.merchant,
+          at: now,
+          text: '$staffName created this group',
+        ),
+      ],
+    );
+    _nextTicket += 1;
+    final discussionId = _addDiscussion(thread, name: '', product: null);
+    thread.openDiscussionId = discussionId;
+    _threads.add(thread);
+    notifyListeners();
+    return thread.id;
+  }
+
+  String _addDiscussion(
+    ChatThread thread, {
+    required String name,
+    required ChatProductRef? product,
+  }) {
+    final now = DateTime.now();
+    var label = name.trim();
+    if (label.isEmpty && product != null) label = '';
+    if (label.isEmpty && product == null) {
+      final date = chatDateName(now);
+      final taken = thread.discussions.any(
+        (item) => item.product == null && item.name == date,
+      );
+      label = taken ? '$date ${chatClock(now)}' : date;
+    } else if (product == null && label == chatDateName(now)) {
+      final taken = thread.discussions.any(
+        (item) => item.product == null && item.name == label,
+      );
+      if (taken) label = '$label ${chatClock(now)}';
+    }
+    final discussion = ProductDiscussion(
+      id: _id('disc'),
+      product: product,
+      status: DiscussionStatus.open,
+      name: label,
+      sortOrder: _topOrder(thread),
+    );
+    thread.discussions.add(discussion);
+    return discussion.id;
+  }
+
+  int _topOrder(ChatThread thread) {
+    var min = 0;
+    for (final item in thread.discussions) {
+      if (item.sortOrder < min) min = item.sortOrder;
+    }
+    return min - 1;
+  }
+
+  List<String> _mentionsIn(ChatThread thread, String text) {
+    final names = <String>[
+      for (final member in thread.members)
+        if (member.name.trim().isNotEmpty) member.name.trim(),
+    ];
+    if (names.isEmpty) return const [];
+    final found = <String>[];
+    final pattern = RegExp(r'@([A-Za-z][A-Za-z0-9]*)');
+    for (final match in pattern.allMatches(text)) {
+      final token = match.group(1)!.toLowerCase();
+      for (final name in names) {
+        final first = name.split(RegExp(r'\s+')).first.toLowerCase();
+        if (first == token && !found.contains(name)) found.add(name);
+      }
+    }
+    return found;
   }
 
   String? _sendableDiscussion(ChatThread thread, String? discussionId) {
@@ -525,6 +805,21 @@ class ChatMockStore extends ChangeNotifier {
       id: 'cust-mehta',
       name: 'Mehta Jewellers',
       isStoreAccount: true,
+      phone: '9840011122',
+      team: [
+        ChatMember(
+          id: 'mehta-arun',
+          name: 'Arun',
+          storeName: 'Mehta Jewellers',
+          phone: '9840011123',
+        ),
+        ChatMember(
+          id: 'mehta-divya',
+          name: 'Divya',
+          storeName: 'Mehta Jewellers',
+          phone: '9840011124',
+        ),
+      ],
     );
     const mega = ChatActor(id: 'cust-mega', name: 'Meganathan');
     //const ajith = ChatActor(id: 'cust-ajith', name: 'Ajith');
@@ -577,21 +872,39 @@ class ChatMockStore extends ChangeNotifier {
         openedAt: _at(1, 16, 10),
         listed: true,
         openDiscussionId: 'disc-bangle',
+        phone: '9840099001',
+        members: const [
+          ChatMember(id: 'self', name: 'Suresh', storeName: 'My store'),
+          ChatMember(id: 'staff-priya', name: 'Priya', storeName: 'My store'),
+          ChatMember(id: 'staff-karthik', name: 'Karthik', storeName: 'My store'),
+          ChatMember(id: 'cust-ajith', name: 'Ajith', phone: '9840099001'),
+        ],
         discussions: [
           ProductDiscussion(
             id: 'disc-bangle',
             product: bangle,
             status: DiscussionStatus.open,
+            sortOrder: 0,
           ),
           ProductDiscussion(
             id: 'disc-hoops',
             product: hoops,
             status: DiscussionStatus.open,
+            sortOrder: 1,
+            mentionUnread: true,
+          ),
+          ProductDiscussion(
+            id: 'disc-note',
+            status: DiscussionStatus.open,
+            name: '5 Nov',
+            sortOrder: 2,
           ),
           ProductDiscussion(
             id: 'disc-necklace',
             product: necklace,
             status: DiscussionStatus.closed,
+            closedBy: 'Ajith',
+            sortOrder: 3,
           ),
         ],
         messages: [
@@ -653,10 +966,6 @@ class ChatMockStore extends ChangeNotifier {
             mine: true,
             receipt: ChatReceipt.read,
             text: 'Yes, This one is 7.73 g.',
-            quote: const ChatQuote(
-              senderLabel: 'Ajith',
-              text: 'Can you confirm if the weight is 7.73 grams?',
-            ),
           ),
           ChatMessage(
             id: 'm9',
@@ -683,7 +992,36 @@ class ChatMockStore extends ChangeNotifier {
             discussionId: 'disc-hoops',
             staffName: 'Karthik',
             unread: true,
-            text: 'Yes, just 4.2 g net. Want me to hold it?',
+            text: '@Suresh just 4.2 g net. Want me to hold it?',
+            mentions: const ['Suresh'],
+          ),
+          ChatMessage(
+            id: 'm-note',
+            kind: ChatMessageKind.text,
+            side: ChatSenderSide.merchant,
+            at: _at(0, 13, 10),
+            discussionId: 'disc-bangle',
+            mine: true,
+            teamOnly: true,
+            text: 'Hold this kada for the bridal order.',
+          ),
+          ChatMessage(
+            id: 'm-hidden-note',
+            kind: ChatMessageKind.text,
+            side: ChatSenderSide.customer,
+            at: _at(0, 13, 12),
+            discussionId: 'disc-bangle',
+            teamOnly: true,
+            writerStore: 'Ajith Studio',
+            text: 'This note belongs to the other store.',
+          ),
+          ChatMessage(
+            id: 'm-date',
+            kind: ChatMessageKind.text,
+            side: ChatSenderSide.customer,
+            at: _at(0, 14, 2),
+            discussionId: 'disc-note',
+            text: 'Can we talk sizes before the wedding?',
           ),
         ],
       ),
@@ -697,6 +1035,28 @@ class ChatMockStore extends ChangeNotifier {
         ticket: 1040,
         openedAt: _at(0, 10, 5),
         listed: true,
+        kind: ChatKind.store,
+        muted: true,
+        phone: '9840011122',
+        members: const [
+          ChatMember(id: 'self', name: 'Suresh', storeName: 'My store'),
+          ChatMember(
+            id: 'cust-mehta',
+            name: 'Mehta Jewellers',
+            storeName: 'Mehta Jewellers',
+            phone: '9840011122',
+          ),
+          ChatMember(
+            id: 'mehta-arun',
+            name: 'Arun',
+            storeName: 'Mehta Jewellers',
+          ),
+          ChatMember(
+            id: 'mehta-divya',
+            name: 'Divya',
+            storeName: 'Mehta Jewellers',
+          ),
+        ],
         discussions: [
           ProductDiscussion(
             id: 'disc-chain',
@@ -759,6 +1119,62 @@ class ChatMockStore extends ChangeNotifier {
             side: ChatSenderSide.merchant,
             at: _at(1, 18, 40),
             text: 'You closed this chat · ${chatClock(_at(1, 18, 40))}',
+          ),
+        ],
+      ),
+    );
+
+    _threads.add(
+      ChatThread(
+        id: 'chat-bridal',
+        customer: const ChatActor(id: 'group-bridal', name: 'Bridal team'),
+        status: ChatStatus.open,
+        ticket: 1044,
+        openedAt: _at(0, 9, 30),
+        listed: true,
+        kind: ChatKind.group,
+        createdBy: 'Suresh',
+        members: const [
+          ChatMember(id: 'self', name: 'Suresh', storeName: 'My store'),
+          ChatMember(id: 'staff-priya', name: 'Priya', storeName: 'My store'),
+          ChatMember(
+            id: 'cust-mehta',
+            name: 'Mehta Jewellers',
+            storeName: 'Mehta Jewellers',
+          ),
+          ChatMember(
+            id: 'mehta-arun',
+            name: 'Arun',
+            storeName: 'Mehta Jewellers',
+          ),
+        ],
+        discussions: [
+          ProductDiscussion(
+            id: 'disc-bridal',
+            product: necklace,
+            status: DiscussionStatus.open,
+            mentionUnread: true,
+          ),
+        ],
+        messages: [
+          ChatMessage(
+            id: 'm-group-status',
+            kind: ChatMessageKind.status,
+            side: ChatSenderSide.merchant,
+            at: _at(0, 9, 30),
+            discussionId: 'disc-bridal',
+            text: 'Suresh created this group',
+          ),
+          ChatMessage(
+            id: 'm-group-1',
+            kind: ChatMessageKind.text,
+            side: ChatSenderSide.merchant,
+            at: _at(0, 9, 40),
+            discussionId: 'disc-bridal',
+            staffName: 'Arun',
+            unread: true,
+            text: '@Priya can you confirm the necklace weight?',
+            mentions: const ['Priya'],
           ),
         ],
       ),

@@ -32,12 +32,16 @@ This file defines what to follow for UI and logic inside `lib/presentation/produ
   grids keep half-width). Channel/browse tap starts a full-width decode before
   push. API `quality: low` disables deep zoom. At 1× horizontal swipes change
   photos. Page swipe is disabled while zoomed so pan stays smooth.
-- Visitor only (not own store, not locked, real store id): while chrome is
-  hidden, a bottom hint says "Long-press the photo to ask about it".
-  Long-press toggles the current full-size photo into an ask set (green
-  check). Swipe and long-press to add more. **Ask about N** opens the enquiry
-  basket; send starts one discussion per photo and opens that store's chat.
-  Hidden on the owner's own store. Zoomed photos ignore the long-press.
+- Visitor only (not own store, not locked, real store id): **tap** the
+  full-size photo to open a WhatsApp-style composer for that photo (green
+  quote: “You” / Photo + thumbnail, message field, green send). No suggestion
+  chips and no multi-select. Send writes one discussion for the **current**
+  photo and opens that store's chat. Top chrome stays up so back, like,
+  wishlist, and the menu remain available. Tap the photo to drop the keyboard
+  (weight / filmstrip sit above the composer); tap again to close it. System
+  back closes the composer before leaving the photo. Zoomed photos do not
+  open it. Hidden on the owner's own store — tap there still only toggles
+  chrome.
 - Product **title** sits to the right of the back button when chrome is shown.
   System / `PopScope` back still works when chrome is hidden.
 - **Lock / stock / pending** (Preview details on): exceptional chrome — lock

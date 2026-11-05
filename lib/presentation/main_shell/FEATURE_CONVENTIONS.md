@@ -9,12 +9,12 @@ This file defines what to follow for UI and logic inside `lib/presentation/main_
 - Root shell uses `ScreenWrapper` with `extendBodyBehindBottom: true`.
 - Floating capsule nav is `FloatingBottomNavBar` from `lib/helper/widgets/`.
 - **Tab sets (driven by `AccountProfileBloc` / `CatalogSession.ownStoreId`):**
-  - **No own store:** **Stores** (home icon) | **Contacts** | **Settings** | **Profile**
-  - **Own store:** **Stores** (home icon) | **Contacts** | **Wishlist** (heart) | **My store** | **Chats**
+  - **No own store:** **Stores** (home icon) | **Message** | **Settings** | **Profile**
+  - **Own store:** **Stores** (home icon) | **Message** | **Wishlist** (heart) | **My store**
 - Own-store Settings is **not** a bottom tab. Open it from My store toolbar gear →
   `settings_route` (`SettingsTab(showBack: true)`), including Account privacy +
   Import requests, Appearance, View products, screenshots, logout / delete.
-- Shell home titles (Stores / Contacts / Wishlist) share `ShellTabTitleBar`
+- Shell home titles (Stores / Message / Wishlist) share `ShellTabTitleBar`
   (40px row, 22pt, top = statusBar + 8) so tab switches stay vertically stable.
   Trailing stays right-aligned (`Expanded` title cluster + trailing). Wishlist
   collapses search/filters into title-trailing icons on scroll and supports
@@ -57,8 +57,8 @@ This file defines what to follow for UI and logic inside `lib/presentation/main_
   do not add per-screen FLAG_SECURE hacks.
 
 ## Anti-flicker Rules
-- Keep tab bodies in an `IndexedStack` (4 slots without a store, 5 with one).
-  The fifth slot is **Chats**, only when the account has an own store. Swap slots 2–3 only when
+- Keep tab bodies in an `IndexedStack` (4 slots either way).
+  Slot 1 is **Message** (`ChatTab`) for every account. Swap slots 2–3 only when
   own-store presence changes (after store create the shell usually remounts via
   `pushNamedAndRemoveUntil`).
 - Own-store: provide one `StoreProfileBloc` keyed by store id above the stack;
@@ -71,8 +71,8 @@ This file defines what to follow for UI and logic inside `lib/presentation/main_
 - Shell hosts `StoreListingBloc`, `ContactsBloc`, and `AccountProfileBloc`.
 - Own-store shell also hosts `StoreProfileBloc` for My store (and shared meta).
 - Stores tab → `GET /home` via existing store listing.
-- Contacts tab (Telegram-style on `AppColors.scaffold`):
-  - Title **Contacts** at 22pt + capsule search.
+- Message tab lists chats (see chat FEATURE_CONVENTIONS). Find stores, opened from New chat, is the old Contacts screen (`ContactsTab(showBack: true)`):
+  - Title **Find stores** with back + capsule search. Not a bottom-nav tab.
   - Default (empty search): **Invite Friends** action card →
     `invite_friends_route`, then **Stores** container only (peer stores from
     `StoreListingBloc` `/home`). Do **not** list phone contacts here.

@@ -1,8 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:project_c/bloc/storeprofile/store_profile_bloc.dart';
 import 'package:project_c/helper/colors.dart';
 import 'package:project_c/helper/text_styles.dart';
 import 'package:project_c/helper/widgets/screen_wrapper.dart';
+import 'package:project_c/models/store_product.dart';
+import 'package:project_c/navigation/routes.dart';
 import 'package:project_c/presentation/chat/chat_mock_store.dart';
 import 'package:project_c/presentation/chat/chat_models.dart';
 import 'package:project_c/presentation/chat/chat_widgets/chat_pieces.dart';
@@ -29,6 +33,7 @@ class _ChatThreadRouteState extends State<ChatThreadRoute> {
   final FocusNode _focus = FocusNode();
 
   ChatQuote? _quote;
+  bool _teamNote = false;
   bool _aboutCleared = false;
   String? _trackedOpen;
   int _seenCount = -1;
@@ -56,7 +61,7 @@ class _ChatThreadRouteState extends State<ChatThreadRoute> {
   @override
   Widget build(BuildContext context) {
     return ScreenWrapper(
-      backgroundColor: AppColors.scaffold,
+      backgroundColor: chatWallpaper,
       child: ListenableBuilder(
         listenable: ChatMockStore.instance,
         builder: (context, _) {
@@ -67,48 +72,38 @@ class _ChatThreadRouteState extends State<ChatThreadRoute> {
           _trackOpen(thread);
           _stickToEnd(thread.messages.length);
           final closed = thread.status == ChatStatus.closed;
+          final discussion = thread.discussionById(thread.openDiscussionId);
+          final discussionTitle = discussion?.title.trim() ?? '';
+          final title =
+              discussionTitle.isNotEmpty
+                  ? discussionTitle
+                  : thread.customer.name;
+          final people = thread.peopleCount;
           final subtitle =
               thread.customerTyping && !closed
                   ? 'typing…'
-                  : thread.outbound
-                  ? 'Store'
-                  : (thread.customer.isStoreAccount
-                      ? 'Store account'
-                      : 'Customer');
+                  : thread.muted
+                  ? 'Muted · ${thread.customer.name} · $people people'
+                  : '${thread.customer.name} · $people people';
           return Column(
             children: [
               _ThreadHeader(
                 thread: thread,
+                title: title,
                 subtitle: subtitle,
-                typing: thread.customerTyping && !closed,
-                onDetails: () => showChatDetailsSheet(context, thread),
-              ),
-              ChatProductChips(
-                thread: thread,
-                onOpen:
-                    (id) =>
-                        ChatMockStore.instance.openDiscussion(thread.id, id),
+                onProfile: () => showChatProfileSheet(context, thread),
+                onTitle:
+                    discussion?.product == null
+                        ? null
+                        : () => _openPinned(thread, discussion!.product!),
               ),
               Expanded(
                 child: ChatTimeline(
                   scrollController: _scroll,
                   thread: thread,
-                  onReply:
-                      (message) =>
-                          setState(() => _quote = _quoteFor(thread, message)),
-                  onCloseDiscussion: () {
-                    HapticFeedback.selectionClick();
-                    ChatMockStore.instance.closeDiscussion(thread.id);
-                  },
-                  onReopenDiscussion: () {
-                    HapticFeedback.selectionClick();
-                    ChatMockStore.instance.reopenDiscussion(thread.id);
-                  },
-                  onOpenProduct: (product) {
-                    final id = thread.discussionIdForProduct(product.id);
-                    if (id == null) return;
-                    ChatMockStore.instance.openDiscussion(thread.id, id);
-                  },
+                  onReply: (message) => _reply(thread, message, team: false),
+                  onMessageMenu: (message) => _menu(thread, message),
+                  onOpenProduct: (product) => _openPinned(thread, product),
                 ),
               ),
               if (closed)
@@ -122,21 +117,11 @@ class _ChatThreadRouteState extends State<ChatThreadRoute> {
                 _Composer(
                   controller: _composer,
                   focusNode: _focus,
-                  quickReplies:
-                      thread.outbound
-                          ? const <String>[]
-                          : ChatMockStore.instance.quickReplies,
                   quote: _quote,
-                  about: _aboutLabel(thread),
+                  teamNote: _teamNote,
+                  storeName: ChatMockStore.instance.storeName,
                   onClearQuote: () => setState(() => _quote = null),
-                  onClearAbout: () => setState(() => _aboutCleared = true),
-                  onPickReply: (phrase) {
-                    _composer.text = phrase;
-                    _composer.selection = TextSelection.collapsed(
-                      offset: phrase.length,
-                    );
-                    _focus.requestFocus();
-                  },
+                  onToggleTeam: () => setState(() => _teamNote = !_teamNote),
                   onShare: () => _share(thread),
                   onSend: () => _send(thread),
                 ),
@@ -184,9 +169,78 @@ class _ChatThreadRouteState extends State<ChatThreadRoute> {
     return discussion.id;
   }
 
-  String? _aboutLabel(ChatThread thread) {
-    final id = _targetDiscussion(thread);
-    return thread.discussionById(id)?.product.name;
+  void _reply(ChatThread thread, ChatMessage message, {required bool team}) {
+    setState(() {
+      _quote = _quoteFor(thread, message);
+      if (team) _teamNote = true;
+    });
+    _focus.requestFocus();
+  }
+
+  Future<void> _menu(ChatThread thread, ChatMessage message) async {
+    HapticFeedback.mediumImpact();
+    final action = await showModalBottomSheet<String>(
+      context: context,
+      backgroundColor: AppColors.surface,
+      builder: (context) {
+        return SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              ListTile(
+                title: const Text('Reply'),
+                onTap: () => Navigator.pop(context, 'reply'),
+              ),
+              ListTile(
+                title: Text(
+                  'Reply to team',
+                  style: AppTextStyles.body(color: chatTeamNote),
+                ),
+                leading: Icon(Icons.lock_outline_rounded, color: chatTeamNote),
+                onTap: () => Navigator.pop(context, 'team'),
+              ),
+              ListTile(
+                title: const Text('Copy'),
+                onTap: () => Navigator.pop(context, 'copy'),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+    if (!mounted || action == null) return;
+    if (action == 'copy') {
+      await Clipboard.setData(ClipboardData(text: message.previewBody()));
+      return;
+    }
+    _reply(thread, message, team: action == 'team');
+  }
+
+  void _openPinned(ChatThread thread, ChatProductRef product) {
+    StoreProfileBloc? bloc;
+    try {
+      bloc = context.read<StoreProfileBloc>();
+    } catch (_) {
+      bloc = null;
+    }
+    StoreProduct? match;
+    if (bloc != null) {
+      for (final item in bloc.state.productsForMedia) {
+        if (item.id == product.id) {
+          match = item;
+          break;
+        }
+      }
+    }
+    if (match == null) return;
+    Navigator.of(context).pushNamed(
+      Routes.productDetailsRoute,
+      arguments: <String, Object?>{
+        'product': match,
+        'storeName': thread.customer.name,
+        'isOwnStore': !thread.outbound,
+      },
+    );
   }
 
   ChatQuote _quoteFor(ChatThread thread, ChatMessage message) {
@@ -210,6 +264,7 @@ class _ChatThreadRouteState extends State<ChatThreadRoute> {
       text,
       discussionId: _targetDiscussion(thread),
       quote: _quote,
+      teamOnly: _teamNote,
     );
     _composer.clear();
     setState(() => _quote = null);
@@ -229,70 +284,91 @@ class _ChatThreadRouteState extends State<ChatThreadRoute> {
 class _ThreadHeader extends StatelessWidget {
   const _ThreadHeader({
     required this.thread,
+    required this.title,
     required this.subtitle,
-    required this.typing,
-    required this.onDetails,
+    required this.onProfile,
+    this.onTitle,
   });
 
   final ChatThread thread;
+  final String title;
   final String subtitle;
-  final bool typing;
-  final VoidCallback onDetails;
+  final VoidCallback onProfile;
+  final VoidCallback? onTitle;
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: EdgeInsets.fromLTRB(
-        4,
-        ScreenWrapper.statusBarTop(context) + 4,
-        4,
-        6,
-      ),
-      child: Row(
-        children: [
-          IconButton(
-            tooltip: 'Back',
-            onPressed: () => Navigator.of(context).maybePop(),
-            icon: Icon(
-              Icons.arrow_back_ios_new_rounded,
-              size: 20,
-              color: AppColors.backIcon,
+    return ColoredBox(
+      color: chatWallpaper,
+      child: Padding(
+        padding: EdgeInsets.fromLTRB(
+          2,
+          ScreenWrapper.statusBarTop(context) + 2,
+          12,
+          8,
+        ),
+        child: Row(
+          children: [
+            IconButton(
+              tooltip: 'Back',
+              onPressed: () => Navigator.of(context).maybePop(),
+              icon: Icon(
+                Icons.arrow_back_ios_new_rounded,
+                size: 18,
+                color: chatInk,
+              ),
             ),
-          ),
-          ChatAvatar(actor: thread.customer, size: 36),
-          const SizedBox(width: 8),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  thread.customer.name,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: AppTextStyles.label(
-                    fontSize: 16,
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-                Text(
-                  subtitle,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: AppTextStyles.caption(
-                    fontSize: 12,
-                    fontWeight: typing ? FontWeight.w600 : FontWeight.w400,
-                    color: typing ? AppColors.primary : AppColors.textSecondary,
-                  ),
-                ),
-              ],
+            GestureDetector(
+              onTap: onProfile,
+              child: ChatAvatar(
+                actor: thread.customer,
+                size: 34,
+                group: thread.kind == ChatKind.group,
+              ),
             ),
-          ),
-          IconButton(
-            tooltip: 'Chat details',
-            onPressed: onDetails,
-            icon: Icon(Icons.more_horiz_rounded, color: AppColors.textPrimary),
-          ),
-        ],
+            const SizedBox(width: 8),
+            Expanded(
+              child: GestureDetector(
+                onTap: onProfile,
+                behavior: HitTestBehavior.opaque,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    GestureDetector(
+                      onTap: onTitle ?? onProfile,
+                      child: Text(
+                        title,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: AppTextStyles.label(
+                          fontSize: 17,
+                          fontWeight: FontWeight.w600,
+                          color: chatInk,
+                        ),
+                      ),
+                    ),
+                    Text(
+                      subtitle,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: AppTextStyles.caption(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w400,
+                        color: chatMuted,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            if (thread.muted)
+              Icon(
+                Icons.notifications_off_outlined,
+                size: 16,
+                color: chatMuted,
+              ),
+          ],
+        ),
       ),
     );
   }
@@ -331,24 +407,22 @@ class _Composer extends StatelessWidget {
   const _Composer({
     required this.controller,
     required this.focusNode,
-    required this.quickReplies,
     required this.quote,
-    required this.about,
+    required this.teamNote,
+    required this.storeName,
     required this.onClearQuote,
-    required this.onClearAbout,
-    required this.onPickReply,
+    required this.onToggleTeam,
     required this.onShare,
     required this.onSend,
   });
 
   final TextEditingController controller;
   final FocusNode focusNode;
-  final List<String> quickReplies;
   final ChatQuote? quote;
-  final String? about;
+  final bool teamNote;
+  final String storeName;
   final VoidCallback onClearQuote;
-  final VoidCallback onClearAbout;
-  final ValueChanged<String> onPickReply;
+  final VoidCallback onToggleTeam;
   final VoidCallback onShare;
   final VoidCallback onSend;
 
@@ -356,38 +430,40 @@ class _Composer extends StatelessWidget {
   Widget build(BuildContext context) {
     final bottom = MediaQuery.paddingOf(context).bottom;
     final canSend = controller.text.trim().isNotEmpty;
+    final sendColor =
+        teamNote && canSend
+            ? chatTeamNote
+            : (AppColors.isNight
+                ? AppColors.grey700
+                : AppColors.surfaceSecondary);
+    final sendIcon = canSend && teamNote ? const Color(0xFF1A1408) : chatInk;
     return Container(
-      decoration: BoxDecoration(
-        color: AppColors.surface,
-        border: Border(top: BorderSide(color: AppColors.divider)),
-      ),
-      padding: EdgeInsets.fromLTRB(8, 8, 8, 8 + bottom),
+      color: chatWallpaper,
+      padding: EdgeInsets.fromLTRB(10, 4, 10, 8 + bottom),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          if (quickReplies.isNotEmpty)
-            SizedBox(
-              height: 46,
-              child: ListView.separated(
-                scrollDirection: Axis.horizontal,
-                itemCount: quickReplies.length,
-                separatorBuilder: (_, _) => const SizedBox(width: 6),
-                itemBuilder: (context, index) {
-                  final phrase = quickReplies[index];
-                  return ActionChip(
-                    label: Text(
-                      phrase,
+          if (teamNote)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 8),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  const Icon(Icons.lock_rounded, size: 14, color: chatTeamNote),
+                  const SizedBox(width: 6),
+                  Flexible(
+                    child: Text(
+                      'Only $storeName will see this',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
                       style: AppTextStyles.caption(
-                        fontSize: 12,
-                        color: AppColors.textPrimary,
+                        fontSize: 13,
+                        fontWeight: FontWeight.w500,
+                        color: chatTeamNote,
                       ),
                     ),
-                    backgroundColor: AppColors.surfaceSecondary,
-                    side: BorderSide(color: AppColors.border),
-                    visualDensity: VisualDensity.compact,
-                    onPressed: () => onPickReply(phrase),
-                  );
-                },
+                  ),
+                ],
               ),
             ),
           if (quote != null) ...[
@@ -414,54 +490,109 @@ class _Composer extends StatelessWidget {
           //     ),
           //   ),
           // ],
-          const SizedBox(height: 6),
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.end,
-            children: [
-              IconButton(
-                tooltip: 'Share a product',
-                onPressed: onShare,
-                icon: Icon(Icons.add_rounded, color: AppColors.textPrimary),
+          const SizedBox(height: 4),
+          DecoratedBox(
+            decoration: BoxDecoration(
+              color:
+                  AppColors.isNight ? AppColors.background : AppColors.surface,
+              borderRadius: BorderRadius.circular(28),
+              border: Border.all(
+                color: teamNote ? chatTeamNote : AppColors.divider,
+                width: teamNote ? 1.4 : 1,
               ),
-              Expanded(
-                child: TextField(
-                  controller: controller,
-                  focusNode: focusNode,
-                  minLines: 1,
-                  maxLines: 4,
-                  textCapitalization: TextCapitalization.sentences,
-                  style: AppTextStyles.body(fontSize: 15),
-                  decoration: InputDecoration(
-                    hintText: 'Message',
-                    hintStyle: AppTextStyles.hint(
-                      fontSize: 15,
-                      fontWeight: FontWeight.w400,
+            ),
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(4, 4, 4, 4),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  if (!teamNote)
+                    IconButton(
+                      tooltip: 'Share a product',
+                      onPressed: onShare,
+                      visualDensity: VisualDensity.compact,
+                      icon: Icon(Icons.add_rounded, color: chatMuted),
                     ),
-                    filled: true,
-                    fillColor: AppColors.surfaceSecondary,
-                    isDense: true,
-                    contentPadding: const EdgeInsets.symmetric(
-                      horizontal: 14,
-                      vertical: 10,
-                    ),
-                    border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(22),
-                      borderSide: BorderSide.none,
+                  _RoundIcon(
+                    tooltip: teamNote ? 'Team note on' : 'Note to your team',
+                    onTap: onToggleTeam,
+                    color: teamNote ? chatTeamNote : Colors.transparent,
+                    icon: Icons.lock_rounded,
+                    iconColor: teamNote ? const Color(0xFF1A1408) : chatMuted,
+                  ),
+                  Expanded(
+                    child: TextField(
+                      controller: controller,
+                      focusNode: focusNode,
+                      minLines: 1,
+                      maxLines: 4,
+                      textCapitalization: TextCapitalization.sentences,
+                      style: AppTextStyles.body(fontSize: 16, color: chatInk),
+                      decoration: InputDecoration(
+                        hintText: teamNote ? 'Note to your team' : 'Message',
+                        hintStyle: AppTextStyles.hint(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w400,
+                          color: chatMuted,
+                        ),
+                        filled: false,
+                        isDense: true,
+                        contentPadding: const EdgeInsets.fromLTRB(4, 10, 8, 10),
+                        border: InputBorder.none,
+                        enabledBorder: InputBorder.none,
+                        focusedBorder: InputBorder.none,
+                      ),
                     ),
                   ),
-                ),
+                  _RoundIcon(
+                    tooltip: 'Send',
+                    onTap: canSend ? onSend : null,
+                    color: sendColor,
+                    icon: Icons.send_rounded,
+                    iconColor: canSend ? sendIcon : chatMuted,
+                  ),
+                ],
               ),
-              IconButton(
-                tooltip: 'Send',
-                onPressed: canSend ? onSend : null,
-                icon: Icon(
-                  Icons.send_rounded,
-                  color: canSend ? AppColors.primary : AppColors.textHint,
-                ),
-              ),
-            ],
+            ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+class _RoundIcon extends StatelessWidget {
+  const _RoundIcon({
+    required this.tooltip,
+    required this.onTap,
+    required this.color,
+    required this.icon,
+    required this.iconColor,
+  });
+
+  final String tooltip;
+  final VoidCallback? onTap;
+  final Color color;
+  final IconData icon;
+  final Color iconColor;
+
+  @override
+  Widget build(BuildContext context) {
+    return Tooltip(
+      message: tooltip,
+      child: Material(
+        color: color,
+        shape: const CircleBorder(),
+        clipBehavior: Clip.antiAlias,
+        child: InkWell(
+          customBorder: const CircleBorder(),
+          onTap: onTap,
+          child: SizedBox(
+            width: 36,
+            height: 36,
+            child: Icon(icon, size: 18, color: iconColor),
+          ),
+        ),
       ),
     );
   }
