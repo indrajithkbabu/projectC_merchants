@@ -18,7 +18,7 @@ abstract final class WhatsAppInvite {
   /// Telegram-style invite copy for WhatsApp / share sheet.
   ///
   /// Example:
-  /// `Hey, I'm using JewelFlow to chat. Join me! Download it here: https://ikb.jewelflow.app`
+  /// `Hey, I'm using Catly to chat. Join me! Download it here: https://ikb.jewelflow.app`
   static String appInviteMessage({String? storeLink}) {
     final raw = (storeLink ?? '').trim();
     final url =
@@ -27,7 +27,7 @@ abstract final class WhatsAppInvite {
             : (raw.startsWith('http://') || raw.startsWith('https://')
                 ? raw
                 : 'https://$raw');
-    return "Hey, I'm using JewelFlow to chat. Join me! Download it here: $url";
+    return "Hey, I'm using Catly to chat. Join me! Download it here: $url";
   }
 
   /// [phoneE164] like `+9198…`. Digits-only form is used for WhatsApp URIs.

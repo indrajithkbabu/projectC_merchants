@@ -14,7 +14,7 @@ extension StorePrivacyModeX on StorePrivacyMode {
 
   String get whoCanSeeSubtitle => switch (this) {
     StorePrivacyMode.public =>
-      'Anyone on Jewel Flow can see your products and photos. '
+      'Anyone on Catly can see your products and photos. '
           'They appear in search, trending and categories. '
           'Anyone can follow without asking.',
     StorePrivacyMode.private =>

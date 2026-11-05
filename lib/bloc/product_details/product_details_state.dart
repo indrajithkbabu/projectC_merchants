@@ -138,14 +138,11 @@ class ProductDetailsState extends Equatable {
   }
 
   String _categoryRawForPhoto(int imageIndex) {
-    final photoId =
-        imageIndex >= 0 && imageIndex < product.photoAssetIds.length
-            ? product.photoAssetIds[imageIndex].trim()
-            : '';
+    final photoId = photoIdAt(imageIndex);
+    final embedded = specForPhoto(imageIndex)?.category.trim() ?? '';
+    if (embedded.isNotEmpty) return embedded;
 
     if (photoId.isNotEmpty) {
-      final fromProduct = productSpecsById[photoId]?.category.trim() ?? '';
-      if (fromProduct.isNotEmpty) return fromProduct;
       for (final sub in subGroups) {
         final inSub = sub.photos.any((p) => (p.id?.trim() ?? '') == photoId);
         if (!inSub) continue;
@@ -154,6 +151,8 @@ class ProductDetailsState extends Equatable {
       }
     }
 
+    // Jewel multi-product: never borrow another product's category via group.
+    if (hasEmbeddedProducts) return '';
     return specifications?.category.trim() ?? '';
   }
 
@@ -169,18 +168,35 @@ class ProductDetailsState extends Equatable {
         .join(' ');
   }
 
+  /// Resolve the [ProductSpec] for the photo at [imageIndex].
+  ///
+  /// Jewel collections key [productSpecsById] by product `_id` and sometimes
+  /// primary `img_…`. Details [StoreProduct.photoAssetIds] may use either, so
+  /// resolve via [catalogProductIdForPhoto] when a direct map hit misses.
+  ProductSpec? specForPhoto(int imageIndex) {
+    final photoId = photoIdAt(imageIndex);
+    if (photoId.isNotEmpty) {
+      final direct = productSpecsById[photoId];
+      if (direct != null) return direct;
+    }
+
+    final productId = catalogProductIdForPhoto(imageIndex).trim();
+    if (productId.isNotEmpty && productId != photoId) {
+      final viaProduct = productSpecsById[productId];
+      if (viaProduct != null) return viaProduct;
+    }
+    return null;
+  }
+
   /// Specs chrome for the photo at [imageIndex] (sub-group Precise overrides group).
   /// Null when title-only (no weight line to show).
   PhotoSpecDisplay? specDisplayForPhoto(int imageIndex) {
-    final photoId =
-        imageIndex >= 0 && imageIndex < product.photoAssetIds.length
-            ? product.photoAssetIds[imageIndex].trim()
-            : '';
+    final photoId = photoIdAt(imageIndex);
+
+    final fromEmbedded = _chromeFromSpec(specForPhoto(imageIndex));
+    if (fromEmbedded != null) return fromEmbedded;
 
     if (photoId.isNotEmpty) {
-      final fromEmbedded = _chromeFromSpec(productSpecsById[photoId]);
-      if (fromEmbedded != null) return fromEmbedded;
-
       for (final sub in subGroups) {
         final inSub = sub.photos.any((p) => (p.id?.trim() ?? '') == photoId);
         if (!inSub) continue;
@@ -201,6 +217,10 @@ class ProductDetailsState extends Equatable {
         );
       }
     }
+
+    // Jewel multi-product: group `specifications` may be the first product's
+    // chrome after ApplyEditedProduct — never show that for another slide.
+    if (hasEmbeddedProducts) return null;
 
     final fromGroup = _chromeFromSpec(specifications);
     if (fromGroup != null) return fromGroup;

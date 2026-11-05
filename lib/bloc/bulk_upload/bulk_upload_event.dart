@@ -61,6 +61,16 @@ class BulkUploadSuggestedTagTapped extends BulkUploadEvent {
   List<Object?> get props => [tag];
 }
 
+/// Replace the full tag list (compose refine / preview apply).
+class BulkUploadTagsReplaced extends BulkUploadEvent {
+  const BulkUploadTagsReplaced(this.tags);
+
+  final List<String> tags;
+
+  @override
+  List<Object?> get props => [tags];
+}
+
 /// Publish via title-only create (no weight/purity/size specs).
 class BulkUploadTitleOnlyPressed extends BulkUploadEvent {
   const BulkUploadTitleOnlyPressed();
@@ -218,6 +228,39 @@ class BulkUploadClearItemsEmpty extends BulkUploadEvent {
 
 class BulkUploadPublishPressed extends BulkUploadEvent {
   const BulkUploadPublishPressed();
+}
+
+/// Compose-first edit: apply drafts (specs / tags / local image paths) then save.
+///
+/// Used when Edit / Select→Edit opens compose directly (no preview flash).
+class BulkUploadComposeRefineSubmitted extends BulkUploadEvent {
+  const BulkUploadComposeRefineSubmitted({
+    required this.itemIds,
+    required this.drafts,
+    required this.imagePaths,
+    this.applyToAll = true,
+    /// Listing / collection title from compose (`composeTitleFromDraft`).
+    this.title = '',
+    /// Optional description when compose/form provides one.
+    this.description = '',
+  });
+
+  final List<String> itemIds;
+  final List<ComposePhotoDraft> drafts;
+  final List<String> imagePaths;
+  final bool applyToAll;
+  final String title;
+  final String description;
+
+  @override
+  List<Object?> get props => [
+    itemIds,
+    drafts,
+    imagePaths,
+    applyToAll,
+    title,
+    description,
+  ];
 }
 
 class BulkUploadClearPublished extends BulkUploadEvent {

@@ -115,14 +115,17 @@ This file defines what to follow for UI and logic inside `lib/presentation/produ
 - Capture `revision`, `apiTag`, permission flags, specs, and `subGroups` from
   the collection detail response when that path is used.
 - Route args include `isOwnStore` (from store profile / gallery / browse) so edit stays available if the detail payload omits `permissions.edit`.
-- **Edit** opens a bottom sheet:
-  - **Edit** (single action, no choice sheet) → hydrate `BulkUploadBloc` from
-    collection detail, open preview in `isEditMode`, and auto-open compose for
-    the currently viewed photo (`returnResult` + filled drafts). Save on preview
-    patches specs / creates new subgroups; **never** shows the bulk Published
-    (06) screen. Pop applies `{updated: true, ...product}` like form edit.
+- **Edit** (overflow): hydrate `BulkUploadBloc` from collection detail and open
+  compose **directly** for the current photo (`edit_refine_flow`, no preview
+  flash). Maps details `img_…` ↔ product `_id` when hydrate ids differ. Save
+  PATCHes jewel products / legacy subgroups; **never** the Published (06)
+  screen.   After save, re-fetch collection, keep the pager on the edited photo
+  (`preferredImageIndex`), remap product-tile `galleryFeed` rows onto the
+  collection photo slots, and refresh `productSpecsById`. Per-photo weight
+  chrome must resolve the visible feed row → photo index (not always
+  `imageIndex: 0`) and must not fall back to another product's specs (B3.2).
   - Specs chrome reads flat `products[]` / `defaults` from collection detail
-    (not only nested `specifications`).
+    (not only nested `specifications`). Primary line prefers Fine → Net → Gross.
   - **Availability** PATCHes real CatalogProduct ids (embedded `products[]._id`),
     never the collection listing id. On success, pop `{updated: true, …}` so
     store profile keeps lock/stock. Reopen hydrates lock/stock from collection

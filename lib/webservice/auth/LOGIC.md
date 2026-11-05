@@ -15,7 +15,9 @@
    - `name_required` → profile setup
    - `store_optional` → store listing (main shell; store create deferred to Profile)
    - `complete` → store listing
-5. Cold start: `AuthSessionRestoreRequested` → restore tokens → `GET /me`.
+5. Cold start: `AuthSessionRestoreRequested` → restore tokens → if home-bound,
+   emit authenticated + Stores route immediately, then `GET /me` in background;
+   if `nameRequired`, await `GET /me` before leaving bootstrap.
 6. Account delete (`DELETE /me` from store listing): clear session → `AuthLoggedOut` → `auth_phone_route`.
 
 ## Errors

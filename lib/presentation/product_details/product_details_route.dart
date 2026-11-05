@@ -6,6 +6,7 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:project_c/bloc/bulk_upload/bulk_upload_bloc.dart';
 import 'package:project_c/bloc/product_details/product_details_bloc.dart';
 import 'package:project_c/di/service_locator.dart';
+import 'package:project_c/helper/app_log.dart';
 import 'package:project_c/helper/app_padding.dart';
 import 'package:project_c/helper/be_verify.dart';
 import 'package:project_c/helper/catalog_responsive_image.dart';
@@ -18,10 +19,13 @@ import 'package:project_c/helper/widgets/app_back_button.dart';
 import 'package:project_c/helper/widgets/screen_wrapper.dart';
 import 'package:project_c/models/bulk_upload.dart';
 import 'package:project_c/models/catalog/catalog_product_models.dart';
+import 'package:project_c/models/catalog/collection_models.dart';
 import 'package:project_c/models/catalog/collection_specifications.dart';
 import 'package:project_c/models/store_product.dart';
 import 'package:project_c/navigation/routes.dart';
 import 'package:project_c/navigation/telegram_photo_page_route.dart';
+import 'package:project_c/presentation/add_store_product/compose_product_draft.dart';
+import 'package:project_c/presentation/add_store_product/edit_refine_flow.dart';
 import 'package:project_c/presentation/chat/chat_mock_store.dart';
 import 'package:project_c/presentation/chat/chat_models.dart';
 import 'package:project_c/presentation/product_details/product_details_widgets/product_details_widgets.dart';
@@ -479,7 +483,43 @@ class _ProductDetailsRouteState extends State<ProductDetailsRoute> {
     if (state.hasGalleryFeed) {
       final feed = state.galleryFeed!;
       if (_pageIndex < 0 || _pageIndex >= feed.length) return 0;
-      return feed[_pageIndex].imageIndex;
+      final entry = feed[_pageIndex];
+      // Same listing as the feed row: imageIndex is within that product.
+      if (entry.product.id == state.product.id) {
+        return entry.imageIndex;
+      }
+      // Collection-scoped product (e.g. after edit refresh) while the feed
+      // still has per-product rows seeded with imageIndex 0 — map the
+      // visible row onto state.product photo slots (B3.2 chrome).
+      final path = entry.path.trim();
+      if (path.isNotEmpty) {
+        final byPath = state.product.imagePaths.indexWhere(
+          (p) => p.trim() == path,
+        );
+        if (byPath >= 0) return byPath;
+      }
+      final feedProductId = entry.product.id.trim();
+      if (feedProductId.isNotEmpty) {
+        final ids = state.product.photoAssetIds;
+        final byId = ids.indexWhere((id) => id.trim() == feedProductId);
+        if (byId >= 0) return byId;
+        for (var i = 0; i < ids.length; i++) {
+          if (state.catalogProductIdForPhoto(i) == feedProductId) {
+            return i;
+          }
+        }
+        for (final asset in entry.product.photoAssetIds) {
+          final a = asset.trim();
+          if (a.isEmpty) continue;
+          final byAsset = ids.indexWhere((id) => id.trim() == a);
+          if (byAsset >= 0) return byAsset;
+        }
+      }
+      if (feed.length == state.product.imagePaths.length &&
+          state.product.imagePaths.isNotEmpty) {
+        return _pageIndex.clamp(0, state.product.imagePaths.length - 1);
+      }
+      return entry.imageIndex;
     }
     return _pageIndex;
   }
@@ -785,25 +825,52 @@ class _ProductDetailsRouteState extends State<ProductDetailsRoute> {
       final detail = await ServiceLocator.get<CollectionRepository>()
           .fetchCollection(storeId: storeId, listingId: listingId);
       if (!mounted) return;
-      final photoId = state.photoIdAt(_productImageIndex(state));
+      final photoIndexBefore = _productImageIndex(state);
+      final photoId = state.photoIdAt(photoIndexBefore);
+      final pathBefore = _currentImagePath(state)?.trim() ?? '';
       bloc = BulkUploadBloc.fromCollectionDetail(
         detail: detail,
         storeId: storeId,
         initiallySelectedIds: photoId.isNotEmpty ? [photoId] : const [],
       );
-      final result = await Navigator.of(context).pushNamed(
-        Routes.addProductGroupPreviewRoute,
-        arguments: <String, Object?>{
-          'bloc': bloc,
-          'autoOpenEdit': photoId.isNotEmpty,
-          if (detail.stockStatus != null)
-            'stockStatus': detail.stockStatus!.apiValue,
-          if (detail.mtoDays != null) 'mtoDays': detail.mtoDays,
-          'isLocked': detail.isLocked,
-        },
+      // Prefer the current photo; map img_… ↔ product `_id` when hydrate
+      // ids differ from details photoAssetIds (jewel).
+      var items = _refineItemsForPhoto(
+        bloc: bloc,
+        detail: detail,
+        photoId: photoId,
+      );
+      if (items.isEmpty) {
+        items = List<BulkUploadItem>.from(bloc.state.items);
+      }
+      if (items.isEmpty) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('No photos available to edit.')),
+        );
+        return;
+      }
+
+      AppLog.d(
+        kEditRefineLogTag,
+        'details_edit → compose_direct '
+        'photoId=${photoId.isEmpty ? '-' : photoId} '
+        'items=${items.length}',
+      );
+
+      final stock = detail.stockStatus;
+      final result = await openComposeRefineEdit(
+        context: context,
+        bloc: bloc,
+        items: items,
+        stockFallback: CatalogStockStatusFallback(
+          stockStatus: composeStockStatusFromName(stock?.apiValue),
+          mtoDays: detail.mtoDays,
+          isLocked: detail.isLocked,
+        ),
       );
       if (!mounted) return;
-      if (result is! Map) return;
+      if (result == null) return;
 
       final payload = Map<String, Object?>.from(result);
       final revision = payload['revision'];
@@ -841,7 +908,41 @@ class _ProductDetailsRouteState extends State<ProductDetailsRoute> {
         // Keep payload product; details still get ApplyEditedProduct below.
       }
 
-      _popResult = <String, Object?>{'updated': true, ...product.toMap()};
+      // Stay on the edited photo when refetch reorders photos[] / products[].
+      final preferredIndex = _indexOfEditedPhoto(
+        product: product,
+        productSpecsById: productSpecsById ?? const {},
+        photoId: photoId,
+        path: pathBefore,
+        editedItemId: items.first.id.trim(),
+        fallbackIndex: photoIndexBefore,
+      );
+
+      _popResult = <String, Object?>{
+        'updated': true,
+        ...product.toMap(),
+      };
+      // PageView indexes the gallery feed when present — resolve stay page
+      // from the pre-apply feed (bloc state is not updated synchronously).
+      final latest = context.read<ProductDetailsBloc>().state;
+      var stayPage = preferredIndex;
+      final existingFeed = latest.galleryFeed;
+      if (latest.hasGalleryFeed &&
+          existingFeed != null &&
+          existingFeed.isNotEmpty) {
+        final byPath =
+            pathBefore.isEmpty
+                ? -1
+                : existingFeed.indexWhere((e) => e.path.trim() == pathBefore);
+        if (byPath >= 0) {
+          stayPage = byPath;
+        } else if (preferredIndex >= 0 &&
+            preferredIndex < existingFeed.length) {
+          stayPage = preferredIndex;
+        } else {
+          stayPage = _pageIndex;
+        }
+      }
       context.read<ProductDetailsBloc>().add(
         ProductDetailsApplyEditedProduct(
           product: product,
@@ -851,7 +952,18 @@ class _ProductDetailsRouteState extends State<ProductDetailsRoute> {
           productSpecsById: productSpecsById,
           precisionTag: precisionTag,
           subGroups: subGroups,
+          preferredImageIndex: preferredIndex,
         ),
+      );
+      if (mounted && stayPage != _pageIndex) {
+        _reseatPager(stayPage);
+      }
+      AppLog.d(
+        kEditRefineLogTag,
+        'details_edit applied stayIndex=$preferredIndex '
+        'stayPage=$stayPage '
+        'photoId=${photoId.isEmpty ? '-' : photoId} '
+        'editedItem=${items.first.id}',
       );
     } catch (e) {
       if (!mounted) return;
@@ -861,6 +973,90 @@ class _ProductDetailsRouteState extends State<ProductDetailsRoute> {
     } finally {
       await bloc?.close();
     }
+  }
+
+  /// Current-photo refine set: exact id, then img_ ↔ product `_id` via specs.
+  List<BulkUploadItem> _refineItemsForPhoto({
+    required BulkUploadBloc bloc,
+    required CollectionDetail detail,
+    required String photoId,
+  }) {
+    final selectedIds = bloc.state.selectedItemIds.toSet();
+    final matched = [
+      for (final item in bloc.state.items)
+        if (selectedIds.contains(item.id)) item,
+    ];
+    if (matched.isNotEmpty) return matched;
+    if (photoId.isEmpty) return const [];
+
+    final known = {for (final item in bloc.state.items) item.id};
+    if (known.contains(photoId)) {
+      return [
+        for (final item in bloc.state.items)
+          if (item.id == photoId) item,
+      ];
+    }
+
+    final seed = detail.productSpecsById[photoId];
+    if (seed == null) return const [];
+    for (final item in bloc.state.items) {
+      final spec = detail.productSpecsById[item.id];
+      if (spec == null) continue;
+      if (identical(spec, seed) || spec == seed) {
+        return [item];
+      }
+    }
+    return const [];
+  }
+
+  /// Find the slide that matches the photo we edited (id, product sibling, or URL).
+  int _indexOfEditedPhoto({
+    required StoreProduct product,
+    required Map<String, ProductSpec> productSpecsById,
+    required String photoId,
+    required String path,
+    required String editedItemId,
+    required int fallbackIndex,
+  }) {
+    final ids = product.photoAssetIds;
+    final paths = product.imagePaths;
+    int clamp(int i) {
+      if (paths.isEmpty) return 0;
+      if (i < 0) return 0;
+      if (i >= paths.length) return paths.length - 1;
+      return i;
+    }
+
+    if (photoId.isNotEmpty) {
+      final byId = ids.indexWhere((id) => id.trim() == photoId);
+      if (byId >= 0) return clamp(byId);
+    }
+    if (editedItemId.isNotEmpty) {
+      final byItem = ids.indexWhere((id) => id.trim() == editedItemId);
+      if (byItem >= 0) return clamp(byItem);
+    }
+
+    // img_ on details vs product `_id` on hydrate / photoAssetIds after refetch.
+    final seedId = photoId.isNotEmpty ? photoId : editedItemId;
+    if (seedId.isNotEmpty && productSpecsById.isNotEmpty) {
+      final seed = productSpecsById[seedId];
+      if (seed != null) {
+        for (var i = 0; i < ids.length; i++) {
+          final id = ids[i].trim();
+          if (id.isEmpty) continue;
+          final spec = productSpecsById[id];
+          if (spec != null && (identical(spec, seed) || spec == seed)) {
+            return clamp(i);
+          }
+        }
+      }
+    }
+
+    if (path.isNotEmpty) {
+      final byPath = paths.indexWhere((p) => p.trim() == path);
+      if (byPath >= 0) return clamp(byPath);
+    }
+    return clamp(fallbackIndex);
   }
 
   void _popDetails() {

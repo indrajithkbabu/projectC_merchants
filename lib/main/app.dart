@@ -9,6 +9,7 @@ import 'package:project_c/di/service_locator.dart';
 import 'package:project_c/helper/app_log.dart';
 import 'package:project_c/helper/app_theme.dart';
 import 'package:project_c/helper/colors.dart';
+import 'package:project_c/helper/globals.dart';
 import 'package:project_c/helper/widgets/appearance_scope.dart';
 import 'package:project_c/helper/widgets/network_status_gate.dart';
 import 'package:project_c/navigation/route_initializer.dart';
@@ -100,12 +101,22 @@ class _AppState extends State<App> with WidgetsBindingObserver {
         BlocProvider(create: (_) => NetworkStatusCubit()..start()),
       ],
       child: BlocListener<AuthBloc, AuthState>(
-        // After cold-start restore only: replace bootstrap with the real root.
-        // OTP / in-flow postAuthRoute is handled by OtpRoute (unchanged).
-        listenWhen:
-            (prev, curr) =>
-                prev.isRestoringSession == true &&
-                curr.isRestoringSession == false,
+        // Cold-start restore end, or late re-route (home-first hydrate failed /
+        // onboarding gate changed). OTP postAuthRoute stays on OtpRoute.
+        listenWhen: (prev, curr) {
+          if (prev.isRestoringSession && !curr.isRestoringSession) {
+            return true;
+          }
+          // Already left bootstrap (home-first): server said leave Stores, or
+          // session died — postAuthRoute was set while still authenticated→not.
+          if (curr.postAuthRoute != null &&
+              curr.postAuthRoute != prev.postAuthRoute &&
+              !curr.isRestoringSession &&
+              prev.isAuthenticated) {
+            return true;
+          }
+          return false;
+        },
         listener: (context, state) {
           final route = state.postAuthRoute ?? Routes.onboardingRoute;
           AppLog.d(
@@ -148,7 +159,7 @@ class _AppState extends State<App> with WidgetsBindingObserver {
             return MaterialApp(
               navigatorKey: navigatorKey,
               scaffoldMessengerKey: scaffoldMessengerKey,
-              title: 'Project C',
+              title: AppGlobals.appName,
               debugShowCheckedModeBanner: false,
               theme: AppTheme.light,
               darkTheme: AppTheme.dark,

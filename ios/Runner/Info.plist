@@ -5,7 +5,7 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleDisplayName</key>
-	<string>Project C</string>
+	<string>Catly</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
@@ -51,13 +51,13 @@
 		<string>remote-notification</string>
 	</array>
 	<key>NSContactsUsageDescription</key>
-	<string>Jewel Flow needs access to your contacts so you can add teammates to your store.</string>
+	<string>Catly needs access to your contacts so you can add teammates to your store.</string>
 	<key>NSCameraUsageDescription</key>
-	<string>Jewel Flow needs camera access so you can photograph products for your store.</string>
+	<string>Catly needs camera access so you can photograph products for your store.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
-	<string>Jewel Flow needs photo library access so you can choose product images for your store.</string>
+	<string>Catly needs photo library access so you can choose product images for your store.</string>
 	<key>NSPhotoLibraryAddUsageDescription</key>
-	<string>Jewel Flow may save edited product photos to your library when you choose to.</string>
+	<string>Catly may save edited product photos to your library when you choose to.</string>
 	<key>FlutterDeepLinkingEnabled</key>
 	<false/>
 	<key>CFBundleURLTypes</key>

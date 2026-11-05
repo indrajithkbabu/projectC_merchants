@@ -23,6 +23,14 @@ This file defines what to follow for UI and logic inside `lib/presentation/auth/
 - Keep OTP/phone input behavior consistent with `AuthBloc` ownership.
 - `AuthBloc` calls `AuthRepository` (OTP request/verify, session restore, logout).
 - After verify, navigate using `postAuthRoute` from `profile.onboarding`.
+- **Cold start (kill+reopen):** after local tokens restore, if cached onboarding is
+  home-bound (`storeOptional` / `complete`, or no cached profile yet), emit
+  authenticated + `storeListingRoute` **before** awaiting `GET /me` (home-first).
+  `/me`, wishlist/cart hydrate, and avatar warm continue afterward. If `/me`
+  later requires name setup or the session is invalid, set `postAuthRoute` so
+  the app-level listener re-roots (onboarding / profile setup). `nameRequired`
+  cached gate still awaits `/me` on bootstrap. Unsigned (no tokens) ends restore
+  without auto-login. See `presentation/bootstrap/FEATURE_CONVENTIONS.md`.
 - OTP is India-only: reject non-`IN` country changes; require 10-digit mobile starting 6–9 before request.
 - Phone country field tap shows a snackbar instead of opening the picker for other countries.
 - Auto-read fills via `AuthOtpAutoFilled` (does not bypass `AuthBloc` / verify / post-auth navigation).

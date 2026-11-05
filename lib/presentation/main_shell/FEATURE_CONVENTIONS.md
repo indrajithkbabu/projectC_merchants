@@ -78,7 +78,7 @@ This file defines what to follow for UI and logic inside `lib/presentation/main_
     `StoreListingBloc` `/home`). Do **not** list phone contacts here.
   - While searching: matching **Stores** container first, then matching
     **Invite** phone contacts (name/phone). Row tap invites via WhatsApp.
-  - `invite_friends_route`: back + title, search, **Share JewelFlow** card,
+  - `invite_friends_route`: back + title, search, **Share Catly** card,
     then full device contact list. Reuses shell `ContactsBloc` via
     `BlocProvider.value`. Invite / share use
     `WhatsAppInvite.appInviteMessage`.

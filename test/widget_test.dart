@@ -6,7 +6,7 @@ void main() {
     await tester.pumpWidget(const App());
     await tester.pumpAndSettle();
 
-    expect(find.text('Jewel Flow'), findsOneWidget);
+    expect(find.text('Catly'), findsOneWidget);
     expect(find.text('Continue'), findsOneWidget);
     expect(find.text('I already have an account'), findsNothing);
   });

@@ -120,26 +120,27 @@ This file defines what to follow for UI and logic inside `lib/presentation/add_s
   payload; `QuickImportFlow` posts `POST …/imports` (not the upload path).
 
 ## Edit refine flow (no Published)
-- Product details Edit sheet:
-  - **Edit title, tags & photos** → existing `add_product_form_route` `mode: edit`.
-  - **Refine items & details** → hydrate `BulkUploadBloc.fromCollectionDetail` and open
-    `add_product_group_preview_route` with `isEditMode: true`.
+- **Product details → Edit** and **collection browse Select → Edit** open
+  `add_product_compose_route` **directly** (no preview flash) via
+  `edit_refine_flow.openComposeRefineEdit`. Filter logs: `EditRefine`.
+- Hydrate `BulkUploadBloc.fromCollectionDetail` (`isEditMode: true`). Compose
+  Send → `BulkUploadComposeRefineSubmitted` applies **full** refine payload:
+  specs, tags/names, derived **title** (`composeTitleFromDraft` /
+  `initialTitle`), description (when present), stock/lock/mto, local image
+  paths → `_saveEdit` → pop `{updated: true, ...product}`.
+- Details re-fetches collection and applies `ProductDetailsApplyEditedProduct`.
+  Browse sets `refreshCollections: true` so **store profile** reloads the grid.
 - Hydration: `groupTitle` = collection name; `description` / `tags` from collection;
   main photos → Group + collection specs;
   each sub-group photo → Precise (or Standalone if name contains `standalone`) + sub specs;
   `imagePath` may be a network URL.
-- In edit mode preview:
-  - Never show `_PublishedView`.
-  - CTA: **Save changes**.
-  - Photo strip / details sheets stay add/delete-locked, but **image edit**
-    (crop / draw / text via `ProductImageCropper`) is enabled. Replaced locals
-    are uploaded on save (append new photo, delete old id; remaps item ids).
-  - Save: sync edited photos → PATCH collection specs + `usePrecisionTag`; then:
-  - `POST .../subgroups` for Precise/Standalone items still in `mainGroupPhotos`
-  - `PATCH .../subgroups/:id` for Precise/Standalone items already in a sub-group
-    (name / specs / `usePrecisionTag`)
-  - Pop `{updated: true, ...product}` via `shouldPopWithResult` (no Published UI).
-  Photo moves / Ungroup happen on `collection_browse_route` (own store) via
+- Save: sync edited photos → PATCH collection **name + tag + description** +
+  specs / `usePrecisionTag`; jewel listings also PATCH each product (specs +
+  title + tags + stock/lock); legacy listings create/update Precise subgroups.
+- Preview Select → Edit (create / remaining preview path) still opens compose
+  with `returnResult`; tags sync via `BulkUploadTagsReplaced`. Edit-mode
+  preview CTA **Save changes** remains for that path only.
+- Photo moves / Ungroup stay on `collection_browse_route` via
   `POST .../photos/move`.
 
 ## Route and Navigation Notes

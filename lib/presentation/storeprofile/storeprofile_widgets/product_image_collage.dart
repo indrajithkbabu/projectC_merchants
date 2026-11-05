@@ -81,8 +81,8 @@ class ProductImageCollage extends StatelessWidget {
   /// Long-press on a cell (visitor multi-select entry).
   final void Function(int index)? onImageLongPress;
 
-  /// Fired for 10+ image albums (horizontal 3×3 pages). [pageIndex] is
-  /// 0-based; [pageCount] is total pages.
+  /// Fired for 10+ image albums (horizontal pages of ≤9). [pageIndex] is
+  /// 0-based; [pageCount] is total pages. Partial last pages use 1–9 collage.
   final void Function(int pageIndex, int pageCount)? onAlbumPageChanged;
 
   /// When true, cells show Telegram-style selection rings / checks.
@@ -472,12 +472,16 @@ class _RowAlbum extends StatelessWidget {
     required this.paths,
     required this.gap,
     required this.rowSizes,
+    this.startIndex = 0,
     this.onImageTap,
   });
 
   final List<String> paths;
   final double gap;
   final List<int> rowSizes;
+
+  /// Absolute collage index of [paths] first cell (paged albums).
+  final int startIndex;
   final void Function(int index, {Rect? sourceRect})? onImageTap;
 
   @override
@@ -493,7 +497,7 @@ class _RowAlbum extends StatelessWidget {
           child: _EqualRow(
             paths: slice,
             gap: gap,
-            startIndex: offset,
+            startIndex: startIndex + offset,
             onImageTap: onImageTap,
           ),
         ),
@@ -591,7 +595,9 @@ class _ScrollableAlbumState extends State<_ScrollableAlbum> {
         final end =
             (start + _ScrollableAlbum.pageSize).clamp(0, widget.paths.length);
         final pagePaths = widget.paths.sublist(start, end);
-        return _PageGrid(
+        // Same 1–9 Telegram collage as a single-page card — last page with
+        // 1–8 images fills the frame (no empty 3×3 cells).
+        return _PageCollage(
           paths: pagePaths,
           startIndex: start,
           gap: widget.gap,
@@ -602,8 +608,9 @@ class _ScrollableAlbumState extends State<_ScrollableAlbum> {
   }
 }
 
-class _PageGrid extends StatelessWidget {
-  const _PageGrid({
+/// One album page using the same layouts as a 1–9 image collage.
+class _PageCollage extends StatelessWidget {
+  const _PageCollage({
     required this.paths,
     required this.startIndex,
     required this.gap,
@@ -617,37 +624,36 @@ class _PageGrid extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Column(
-      children: [
-        for (var row = 0; row < 3; row++) ...[
-          if (row > 0 && gap > 0) SizedBox(height: gap),
-          Expanded(
-            child: Row(
-              children: [
-                for (var col = 0; col < 3; col++) ...[
-                  if (col > 0 && gap > 0) SizedBox(width: gap),
-                  Expanded(
-                    child: Builder(
-                      builder: (context) {
-                        final i = row * 3 + col;
-                        if (i >= paths.length) {
-                          return const SizedBox.expand();
-                        }
-                        return _ImageCell(
-                          path: paths[i],
-                          index: startIndex + i,
-                          onImageTap: onImageTap,
-                        );
-                      },
-                    ),
-                  ),
-                ],
-              ],
-            ),
-          ),
-        ],
-      ],
-    );
+    final n = paths.length;
+    if (n <= 0) return const SizedBox.expand();
+    return switch (n) {
+      1 => _ImageCell(
+        path: paths[0],
+        index: startIndex,
+        onImageTap: onImageTap,
+      ),
+      2 => _EqualRow(
+        paths: paths,
+        gap: gap,
+        startIndex: startIndex,
+        onImageTap: onImageTap,
+      ),
+      3 || 4 => _LargeLeftStack(
+        largePath: paths[0],
+        largeIndex: startIndex,
+        stackedPaths: paths.sublist(1),
+        stackedStartIndex: startIndex + 1,
+        gap: gap,
+        onImageTap: onImageTap,
+      ),
+      _ => _RowAlbum(
+        paths: paths,
+        gap: gap,
+        rowSizes: _rowPlan(n.clamp(5, 9)),
+        startIndex: startIndex,
+        onImageTap: onImageTap,
+      ),
+    };
   }
 }
 
