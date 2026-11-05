@@ -20,6 +20,8 @@ import 'package:project_c/models/catalog/collection_specifications.dart';
 import 'package:project_c/models/product_details_feed_item.dart';
 import 'package:project_c/models/store_product.dart';
 import 'package:project_c/navigation/routes.dart';
+import 'package:project_c/presentation/add_store_product/compose_product_draft.dart';
+import 'package:project_c/presentation/add_store_product/edit_refine_flow.dart';
 import 'package:project_c/webservice/catalog_api_exception.dart';
 import 'package:project_c/webservice/catalog_error_mapper.dart';
 import 'package:project_c/webservice/collection/collection_repository.dart';
@@ -933,34 +935,48 @@ class _CollectionBrowseRouteState extends State<CollectionBrowseRoute> {
         return;
       }
 
-      final result = await Navigator.of(context).pushNamed(
-        Routes.addProductGroupPreviewRoute,
-        arguments: <String, Object?>{
-          'bloc': bloc,
-          'autoOpenEdit': true,
-          if (detail.stockStatus != null)
-            'stockStatus': detail.stockStatus!.apiValue,
-          if (detail.mtoDays != null) 'mtoDays': detail.mtoDays,
-          'isLocked': detail.isLocked,
-        },
+      final selectedSet = bloc.state.selectedItemIds.toSet();
+      final items = [
+        for (final item in bloc.state.items)
+          if (selectedSet.contains(item.id)) item,
+      ];
+      AppLog.d(
+        kEditRefineLogTag,
+        'browse_select_edit → compose_direct '
+        'count=${items.length} ids=${items.map((e) => e.id).join(',')}',
+      );
+
+      final result = await openComposeRefineEdit(
+        context: context,
+        bloc: bloc,
+        items: items,
+        stockFallback: CatalogStockStatusFallback(
+          stockStatus: composeStockStatusFromName(
+            detail.stockStatus?.apiValue,
+          ),
+          mtoDays: detail.mtoDays,
+          isLocked: detail.isLocked,
+        ),
       );
       if (!mounted) return;
 
-      if (result is Map) {
-        final payload = Map<String, Object?>.from(result);
-        if (payload['updated'] == true) {
-          _popResult = <String, Object?>{
-            ...payload,
-            'refreshCollections': true,
-          };
-          _setSelectMode(false);
-          await _load(quiet: true);
-          if (!mounted) return;
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Changes saved.')),
-          );
-          return;
-        }
+      if (result != null && result['updated'] == true) {
+        _popResult = <String, Object?>{
+          ...result,
+          'refreshCollections': true,
+        };
+        _setSelectMode(false);
+        await _load(quiet: true);
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Changes saved.')),
+        );
+        AppLog.d(
+          kEditRefineLogTag,
+          'browse_select_edit saved → refreshCollections '
+          'for store_profile',
+        );
+        return;
       }
 
       _setSelectMode(false);

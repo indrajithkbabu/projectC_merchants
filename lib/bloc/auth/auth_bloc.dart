@@ -11,10 +11,12 @@ import 'package:project_c/models/country_model.dart';
 import 'package:project_c/navigation/routes.dart';
 import 'package:project_c/services/cart_store.dart';
 import 'package:project_c/services/push_notification_service.dart';
+import 'package:project_c/session/catalog_session.dart';
 import 'package:project_c/webservice/cart/cart_repository.dart';
 import 'package:project_c/services/store_home_prefetcher.dart';
 import 'package:project_c/services/view_beacon.dart';
 import 'package:project_c/services/wishlist_prefetcher.dart';
+import 'package:project_c/storage/store_home_cache.dart';
 import 'package:project_c/webservice/auth/auth_repository.dart';
 import 'package:project_c/webservice/catalog_error_mapper.dart';
 import 'package:project_c/webservice/profile/profile_repository.dart';
@@ -324,8 +326,9 @@ class AuthBloc extends Bloc<AuthEvent, AuthState> {
     );
     emit(state.copyWith(isRestoringSession: true, clearError: true));
     try {
-      final cached = await _authRepository.restoreSession();
-      if (cached == null) {
+      await _authRepository.restoreSession();
+      final session = ServiceLocator.get<CatalogSession>();
+      if (!session.isSignedIn) {
         AppLog.d(
           'TEST_COLD_START',
           'RESULT=UNSIGNED (no local tokens)\n'
@@ -338,23 +341,55 @@ class AuthBloc extends Bloc<AuthEvent, AuthState> {
         emit(state.copyWith(isRestoringSession: false));
         return;
       }
-      // Tokens ready — overlap GET /home + device contacts with /me so the
-      // listing paints with contact names already resolved.
+
+      // Tokens ready — overlap GET /home + contacts with /me.
       StoreHomePrefetcher.instance.prefetch();
       DeviceContactNames.prefetch();
+
+      final cachedProfile = session.profile;
+      final earlyRoute =
+          cachedProfile != null
+              ? _routeForOnboarding(cachedProfile.onboarding)
+              : Routes.storeListingRoute;
+
+      // Kill+reopen: leave bootstrap for Stores shell immediately when the
+      // cached gate is home (not name setup). /me + avatar continue in bg.
+      final homeFirst = earlyRoute == Routes.storeListingRoute;
+      if (homeFirst) {
+        // Disk → memory before shell mounts so StoreListingBloc seeds rows
+        // on frame 0 (no shimmer flash after bootstrap already showed cache).
+        await StoreHomeCache.instance.read();
+        AppLog.d(
+          'TEST_COLD_START',
+          'RESULT=SIGNED_IN home-first (cached session)\n'
+          '  phone=${cachedProfile?.phone}\n'
+          '  onboarding=${cachedProfile?.onboarding.name ?? "unknown"}\n'
+          '  nextRoute=$earlyRoute\n'
+          '  A3=PASS if kill+launch lands Stores (not logo / phone)\n'
+          '──────── A.ENTRY END (hydrate continues) ────────',
+        );
+        emit(
+          state.copyWith(
+            isRestoringSession: false,
+            status: AuthStatus.authenticated,
+            phoneE164: cachedProfile?.phone,
+            profile: cachedProfile,
+            postAuthRoute: earlyRoute,
+            isVerified: true,
+          ),
+        );
+        // ignore: avoid_print
+        print('[FCM_DEBUG] AuthBloc trigger=session_restore_early → onSignedIn');
+        // ignore: unawaited_futures
+        ServiceLocator.get<PushNotificationService>().onSignedIn();
+
+        await _hydrateProfileAfterHomeFirst(emit);
+        return;
+      }
+
+      // nameRequired (or non-home gate): finish /me before leaving bootstrap.
       final profile = await _profileRepository.fetchMe();
-      // After auth + home kickoff: warm wishlist for own-store shell tab.
-      final ownId = profile.ownStore?.id.trim() ?? '';
-      if (ownId.isNotEmpty) {
-        WishlistPrefetcher.instance.prefetch();
-      }
-      // ignore: discarded_futures
-      ServiceLocator.get<CartRepository>().hydrate();
-      // Await avatar decode before shell mounts — nav profile must not flash.
-      final profileImage = profile.effectiveProfileImageUrl.trim();
-      if (profileImage.isNotEmpty) {
-        await CatalogImageCache.warmAvatars([profileImage]);
-      }
+      await _afterProfileHydrated(profile);
       final nextRoute = _routeForOnboarding(profile.onboarding);
       AppLog.d(
         'TEST_COLD_START',
@@ -381,30 +416,82 @@ class AuthBloc extends Bloc<AuthEvent, AuthState> {
       // ignore: unawaited_futures
       ServiceLocator.get<PushNotificationService>().onSignedIn();
     } catch (e) {
-      AppLog.e(_tag, 'Session restore failed', e);
-      AppLog.d(
-        'TEST_COLD_START',
-        'RESULT=RESTORE_FAILED → cleared session\n'
-        '  error=${CatalogErrorMapper.toUserMessage(e)}\n'
-        '  nextRoute=${Routes.onboardingRoute}\n'
-        '  A4=PASS if after bad/expired session you land unsigned (onboarding/phone)\n'
-        '  A4=FAIL if crash or stuck restoring\n'
-        '──────── A.ENTRY END ────────',
-      );
-      StoreHomePrefetcher.instance.invalidate();
-      WishlistPrefetcher.instance.invalidate();
-      ServiceLocator.get<CartStore>().clear();
-      ViewBeacon.instance.reset();
-      DeviceContactNames.invalidate();
-      await _authRepository.logout();
+      await _emitRestoreFailure(emit, e);
+    }
+  }
+
+  /// After home-first paint: refresh /me, wishlist, cart, avatar (non-blocking UI).
+  Future<void> _hydrateProfileAfterHomeFirst(Emitter<AuthState> emit) async {
+    try {
+      final profile = await _profileRepository.fetchMe();
+      if (emit.isDone) return;
+      await _afterProfileHydrated(profile);
+      if (emit.isDone) return;
+      final nextRoute = _routeForOnboarding(profile.onboarding);
+      // Only re-route if server gate is no longer Stores (rare).
+      final needReroute = nextRoute != Routes.storeListingRoute;
       emit(
         state.copyWith(
-          isRestoringSession: false,
-          status: AuthStatus.unauthenticated,
-          clearError: true,
+          status: AuthStatus.authenticated,
+          phoneE164: profile.phone,
+          profile: profile,
+          postAuthRoute: needReroute ? nextRoute : null,
+          clearPostAuthRoute: !needReroute,
+          isVerified: true,
         ),
       );
+    } catch (e) {
+      await _emitRestoreFailure(emit, e, alreadyOnHome: true);
     }
+  }
+
+  Future<void> _afterProfileHydrated(CatalogProfile profile) async {
+    final ownId = profile.ownStore?.id.trim() ?? '';
+    if (ownId.isNotEmpty) {
+      WishlistPrefetcher.instance.prefetch();
+    }
+    // ignore: discarded_futures
+    ServiceLocator.get<CartRepository>().hydrate();
+    final profileImage = profile.effectiveProfileImageUrl.trim();
+    if (profileImage.isNotEmpty) {
+      // ignore: unawaited_futures
+      CatalogImageCache.warmAvatars([profileImage]);
+    }
+  }
+
+  Future<void> _emitRestoreFailure(
+    Emitter<AuthState> emit,
+    Object e, {
+    bool alreadyOnHome = false,
+  }) async {
+    AppLog.e(_tag, 'Session restore failed', e);
+    AppLog.d(
+      'TEST_COLD_START',
+      'RESULT=RESTORE_FAILED → cleared session\n'
+      '  alreadyOnHome=$alreadyOnHome\n'
+      '  error=${CatalogErrorMapper.toUserMessage(e)}\n'
+      '  nextRoute=${Routes.onboardingRoute}\n'
+      '  A4=PASS if after bad/expired session you land unsigned (onboarding/phone)\n'
+      '  A4=FAIL if crash or stuck restoring\n'
+      '──────── A.ENTRY END ────────',
+    );
+    StoreHomePrefetcher.instance.invalidate();
+    WishlistPrefetcher.instance.invalidate();
+    ServiceLocator.get<CartStore>().clear();
+    ViewBeacon.instance.reset();
+    DeviceContactNames.invalidate();
+    await _authRepository.logout();
+    if (emit.isDone) return;
+    emit(
+      state.copyWith(
+        isRestoringSession: false,
+        status: AuthStatus.unauthenticated,
+        clearError: true,
+        // Force root back to onboarding when shell was already shown.
+        postAuthRoute: alreadyOnHome ? Routes.onboardingRoute : null,
+        clearPostAuthRoute: !alreadyOnHome,
+      ),
+    );
   }
 
   void _onTimerTicked(AuthTimerTicked event, Emitter<AuthState> emit) {

@@ -185,12 +185,21 @@ class ProductDetailsBloc
     ProductDetailsFeedItem item,
     StoreProduct updated,
   ) {
-    if (item.product.id != updated.id) return item;
     final path = item.path.trim();
+    final sameListing = item.product.id == updated.id;
+    // Jewel product-tile feeds seed imageIndex=0 per row. After collection
+    // detail / edit refresh, map those rows onto the collection photo slot
+    // so chrome / likes bind to the visible slide (not always index 0).
     var index = item.imageIndex;
-    if (path.isNotEmpty) {
-      final byUrl = _indexOfImagePath(updated.imagePaths, path);
-      if (byUrl >= 0) index = byUrl;
+    if (sameListing) {
+      if (path.isNotEmpty) {
+        final byUrl = _indexOfImagePath(updated.imagePaths, path);
+        if (byUrl >= 0) index = byUrl;
+      }
+    } else {
+      final embeddedIndex = _embeddedFeedImageIndex(item, updated);
+      if (embeddedIndex == null) return item;
+      index = embeddedIndex;
     }
     index = _clampIndex(index, updated);
     final resolvedPath =
@@ -222,6 +231,34 @@ class ProductDetailsBloc
       storeLink: item.storeLink,
       seedCategory: item.seedCategory,
     );
+  }
+
+  /// Photo index in [updated] for a feed row whose product id is an embedded
+  /// CatalogProduct (or whose path / asset id matches). Null = leave alone
+  /// (e.g. search hits from another listing).
+  static int? _embeddedFeedImageIndex(
+    ProductDetailsFeedItem item,
+    StoreProduct updated,
+  ) {
+    final path = item.path.trim();
+    if (path.isNotEmpty) {
+      final byUrl = _indexOfImagePath(updated.imagePaths, path);
+      if (byUrl >= 0) return byUrl;
+    }
+    final feedProductId = item.product.id.trim();
+    if (feedProductId.isNotEmpty) {
+      final byId = updated.photoAssetIds.indexWhere(
+        (id) => id.trim() == feedProductId,
+      );
+      if (byId >= 0) return byId;
+    }
+    for (final asset in item.product.photoAssetIds) {
+      final a = asset.trim();
+      if (a.isEmpty) continue;
+      final byAsset = updated.photoAssetIds.indexWhere((id) => id.trim() == a);
+      if (byAsset >= 0) return byAsset;
+    }
+    return null;
   }
 
   static int _indexOfImagePath(List<String> paths, String target) {
@@ -855,26 +892,58 @@ class ProductDetailsBloc
   ) {
     final fromNested = event.specifications;
     final specsById = event.productSpecsById;
+    final hasEmbedded =
+        (specsById != null && specsById.isNotEmpty) ||
+        state.productSpecsById.isNotEmpty;
+    // Jewel multi-product: never promote the first embedded product's specs
+    // into collection-level chrome — that made every miss show the wrong
+    // weight (B3.2 flash) until the pager rebuilt.
     final groupSpec =
         _chromeableSpec(fromNested) ??
-        (specsById != null ? _firstChromeableSpec(specsById.values) : null) ??
-        fromNested ??
-        state.specifications;
+        (hasEmbedded
+            ? null
+            : _firstChromeableSpec(specsById?.values ?? const [])) ??
+        fromNested;
+    final nextProduct = event.product.copyWith(
+      canEdit: event.product.canEdit || state.canEdit,
+      canDelete: event.product.canDelete || state.canDelete,
+    );
+    final nextIndex = _clampIndex(
+      event.preferredImageIndex ?? state.initialImageIndex,
+      nextProduct,
+    );
+    // Realign product-tile gallery rows onto the refreshed collection so
+    // feed[i].imageIndex matches the visible photo (B3.2 chrome).
+    final remapped = _resolveGalleryFeed(
+      feed: state.galleryFeed,
+      feedIndex: state.galleryFeedIndex,
+      updated: nextProduct,
+    );
+    var feedIndex = remapped.feedIndex;
+    final feed = remapped.feed;
+    if (feed != null && feed.isNotEmpty) {
+      final byImage = feed.indexWhere((e) => e.imageIndex == nextIndex);
+      if (byImage >= 0) {
+        feedIndex = byImage;
+      } else if (nextIndex >= 0 && nextIndex < feed.length) {
+        feedIndex = nextIndex;
+      }
+    }
     emit(
       state.copyWith(
-        product: event.product.copyWith(
-          canEdit: event.product.canEdit || state.canEdit,
-          canDelete: event.product.canDelete || state.canDelete,
-        ),
-        canEdit: event.product.canEdit || state.canEdit,
-        canDelete: event.product.canDelete || state.canDelete,
+        product: nextProduct,
+        canEdit: nextProduct.canEdit,
+        canDelete: nextProduct.canDelete,
         revision: event.revision,
         apiTag: event.apiTag,
         specifications: groupSpec,
+        clearSpecifications: groupSpec == null && fromNested == null,
         productSpecsById: specsById ?? state.productSpecsById,
         precisionTag: event.precisionTag ?? state.precisionTag,
         subGroups: event.subGroups ?? state.subGroups,
-        initialImageIndex: _clampIndex(state.initialImageIndex, event.product),
+        initialImageIndex: nextIndex,
+        galleryFeed: feed,
+        galleryFeedIndex: feedIndex,
         infoMessage: 'Product updated.',
       ),
     );

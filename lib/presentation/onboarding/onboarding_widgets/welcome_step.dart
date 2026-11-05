@@ -74,7 +74,7 @@ class _WelcomeStepState extends State<WelcomeStep>
                   const JewelFlowLogo(size: 92),
                   const SizedBox(height: 28),
                   Text(
-                    'Jewel Flow',
+                    'Catly',
                     textAlign: TextAlign.center,
                     style: AppTextStyles.display(
                       fontWeight: FontWeight.w600,

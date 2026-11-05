@@ -10,6 +10,7 @@ import 'package:project_c/helper/product_image.dart';
 import 'package:project_c/models/bulk_upload.dart';
 import 'package:project_c/models/catalog/collection_models.dart';
 import 'package:project_c/models/store_product.dart';
+import 'package:project_c/presentation/add_store_product/compose_product_draft.dart';
 import 'package:project_c/services/catalog_direct_upload_service.dart';
 import 'package:project_c/session/catalog_session.dart';
 import 'package:project_c/webservice/catalog_api_exception.dart';
@@ -157,6 +158,7 @@ class BulkUploadBloc extends Bloc<BulkUploadEvent, BulkUploadState> {
     on<BulkUploadTagAdded>(_onTagAdded);
     on<BulkUploadTagRemoved>(_onTagRemoved);
     on<BulkUploadSuggestedTagTapped>(_onSuggestedTagTapped);
+    on<BulkUploadTagsReplaced>(_onTagsReplaced);
     on<BulkUploadTitleOnlyPressed>(_onTitleOnlyPressed);
     on<BulkUploadAddDetailsPressed>(_onAddDetailsPressed);
     on<BulkUploadClearOpenGroupDetails>(_onClearOpenGroupDetails);
@@ -176,6 +178,7 @@ class BulkUploadBloc extends Bloc<BulkUploadEvent, BulkUploadState> {
     on<BulkUploadDeleteSelected>(_onDeleteSelected);
     on<BulkUploadClearItemsEmpty>(_onClearItemsEmpty);
     on<BulkUploadPublishPressed>(_onPublishPressed);
+    on<BulkUploadComposeRefineSubmitted>(_onComposeRefineSubmitted);
     on<BulkUploadClearPublished>(_onClearPublished);
     on<BulkUploadRestartRequested>(_onRestartRequested);
     on<BulkUploadClearCloseFlow>(_onClearCloseFlow);
@@ -381,6 +384,18 @@ class BulkUploadBloc extends Bloc<BulkUploadEvent, BulkUploadState> {
     Emitter<BulkUploadState> emit,
   ) {
     add(BulkUploadTagAdded(event.tag));
+  }
+
+  void _onTagsReplaced(
+    BulkUploadTagsReplaced event,
+    Emitter<BulkUploadState> emit,
+  ) {
+    final next = <String>[
+      for (final t in event.tags)
+        if (t.trim().isNotEmpty) t.trim().toLowerCase(),
+    ];
+    AppLog.d('EditRefine', 'tags_replaced count=${next.length} → $next');
+    emit(state.copyWith(tags: next, clearError: true));
   }
 
   Future<void> _onTitleOnlyPressed(
@@ -1332,9 +1347,169 @@ class BulkUploadBloc extends Bloc<BulkUploadEvent, BulkUploadState> {
     await _publishCreate(emit, storeId: storeId);
   }
 
+  /// Compose-first Edit / Select→Edit: merge drafts into state, then [_saveEdit].
+  Future<void> _onComposeRefineSubmitted(
+    BulkUploadComposeRefineSubmitted event,
+    Emitter<BulkUploadState> emit,
+  ) async {
+    AppLog.d(
+      'EditRefine',
+      'compose_refine_submit '
+      'edit=${state.isEditMode} '
+      'itemIds=${event.itemIds.length} '
+      'drafts=${event.drafts.length} '
+      'paths=${event.imagePaths.length} '
+      'applyToAll=${event.applyToAll} '
+      'title="${event.title.trim()}" '
+      'descLen=${event.description.trim().length}',
+    );
+    if (!state.isEditMode) {
+      AppLog.d('EditRefine', 'SKIP not_edit_mode');
+      return;
+    }
+    if (event.itemIds.isEmpty || event.drafts.isEmpty) {
+      AppLog.d('EditRefine', 'SKIP empty_ids_or_drafts');
+      emit(
+        state.copyWith(
+          errorMessage: 'Nothing to save — open edit again and try.',
+        ),
+      );
+      return;
+    }
+
+    var nextItems = List<BulkUploadItem>.from(state.items);
+    final idSet = event.itemIds.toSet();
+
+    // Replace local image paths when compose cropped / redrew a photo.
+    for (var i = 0; i < event.itemIds.length && i < event.imagePaths.length; i++) {
+      final id = event.itemIds[i].trim();
+      final path = event.imagePaths[i].trim();
+      if (id.isEmpty || path.isEmpty) continue;
+      final idx = nextItems.indexWhere((e) => e.id == id);
+      if (idx < 0) continue;
+      if (nextItems[idx].imagePath.trim() == path) continue;
+      nextItems[idx] = nextItems[idx].copyWith(imagePath: path);
+      AppLog.d('EditRefine', 'image_replaced id=$id');
+    }
+
+    // Specs: one draft for all selected, or per-item.
+    var appliedSpecs = 0;
+    if (event.applyToAll && event.itemIds.length > 1) {
+      final spec = event.drafts.first.spec;
+      if (spec.isValid) {
+        nextItems = [
+          for (final item in nextItems)
+            idSet.contains(item.id)
+                ? item.copyWith(spec: spec, tag: BulkItemTag.precise)
+                : item,
+        ];
+        appliedSpecs = event.itemIds.length;
+      }
+    } else {
+      for (var i = 0; i < event.itemIds.length && i < event.drafts.length; i++) {
+        final id = event.itemIds[i].trim();
+        final spec = event.drafts[i].spec;
+        if (id.isEmpty || !spec.isValid) continue;
+        final idx = nextItems.indexWhere((e) => e.id == id);
+        if (idx < 0) continue;
+        nextItems[idx] = nextItems[idx].copyWith(
+          spec: spec,
+          tag: BulkItemTag.precise,
+        );
+        appliedSpecs++;
+      }
+    }
+
+    // Collection-level tags from compose chips.
+    // applyToAll → first draft only; else union of edited drafts.
+    final mergedTags = <String>{};
+    final tagSources =
+        event.applyToAll && event.drafts.isNotEmpty
+            ? event.drafts.take(1)
+            : event.drafts;
+    for (final d in tagSources) {
+      for (final t in d.tags) {
+        final tag = t.trim().toLowerCase();
+        if (tag.isNotEmpty) mergedTags.add(tag);
+      }
+    }
+    final nextTags =
+        mergedTags.isNotEmpty ? mergedTags.toList(growable: false) : state.tags;
+
+    final syncGroup =
+        appliedSpecs > 0 &&
+        (nextItems.length == 1 ||
+            (event.applyToAll &&
+                event.itemIds.length > 1 &&
+                nextItems.every((i) => idSet.contains(i.id))));
+    final groupSpec =
+        syncGroup && event.drafts.first.spec.isValid
+            ? event.drafts.first.spec
+            : state.groupSpec;
+
+    // Title from compose (category / names / metal) — never drop existing
+    // listing name when compose returns an empty derived title.
+    final composedTitle = event.title.trim();
+    final nextTitle =
+        composedTitle.isNotEmpty ? composedTitle : state.groupTitle.trim();
+    final composedDesc = event.description.trim();
+    final nextDescription =
+        composedDesc.isNotEmpty ? composedDesc : state.description;
+
+    // Per-item stock/lock from compose drafts (keyed by item id).
+    final refineByItemId = <String, ComposePhotoDraft>{};
+    if (event.applyToAll && event.drafts.isNotEmpty) {
+      final d = event.drafts.first;
+      for (final id in event.itemIds) {
+        final key = id.trim();
+        if (key.isNotEmpty) refineByItemId[key] = d;
+      }
+    } else {
+      for (var i = 0; i < event.itemIds.length && i < event.drafts.length; i++) {
+        final key = event.itemIds[i].trim();
+        if (key.isNotEmpty) refineByItemId[key] = event.drafts[i];
+      }
+    }
+
+    AppLog.d(
+      'EditRefine',
+      'applied specs=$appliedSpecs tags=${nextTags.length} '
+      'title="$nextTitle" syncGroup=$syncGroup → save_edit',
+    );
+
+    emit(
+      state.copyWith(
+        items: nextItems,
+        tags: nextTags,
+        groupTitle: nextTitle,
+        description: nextDescription,
+        groupSpec: groupSpec,
+        isSelectMode: false,
+        selectedItemIds: const [],
+        clearError: true,
+      ),
+    );
+
+    final storeId = _effectiveStoreId;
+    if (storeId == null || storeId.isEmpty) {
+      emit(
+        state.copyWith(
+          errorMessage: 'Create a store before saving product edits.',
+        ),
+      );
+      return;
+    }
+    await _saveEdit(
+      emit,
+      storeId: storeId,
+      refineDraftsByItemId: refineByItemId,
+    );
+  }
+
   Future<void> _saveEdit(
     Emitter<BulkUploadState> emit, {
     required String storeId,
+    Map<String, ComposePhotoDraft> refineDraftsByItemId = const {},
   }) async {
     final listingId = state.listingId?.trim() ?? '';
     if (listingId.isEmpty) {
@@ -1356,6 +1531,7 @@ class BulkUploadBloc extends Bloc<BulkUploadEvent, BulkUploadState> {
     try {
       var revision = state.revision;
       final groupTitle = state.groupTitle.trim();
+      final description = state.description.trim();
 
       // Persist WhatsApp-style photo edits (local paths) before specs/subgroups.
       revision = await _syncReplacedEditPhotos(
@@ -1377,11 +1553,21 @@ class BulkUploadBloc extends Bloc<BulkUploadEvent, BulkUploadState> {
       revision = detail.revision;
       final isJewelListing = detail.productSpecsById.isNotEmpty;
 
+      final apiTag = _apiTag(state.tags);
+      AppLog.d(
+        'EditRefine',
+        'saveEdit PATCH collection name="${groupTitle}" '
+        'tag="${apiTag}" descLen=${description.length} '
+        'jewel=$isJewelListing items=${state.items.length}',
+      );
       final updated = await _collectionRepository.updateCollection(
         storeId: storeId,
         listingId: listingId,
         revision: revision,
         name: groupTitle.isNotEmpty ? groupTitle : null,
+        // Compose tags → collection tag (same as create publish).
+        tag: apiTag.isNotEmpty ? apiTag : null,
+        description: description.isNotEmpty ? description : null,
         // Jewel: product PATCH below owns weight/purity. Legacy photo
         // collections still persist collection-level specifications here.
         specifications:
@@ -1405,6 +1591,9 @@ class BulkUploadBloc extends Bloc<BulkUploadEvent, BulkUploadState> {
           emit,
           detail: detail,
           items: state.items,
+          listingTitle: groupTitle,
+          listingTags: state.tags,
+          refineDraftsByItemId: refineDraftsByItemId,
         );
       } else {
         final mainIds =
@@ -1645,6 +1834,9 @@ class BulkUploadBloc extends Bloc<BulkUploadEvent, BulkUploadState> {
     Emitter<BulkUploadState> emit, {
     required CollectionDetail detail,
     required List<BulkUploadItem> items,
+    String listingTitle = '',
+    List<String> listingTags = const [],
+    Map<String, ComposePhotoDraft> refineDraftsByItemId = const {},
   }) async {
     // productSpecsById is keyed by product _id and sometimes primary imageId.
     // Prefer a non-img_ sibling key when the item id is an image id.
@@ -1662,12 +1854,12 @@ class BulkUploadBloc extends Bloc<BulkUploadEvent, BulkUploadState> {
       return null;
     }
 
-    final toPatch = <String, ProductSpec>{};
+    final toPatch = <String, ({ProductSpec spec, String itemId})>{};
     for (final item in items) {
       if (!item.spec.isValid) continue;
       final productId = productIdFor(item.id.trim());
       if (productId == null) continue;
-      toPatch[productId] = item.spec;
+      toPatch[productId] = (spec: item.spec, itemId: item.id.trim());
     }
 
     if (toPatch.isEmpty) {
@@ -1678,29 +1870,37 @@ class BulkUploadBloc extends Bloc<BulkUploadEvent, BulkUploadState> {
     AppLog.d(
       _editTag,
       'jewel product PATCH count=${toPatch.length} '
-      'ids=${toPatch.keys.join(',')}',
+      'ids=${toPatch.keys.join(',')} title="$listingTitle" '
+      'tags=${listingTags.length}',
     );
 
     final total = toPatch.length;
     var done = 0;
     for (final entry in toPatch.entries) {
       final productId = entry.key;
-      final patchBody =
-          entry.value.toBatchProductJson(
-              stockStatus: 'in',
-              isLocked: false,
-              tags: const [],
-            )
-            ..remove('stock_status')
-            ..remove('is_locked')
-            ..remove('tags')
-            ..remove('mto_days');
+      final spec = entry.value.spec;
+      final draft = refineDraftsByItemId[entry.value.itemId];
+      final stock = draft?.stockStatus.catalog.apiValue ?? 'in';
+      final locked = draft?.isLocked ?? false;
+      final mto =
+          draft?.stockStatus == ComposeStockStatus.mto ? draft?.mtoDays : null;
+      final patchBody = spec.toBatchProductJson(
+        stockStatus: stock,
+        mtoDays: mto,
+        isLocked: locked,
+        tags: listingTags,
+        title: listingTitle.isNotEmpty ? listingTitle : null,
+      );
       try {
         await _collectionRepository.updateProduct(
           productId: productId,
           body: patchBody,
         );
-        AppLog.d(_editTag, 'jewel product PATCH OK id=$productId');
+        AppLog.d(
+          _editTag,
+          'jewel product PATCH OK id=$productId '
+          'stock=$stock locked=$locked',
+        );
       } catch (e) {
         // Don't fail the whole save if one product id was stale — log and
         // continue so remaining products still update.

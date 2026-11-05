@@ -107,7 +107,7 @@ Common picks:
   - Shell tabs depend on own-store: **no store** → Stores / Contacts / Settings / Profile; **own store** → Stores / Contacts / Wishlist / My store (Settings via My store gear → `settings_route`)
   - Store creation is deferred: Profile tab (or Contacts empty CTA) -> `store_setup_route` -> `add_team_route` -> `store_listing_route`
   - Contacts tab: Invite Friends → `invite_friends_route` (Share + phone contacts); default list shows peer stores only; search shows matching stores then invite contacts
-  - Contacts invite / Share JewelFlow uses WhatsApp copy `Hey, I'm using JewelFlow… Download it here: https://…`
+  - Contacts invite / Share Catly uses WhatsApp copy `Hey, I'm using Catly… Download it here: https://…`
   - After store create, home `/home` warm cache is invalidated so the new store appears on Stores without a manual refresh
   - From store profile Discover/visitor compact header: `store_channel_route` (Telegram-style store info + Media/Group/Gallery); `store_gallery_route` still used for dedicated gallery edits; app-bar search icon → `store_search_route`
   - Stores home search field → `global_search_route` (Discover / suggestions / results / filters via catalog search APIs); Sort & Filter → `search_filters_route`

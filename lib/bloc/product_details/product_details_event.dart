@@ -71,6 +71,7 @@ class ProductDetailsApplyEditedProduct extends ProductDetailsEvent {
     this.productSpecsById,
     this.precisionTag,
     this.subGroups,
+    this.preferredImageIndex,
   });
 
   final StoreProduct product;
@@ -84,6 +85,10 @@ class ProductDetailsApplyEditedProduct extends ProductDetailsEvent {
   final String? precisionTag;
   final List<CollectionSubGroup>? subGroups;
 
+  /// Keep the pager on the photo that was edited when asset order changes
+  /// after collection refetch (B3.2).
+  final int? preferredImageIndex;
+
   @override
   List<Object?> get props => [
     product,
@@ -93,6 +98,7 @@ class ProductDetailsApplyEditedProduct extends ProductDetailsEvent {
     productSpecsById,
     precisionTag,
     subGroups,
+    preferredImageIndex,
   ];
 }
 

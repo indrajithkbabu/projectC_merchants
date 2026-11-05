@@ -516,6 +516,16 @@ class _AddProductGroupPreviewRouteState
     if (!context.mounted || result is! Map) return;
     final map = Map<String, Object?>.from(result);
     if (map['returnResult'] != true) return;
+    final title = (map['initialTitle'] as String?)?.trim() ?? '';
+    if (title.isNotEmpty) {
+      context.read<BulkUploadBloc>().add(BulkUploadTitleChanged(title));
+    }
+    final description = (map['description'] as String?)?.trim() ?? '';
+    if (description.isNotEmpty) {
+      context.read<BulkUploadBloc>().add(
+        BulkUploadDescriptionChanged(description),
+      );
+    }
     _applyComposeResult(context, state, items: items, result: map);
   }
 
@@ -603,6 +613,17 @@ class _AddProductGroupPreviewRouteState
         bloc.add(BulkUploadApplyMultiSpec(spec));
         applied = items.length;
       }
+    }
+    // Sync collection tags from compose chips (same as compose-first refine).
+    final mergedTags = <String>{};
+    for (final d in drafts) {
+      for (final t in d.tags) {
+        final tag = t.trim().toLowerCase();
+        if (tag.isNotEmpty) mergedTags.add(tag);
+      }
+    }
+    if (mergedTags.isNotEmpty) {
+      bloc.add(BulkUploadTagsReplaced(mergedTags.toList(growable: false)));
     }
     if (applied == 0 && drafts.isNotEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(

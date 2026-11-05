@@ -5,7 +5,7 @@
     "version": "0.2.0",
     "configurations": [
         {
-            "name": "Project C Dev",
+            "name": "Catly Dev",
             "request": "launch",
             "type": "dart",
             "program": "lib/main/main_dev.dart",
@@ -16,7 +16,7 @@
             "noDebug": true
         },
         {
-            "name": "Project C",
+            "name": "Catly",
             "request": "launch",
             "type": "dart",
             "program": "lib/main/main_prod.dart",

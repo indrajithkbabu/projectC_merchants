@@ -56,7 +56,7 @@ class PushNotificationService {
   static const androidChannelId = 'project_c_default';
   static const androidChannelName = 'General';
   static const androidChannelDescription =
-      'General notifications from JewelFlow';
+      'General notifications from Catly';
 
   /// Always-on debug line (works in release). Filter: [FCM_DEBUG]
   static void _dbg(String message) {

@@ -453,7 +453,7 @@ class _ContactsResultsList extends StatelessWidget {
             return Padding(
               padding: const EdgeInsets.only(top: 32),
               child: Text(
-                'No stores yet. Pull to refresh, or invite friends to JewelFlow.',
+                'No stores yet. Pull to refresh, or invite friends to Catly.',
                 textAlign: TextAlign.center,
                 style: AppTextStyles.bodySecondary(),
               ),

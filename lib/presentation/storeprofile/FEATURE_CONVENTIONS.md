@@ -217,9 +217,12 @@ This file defines what to follow for UI and logic inside `lib/presentation/store
   Camera/Gallery picker). Append via `POST .../images`, delete via
   `DELETE .../images/:imageId` (max 5).
 - Group collage (`ProductImageCollage`): 1–9 keep Telegram layouts; **10+** uses
-  horizontal pages of 3×3 (9 per page) so the outer product list keeps vertical
-  scroll. Each tile gets a subtle corner radius (`tileBorderRadius` ~3px group /
-  ~3.5px single) on all four corners; ~1.5px gap between tiles.
+  horizontal pages of up to 9 images so the outer product list keeps vertical
+  scroll. **Each page** (including a short last page with 1–8 images) uses the
+  same 1–9 Telegram collage fit as a single-page card — no empty 3×3 cells /
+  wasted space on partial pages. Each tile gets a subtle corner radius
+  (`tileBorderRadius` ~3px group / ~3.5px single) on all four corners; ~1.5px
+  gap between tiles.
   Product card outer radius unchanged; cards use a soft outline — Day
   `divider` / Night `border` at low alpha (~1px) so edges stay quiet, with
   thicker primary border when selected/focused.
@@ -369,8 +372,10 @@ This file defines what to follow for UI and logic inside `lib/presentation/store
   Returning from details: `silent` count pops are no-op on browse (no loader);
   real edits refresh with `_load(quiet: true)` so tiles stay visible.
 - Own store only: **Select** → **Edit** / **Ungroup** / **Delete** (or Done).
-  - **Edit**: opens refine preview for the selection (auto-opens single/multi
-    details). Save uses PATCH collection + create/update sub-groups, then refresh.
+  - **Edit**: opens compose **directly** (`edit_refine_flow` / filter `EditRefine`)
+    for the selection (single or multi) — no preview flash. Send applies specs/
+    tags and saves (PATCH collection + jewel product / subgroup updates), then
+    browse refreshes and pops `refreshCollections` so store profile reloads.
   - **Ungroup**: selection must share one source (main or the same sub-group).
     Destinations: Main / Existing sub-group / New sub-group / New collection via
     `POST .../photos/move`, then refresh. New collection requires ≥1 photo left

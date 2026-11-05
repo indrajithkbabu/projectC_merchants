@@ -49,11 +49,13 @@ This file defines what to follow for UI and logic inside `lib/presentation/store
 - Cold start / post-OTP: `StoreHomePrefetcher` + `DeviceContactNames.prefetch`
   start as soon as auth tokens are ready. Successful `/home` pages (and
   resolved contact names) are written to `StoreHomeCache` (disk). **Kill+reopen**
-  paints that cache immediately (including contact names) — no shimmer wait —
-  then soft-refreshes `/home` in the background. First-ever open (no cache)
-  still shows list-row shimmer until `/home` returns: if the contact index is
-  already warm/in-flight, names are included on first emit; otherwise cached
-  names / empty subtitle first, then enrich (never block shimmer on the
+  uses home-first auth restore: hydrate `StoreHomeCache` disk→memory **before**
+  leaving bootstrap, then `StoreListingBloc` **seeds** that memory on create so
+  shell frame 0 already has rows (no shimmer→list→shimmer flash). Soft-refreshes
+  `/home` in the background while keeping rows visible. First-ever open (no
+  cache) still shows list-row shimmer until `/home` returns: if the contact
+  index is already warm/in-flight, names are included on first emit; otherwise
+  cached names / empty subtitle first, then enrich (never block shimmer on the
   permission dialog). Later refreshes force a new `/home` fetch (contact map
   stays session-cached). After **store create**, the repository invalidates +
   re-prefetches home so the new own store appears when the listing shell

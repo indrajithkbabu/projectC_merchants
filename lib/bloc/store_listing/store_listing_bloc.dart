@@ -29,8 +29,9 @@ class StoreListingBloc extends Bloc<StoreListingEvent, StoreListingState> {
            storeRepository ?? ServiceLocator.get<StoreRepository>(),
        _profileRepository =
            profileRepository ?? ServiceLocator.get<ProfileRepository>(),
-       // Empty + loading → shimmer only when no disk/memory home cache.
-       super(const StoreListingState(isLoading: true)) {
+       // Seed from memory so shell mount never flashes shimmer→list→shimmer
+       // after bootstrap / auth already hydrated StoreHomeCache.
+       super(_initialState()) {
     on<StoreListingSearchChanged>(_onSearchChanged);
     on<StoreListingRefreshed>(_onRefreshed);
     on<StoreListingLoadMore>(_onLoadMore);
@@ -52,6 +53,29 @@ class StoreListingBloc extends Bloc<StoreListingEvent, StoreListingState> {
     0xFFE67E22,
     0xFFE74C3C,
   ];
+
+  /// Sync first frame from [StoreHomeCache] memory (disk must already be read).
+  static StoreListingState _initialState() {
+    final page = StoreHomeCache.instance.readMemory();
+    if (page == null || page.items.isEmpty) {
+      return const StoreListingState(isLoading: true);
+    }
+    final names = StoreHomeCache.instance.contactNamesMemory();
+    final stores = [
+      for (var i = 0; i < page.items.length; i++)
+        CatalogUiMapper.storeToChannel(
+          page.items[i],
+          avatarColor: _avatarPalette[i % _avatarPalette.length],
+        ).copyWith(
+          contactName: names[page.items[i].phone.trim()]?.trim() ?? '',
+        ),
+    ];
+    return StoreListingState(
+      isLoading: false,
+      allStores: stores,
+      nextCursor: page.nextCursor,
+    );
+  }
 
   void _onSearchChanged(
     StoreListingSearchChanged event,
@@ -162,11 +186,7 @@ class StoreListingBloc extends Bloc<StoreListingEvent, StoreListingState> {
     }
 
     final covers = [for (final s in stores) s.coverImageUrl];
-    // Re-attach on-disk files (fast) so FileImage paints without network flash.
-    // Full decode may already be in flight from auth/home prefetch.
-    await CatalogImageCache.probeDisk(covers);
-    unawaited(CatalogImageCache.warmAvatars(covers));
-
+    // Emit before disk probe so we never hold an empty shimmer while I/O runs.
     AppLog.d(_tag, 'Painted ${stores.length} stores from home cache');
     emit(
       state.copyWith(
@@ -175,6 +195,10 @@ class StoreListingBloc extends Bloc<StoreListingEvent, StoreListingState> {
         nextCursor: page.nextCursor,
       ),
     );
+    // Re-attach on-disk files so FileImage paints without a network flash.
+    // Full decode may already be in flight from auth/home prefetch.
+    unawaited(CatalogImageCache.probeDisk(covers));
+    unawaited(CatalogImageCache.warmAvatars(covers));
     _afterHomePaint(stores, page.items);
 
     if (!DeviceContactNames.isReady) {

@@ -368,7 +368,7 @@ class _ShareCard extends StatelessWidget {
             ),
           ),
           title: Text(
-            'Share JewelFlow',
+            'Share Catly',
             style: AppTextStyles.body(
               fontWeight: FontWeight.w600,
               fontSize: 16,
