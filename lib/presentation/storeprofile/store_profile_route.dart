@@ -26,6 +26,7 @@ import 'package:project_c/models/product_view_mode.dart';
 import 'package:project_c/models/store_privacy_mode.dart';
 import 'package:project_c/models/store_product.dart';
 import 'package:project_c/navigation/routes.dart';
+import 'package:project_c/presentation/chat/chat_mock_store.dart';
 import 'package:project_c/navigation/smooth_fade_page_route.dart';
 import 'package:project_c/navigation/telegram_photo_page_route.dart';
 import 'package:project_c/presentation/cart/cart_route.dart';
@@ -624,6 +625,22 @@ class _StoreProfileRouteState extends State<StoreProfileRoute> {
         ..clear()
         ..add(StoreProductGrid.photoKey(product.id, imageIndex));
     });
+  }
+
+  bool _canAskStore(StoreProfileState state) =>
+      !state.isOwnStore &&
+      !state.isContentLocked &&
+      state.storeId.trim().isNotEmpty;
+
+  void _openStoreChat(StoreProfileState state) {
+    final chatId = ChatMockStore.instance.ensureStoreChat(
+      storeId: state.storeId,
+      storeName: state.storeName,
+    );
+    Navigator.of(context).pushNamed(
+      Routes.chatThreadRoute,
+      arguments: <String, String?>{'chatId': chatId},
+    );
   }
 
   void _toggleSelected(StoreProduct product) {
@@ -1614,27 +1631,38 @@ class _StoreProfileRouteState extends State<StoreProfileRoute> {
           top: 0,
           left: 0,
           right: 0,
-          child: StoreProfileTelegramHeader(
-            state: state,
-            topPad: topPad,
-            selectedPhotoCount:
-                _visitorPhotoSelecting ? _selectedPhotoKeys.length : null,
-            onOpenStoreInfo: () => _openStoreChannel(context, state),
-            onBack: () => _goHome(context),
-            onAddProducts: () => _addProducts(context),
-            // Selection-mode forward only (no visitor browse toolbar Import).
-            onImport: () => _onVisitorSelectionImport(state),
-            onSearch: () => _openStoreSearch(context, state),
-            onCart: () => Navigator.of(context).pushNamed(Routes.cartRoute),
-            // Own-store item select: delete replaces add/search (no extra bar).
-            onDeleteSelected:
-                state.isOwnStore &&
-                        _visitorPhotoSelecting &&
-                        _selectedPhotoKeys.isNotEmpty
-                    ? () => _confirmDeleteSelectedItems(context)
-                    : null,
-            // Never offer Import while owning this store (item delete instead).
-            showSelectionImport: state.canImport && !state.isOwnStore,
+          child: ListenableBuilder(
+            listenable: ChatMockStore.instance,
+            builder: (context, _) {
+              final canAsk = _canAskStore(state);
+              return StoreProfileTelegramHeader(
+                state: state,
+                topPad: topPad,
+                selectedPhotoCount:
+                    _visitorPhotoSelecting ? _selectedPhotoKeys.length : null,
+                onOpenStoreInfo: () => _openStoreChannel(context, state),
+                onBack: () => _goHome(context),
+                onAddProducts: () => _addProducts(context),
+                // Selection-mode forward only (no visitor browse toolbar Import).
+                onImport: () => _onVisitorSelectionImport(state),
+                onSearch: () => _openStoreSearch(context, state),
+                onCart: () => Navigator.of(context).pushNamed(Routes.cartRoute),
+                // Own-store item select: delete replaces add/search (no extra bar).
+                onDeleteSelected:
+                    state.isOwnStore &&
+                            _visitorPhotoSelecting &&
+                            _selectedPhotoKeys.isNotEmpty
+                        ? () => _confirmDeleteSelectedItems(context)
+                        : null,
+                onChat: canAsk ? () => _openStoreChat(state) : null,
+                chatUnread:
+                    canAsk
+                        ? ChatMockStore.instance.unreadForStore(state.storeId)
+                        : 0,
+                // Never offer Import while owning this store (item delete instead).
+                showSelectionImport: state.canImport && !state.isOwnStore,
+              );
+            },
           ),
         ),
         if (_selectionMode && !_visitorPhotoSelecting)

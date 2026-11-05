@@ -17,6 +17,8 @@ abstract class StoreRepository {
 
   Future<CatalogStore> fetchStore(String storeId);
 
+  Future<CatalogStore> fetchStoreBySlug(String slug);
+
   Future<SlugAvailability> checkSlugAvailability(String slug);
 
   Future<CatalogStore> createStore({
@@ -141,6 +143,12 @@ class StoreRepositoryImpl implements StoreRepository {
   @override
   Future<CatalogStore> fetchStore(String storeId) {
     return _request.fetchStore(storeId);
+  }
+
+  @override
+  Future<CatalogStore> fetchStoreBySlug(String slug) {
+    AppLog.d(_tag, 'fetchStoreBySlug $slug');
+    return _request.fetchStoreBySlug(slug);
   }
 
   @override

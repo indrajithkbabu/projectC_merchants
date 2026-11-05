@@ -1,6 +1,7 @@
 import 'package:flutter_simple_dependency_injection/injector.dart';
 import 'package:project_c/services/catalog_direct_upload_service.dart';
 import 'package:project_c/services/product_details_preferences.dart';
+import 'package:project_c/services/profile_link_service.dart';
 import 'package:project_c/services/product_upload_coordinator.dart';
 import 'package:project_c/services/product_view_preferences.dart';
 import 'package:project_c/services/push_notification_service.dart';
@@ -11,7 +12,10 @@ import 'package:project_c/services/theme_preferences.dart';
 import 'package:project_c/session/catalog_session.dart';
 import 'package:project_c/storage/app_settings_storage.dart';
 import 'package:project_c/storage/session_storage.dart';
+import 'package:project_c/services/cart_store.dart';
 import 'package:project_c/webservice/auth/auth_repository.dart';
+import 'package:project_c/webservice/cart/cart_repository.dart';
+import 'package:project_c/webservice/cart/cart_request.dart';
 import 'package:project_c/webservice/auth/auth_request.dart';
 import 'package:project_c/webservice/catalog_api_client.dart';
 import 'package:project_c/webservice/collection/collection_repository.dart';
@@ -30,9 +34,6 @@ import 'package:project_c/webservice/store/store_repository.dart';
 import 'package:project_c/webservice/store/store_request.dart';
 import 'package:project_c/webservice/views/views_repository.dart';
 import 'package:project_c/webservice/views/views_request.dart';
-import 'package:project_c/services/cart_store.dart';
-import 'package:project_c/webservice/cart/cart_repository.dart';
-import 'package:project_c/webservice/cart/cart_request.dart';
 import 'package:project_c/webservice/wishlist/wishlist_repository.dart';
 import 'package:project_c/webservice/wishlist/wishlist_request.dart';
 
@@ -53,12 +54,9 @@ class ServiceLocator {
     final screenshotProtection = ScreenshotProtectionService(
       storage: appSettings,
     );
-    final productViewPreferences = ProductViewPreferences(
-      storage: appSettings,
-    );
+    final productViewPreferences = ProductViewPreferences(storage: appSettings);
     final productDetailsPreferences = ProductDetailsPreferences(
       storage: appSettings,
-      
     );
     final searchRecentPreferences = SearchRecentPreferences(
       storage: appSettings,
@@ -74,9 +72,7 @@ class ServiceLocator {
       request: deviceTokenRequest,
     );
     final activityRequest = ActivityRequest(apiClient: apiClient);
-    final activityRepository = ActivityRepositoryImpl(
-      request: activityRequest,
-    );
+    final activityRepository = ActivityRepositoryImpl(request: activityRequest);
     final pushNotificationService = PushNotificationService(
       session: session,
       deviceTokenRepository: deviceTokenRepository,
@@ -96,10 +92,7 @@ class ServiceLocator {
       (_) => deviceTokenRepository,
       isSingleton: true,
     );
-    injector.map<ActivityRequest>(
-      (_) => activityRequest,
-      isSingleton: true,
-    );
+    injector.map<ActivityRequest>((_) => activityRequest, isSingleton: true);
     injector.map<ActivityRepository>(
       (_) => activityRepository,
       isSingleton: true,
@@ -120,10 +113,7 @@ class ServiceLocator {
       (_) => searchRecentPreferences,
       isSingleton: true,
     );
-    injector.map<ThemePreferences>(
-      (_) => themePreferences,
-      isSingleton: true,
-    );
+    injector.map<ThemePreferences>((_) => themePreferences, isSingleton: true);
     injector.map<StorePrivacyPreferences>(
       (_) => storePrivacyPreferences,
       isSingleton: true,
@@ -164,6 +154,14 @@ class ServiceLocator {
       (i) => StoreRepositoryImpl(
         request: i.get<StoreRequest>(),
         session: i.get<CatalogSession>(),
+      ),
+      isSingleton: true,
+    );
+    injector.map<ProfileLinkService>(
+      (i) => ProfileLinkService(
+        session: i.get<CatalogSession>(),
+        storeRepository: i.get<StoreRepository>(),
+        collectionRepository: i.get<CollectionRepository>(),
       ),
       isSingleton: true,
     );

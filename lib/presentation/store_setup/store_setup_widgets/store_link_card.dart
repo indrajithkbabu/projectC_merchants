@@ -27,7 +27,7 @@ class StoreLinkCard extends StatelessWidget {
               Expanded(
                 child: Text(
                   state.fullStoreLink.isEmpty
-                      ? 'your-store.jewelflow.app'
+                      ? 'https://catly.in/store/your-store'
                       : state.fullStoreLink,
                   style: AppTextStyles.body(
                     fontSize: 15,

@@ -10,7 +10,7 @@ This file defines what to follow for UI and logic inside `lib/presentation/main_
 - Floating capsule nav is `FloatingBottomNavBar` from `lib/helper/widgets/`.
 - **Tab sets (driven by `AccountProfileBloc` / `CatalogSession.ownStoreId`):**
   - **No own store:** **Stores** (home icon) | **Contacts** | **Settings** | **Profile**
-  - **Own store:** **Stores** (home icon) | **Contacts** | **Wishlist** (heart) | **My store**
+  - **Own store:** **Stores** (home icon) | **Contacts** | **Wishlist** (heart) | **My store** | **Chats**
 - Own-store Settings is **not** a bottom tab. Open it from My store toolbar gear →
   `settings_route` (`SettingsTab(showBack: true)`), including Account privacy +
   Import requests, Appearance, View products, screenshots, logout / delete.
@@ -19,15 +19,11 @@ This file defines what to follow for UI and logic inside `lib/presentation/main_
   Trailing stays right-aligned (`Expanded` title cluster + trailing). Wishlist
   collapses search/filters into title-trailing icons on scroll and supports
   gallery-style pinch column zoom (see privacy FEATURE_CONVENTIONS).
-- Wishlist shell tab is a **hub** (`WishlistTab`): title + **Wishlist | Cart**
-  pill switcher (same segmented style as Import requests), then an
-  `IndexedStack` of `WishlistRoute` (`hideShellTitle: true`) and embedded
-  `CartRoute`. No back button; pass `FloatingBottomNavBar.reservedHeight` as
-  scroll/empty/footer bottom padding only (never outer `Padding` that leaves a
-  blank band under the list). Bump `refreshSignal` on tab select so wishlist
-  quiet-refreshes; Cart pill / `ShellNavTab.cart` bumps cart `refreshSignal`.
-  `ShellNav.wishlistHubPane` remembers the selected pill. `ShellNavTab.cart`
-  opens this bottom tab on the Cart pill (own-store accounts only).
+- Wishlist shell tab reuses `WishlistRoute` (`embeddedInShell: true`). No back
+  button; pass `FloatingBottomNavBar.reservedHeight` as scroll/empty bottom
+  padding only (never outer `Padding` that leaves a blank band under the list).
+  Bump `refreshSignal` on tab select so new likes appear without app restart
+  (quiet refresh when list already painted).
 - My store shell tab reuses `StoreMyStoreTab` with `showBack: false` + hamburger
   → Settings (no day/night icon on this tab). Primary CTAs: **Import requests**
   (pending count from `StoreProfileBloc`) + **Share store**. Wrapped in
@@ -61,7 +57,8 @@ This file defines what to follow for UI and logic inside `lib/presentation/main_
   do not add per-screen FLAG_SECURE hacks.
 
 ## Anti-flicker Rules
-- Keep tab bodies in an `IndexedStack` (4 slots). Swap slots 2–3 only when
+- Keep tab bodies in an `IndexedStack` (4 slots without a store, 5 with one).
+  The fifth slot is **Chats**, only when the account has an own store. Swap slots 2–3 only when
   own-store presence changes (after store create the shell usually remounts via
   `pushNamedAndRemoveUntil`).
 - Own-store: provide one `StoreProfileBloc` keyed by store id above the stack;

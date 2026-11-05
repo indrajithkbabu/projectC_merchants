@@ -11,11 +11,11 @@ import 'package:project_c/models/country_model.dart';
 import 'package:project_c/navigation/routes.dart';
 import 'package:project_c/services/cart_store.dart';
 import 'package:project_c/services/push_notification_service.dart';
+import 'package:project_c/webservice/cart/cart_repository.dart';
 import 'package:project_c/services/store_home_prefetcher.dart';
 import 'package:project_c/services/view_beacon.dart';
 import 'package:project_c/services/wishlist_prefetcher.dart';
 import 'package:project_c/webservice/auth/auth_repository.dart';
-import 'package:project_c/webservice/cart/cart_repository.dart';
 import 'package:project_c/webservice/catalog_error_mapper.dart';
 import 'package:project_c/webservice/profile/profile_repository.dart';
 

@@ -15,6 +15,7 @@ import 'package:project_c/navigation/route_initializer.dart';
 import 'package:project_c/navigation/routes.dart';
 import 'package:project_c/services/product_details_preferences.dart';
 import 'package:project_c/services/product_view_preferences.dart';
+import 'package:project_c/services/profile_link_service.dart';
 import 'package:project_c/services/push_notification_service.dart';
 import 'package:project_c/services/screenshot_protection_service.dart';
 import 'package:project_c/services/store_privacy_preferences.dart';
@@ -42,6 +43,8 @@ class _AppState extends State<App> with WidgetsBindingObserver {
       // notification permission dialog (must not run from main() before runApp).
       // ignore: unawaited_futures
       ServiceLocator.get<PushNotificationService>().requestRuntimePermissions();
+      // ignore: unawaited_futures
+      ServiceLocator.get<ProfileLinkService>().start();
       ServiceLocator.get<ProductViewPreferences>().load();
       ServiceLocator.get<ProductDetailsPreferences>().load();
       ServiceLocator.get<StorePrivacyPreferences>().load();
@@ -124,6 +127,7 @@ class _AppState extends State<App> with WidgetsBindingObserver {
             if (state.isAuthenticated) {
               WidgetsBinding.instance.addPostFrameCallback((_) {
                 ServiceLocator.get<PushNotificationService>().flushPendingOpen();
+                ServiceLocator.get<ProfileLinkService>().flushPending();
               });
             }
           }

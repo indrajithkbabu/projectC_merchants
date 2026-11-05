@@ -34,11 +34,13 @@ import 'package:project_c/presentation/add_store_product/add_product_group_route
 import 'package:project_c/presentation/add_store_product/compose_product_draft.dart';
 import 'package:project_c/presentation/add_store_product/edit_product_specs_route.dart';
 import 'package:project_c/presentation/auth/country_picker_route.dart';
+import 'package:project_c/presentation/cart/cart_route.dart';
 import 'package:project_c/presentation/auth/otp_route.dart';
 import 'package:project_c/presentation/auth/phone_route.dart';
 import 'package:project_c/presentation/home/home_placeholder_route.dart';
 import 'package:project_c/presentation/bootstrap/bootstrap_route.dart';
-import 'package:project_c/presentation/cart/cart_route.dart';
+import 'package:project_c/presentation/chat/chat_thread_route.dart';
+import 'package:project_c/presentation/chat/new_chat_route.dart';
 import 'package:project_c/presentation/main_shell/invite_friends_route.dart';
 import 'package:project_c/presentation/main_shell/main_shell_route.dart';
 import 'package:project_c/presentation/main_shell/tabs/settings_tab.dart';
@@ -134,6 +136,10 @@ PageRoute? onGenerateRoutes(RouteSettings settings) {
       return _settingsRoute(settings);
     case Routes.activityRoute:
       return _activityRoute(settings);
+    case Routes.chatThreadRoute:
+      return _chatThreadRoute(settings);
+    case Routes.chatNewRoute:
+      return _chatNewRoute(settings);
     case Routes.accountPrivacyRoute:
       return _accountPrivacyRoute(settings);
     case Routes.followRequestsRoute:
@@ -224,8 +230,7 @@ PageRoute? _addTeamRoute(RouteSettings settings) {
           : (args is Map && args['storeName'] is String
               ? args['storeName'] as String
               : '');
-  final returnToProfile =
-      args is Map && args['returnToProfile'] == true;
+  final returnToProfile = args is Map && args['returnToProfile'] == true;
   return _buildAnimatedRoute(
     settings: settings,
     builder:
@@ -283,11 +288,34 @@ PageRoute? _settingsRoute(RouteSettings settings) {
           child: child,
         );
       }
-      return BlocProvider(
-        create: (_) => AccountProfileBloc(),
-        child: child,
-      );
+      return BlocProvider(create: (_) => AccountProfileBloc(), child: child);
     },
+  );
+}
+
+PageRoute? _chatThreadRoute(RouteSettings settings) {
+  final args = settings.arguments;
+  final map = args is Map ? args : const <dynamic, dynamic>{};
+  final chatId =
+      map['chatId'] is String ? (map['chatId'] as String).trim() : '';
+  if (chatId.isEmpty) return null;
+  final discussion = map['openDiscussionId'];
+  final openDiscussionId =
+      discussion is String && discussion.trim().isNotEmpty
+          ? discussion.trim()
+          : null;
+  return _buildAnimatedRoute(
+    settings: settings,
+    builder:
+        (_) =>
+            ChatThreadRoute(chatId: chatId, openDiscussionId: openDiscussionId),
+  );
+}
+
+PageRoute? _chatNewRoute(RouteSettings settings) {
+  return _buildAnimatedRoute(
+    settings: settings,
+    builder: (_) => const NewChatRoute(),
   );
 }
 
@@ -303,9 +331,9 @@ PageRoute? _activityRoute(RouteSettings settings) {
       map['pendingCount'] is int ? map['pendingCount'] as int : 0;
   final previewNames =
       map['previewNames'] is List
-          ? (map['previewNames'] as List)
-              .whereType<String>()
-              .toList(growable: false)
+          ? (map['previewNames'] as List).whereType<String>().toList(
+            growable: false,
+          )
           : const <String>[];
 
   return _buildAnimatedRoute(
@@ -314,9 +342,7 @@ PageRoute? _activityRoute(RouteSettings settings) {
         (context) => ScreenWrapper(
           backgroundColor: AppColors.background,
           child: Padding(
-            padding: EdgeInsets.only(
-              top: ScreenWrapper.statusBarTop(context),
-            ),
+            padding: EdgeInsets.only(top: ScreenWrapper.statusBarTop(context)),
             child: ActivityRoute(
               storeId: storeId,
               storeName: storeName.isEmpty ? 'My store' : storeName,
@@ -328,8 +354,7 @@ PageRoute? _activityRoute(RouteSettings settings) {
                   Routes.followRequestsRoute,
                   arguments: {
                     'storeId': storeId,
-                    'storeName':
-                        storeName.isEmpty ? 'My store' : storeName,
+                    'storeName': storeName.isEmpty ? 'My store' : storeName,
                   },
                 );
               },
@@ -358,10 +383,8 @@ PageRoute? _followRequestsRoute(RouteSettings settings) {
   return _buildAnimatedRoute(
     settings: settings,
     builder:
-        (context) => FollowRequestsRoute(
-          storeId: storeId,
-          storeName: storeName,
-        ),
+        (context) =>
+            FollowRequestsRoute(storeId: storeId, storeName: storeName),
   );
 }
 
@@ -414,9 +437,7 @@ PageRoute? _followersFollowingRoute(RouteSettings settings) {
           ? FollowersFollowingTab.following
           : FollowersFollowingTab.followers;
   final followerCount =
-      args['followerCount'] is num
-          ? (args['followerCount'] as num).toInt()
-          : 0;
+      args['followerCount'] is num ? (args['followerCount'] as num).toInt() : 0;
   final followingCount =
       args['followingCount'] is num
           ? (args['followingCount'] as num).toInt()
@@ -521,7 +542,8 @@ PageRoute? _storeProfileRoute(RouteSettings settings) {
           create:
               (_) => StoreProfileBloc(
                 storeName: storeName,
-                members: members.isEmpty && isOwnStore ? session.members : members,
+                members:
+                    members.isEmpty && isOwnStore ? session.members : members,
                 products: products,
                 isOwnStore: isOwnStore,
                 storeId: storeId,
@@ -688,17 +710,13 @@ PageRoute? _storeImportRequestsRoute(RouteSettings settings) {
       args is Map && args['storeName'] is String
           ? args['storeName'] as String
           : 'Your Store';
-  final initialTab =
-      args is Map && args['initialTab'] == 1 ? 1 : 0;
+  final initialTab = args is Map && args['initialTab'] == 1 ? 1 : 0;
   return _buildAnimatedRoute(
     settings: settings,
     builder:
         (context) => BlocProvider(
           create:
-              (_) => ImportRequestsBloc(
-                storeId: storeId,
-                storeName: storeName,
-              ),
+              (_) => ImportRequestsBloc(storeId: storeId, storeName: storeName),
           child: StoreImportRequestsRoute(initialTab: initialTab),
         ),
   );
@@ -786,8 +804,7 @@ PageRoute? _addProductComposeRoute(RouteSettings settings) {
               .toList(growable: false)
           : const <String>[];
   final returnResult = args is Map && args['returnResult'] == true;
-  final allowAddDelete =
-      args is Map ? args['allowAddDelete'] != false : true;
+  final allowAddDelete = args is Map ? args['allowAddDelete'] != false : true;
   final importMode = args is Map && args['importMode'] == true;
   final sourceStoreId =
       args is Map && args['sourceStoreId'] is String
@@ -806,9 +823,9 @@ PageRoute? _addProductComposeRoute(RouteSettings settings) {
           : const <String>[];
   final sourceLocked =
       args is Map && args['sourceLocked'] is List
-          ? (args['sourceLocked'] as List).map((e) => e == true).toList(
-            growable: false,
-          )
+          ? (args['sourceLocked'] as List)
+              .map((e) => e == true)
+              .toList(growable: false)
           : const <bool>[];
   return _buildAnimatedRoute(
     settings: settings,
@@ -873,7 +890,9 @@ PageRoute? _addProductGroupRoute(RouteSettings settings) {
   final composeApplyToAll = args is Map && args['applyToAll'] != false;
   final photoDrafts =
       args is Map && args['photoDrafts'] is List
-          ? (args['photoDrafts'] as List).whereType<ComposePhotoDraft>().toList()
+          ? (args['photoDrafts'] as List)
+              .whereType<ComposePhotoDraft>()
+              .toList()
           : const <ComposePhotoDraft>[];
   return _buildAnimatedRoute(
     settings: settings,
@@ -976,7 +995,9 @@ PageRoute? _addProductFormRoute(RouteSettings settings) {
   final args = settings.arguments;
   final selectedItems =
       args is Map && args['selectedItems'] is List
-          ? (args['selectedItems'] as List).whereType<GalleryImageItem>().toList()
+          ? (args['selectedItems'] as List)
+              .whereType<GalleryImageItem>()
+              .toList()
           : <GalleryImageItem>[];
   final storeId =
       args is Map && args['storeId'] is String
@@ -1062,9 +1083,7 @@ PageRoute? _addProductFormRoute(RouteSettings settings) {
 PageRoute? _editProductSpecsRoute(RouteSettings settings) {
   final args = settings.arguments;
   final storeId =
-      args is Map && args['storeId'] is String
-          ? args['storeId'] as String
-          : '';
+      args is Map && args['storeId'] is String ? args['storeId'] as String : '';
   final listingId =
       args is Map && args['listingId'] is String
           ? args['listingId'] as String
@@ -1103,9 +1122,7 @@ PageRoute? _collectionBrowseRoute(RouteSettings settings) {
           ? args['product'] as StoreProduct
           : StoreProduct.demoCatalog().first;
   final storeId =
-      args is Map && args['storeId'] is String
-          ? args['storeId'] as String
-          : '';
+      args is Map && args['storeId'] is String ? args['storeId'] as String : '';
   final storeName =
       args is Map && args['storeName'] is String
           ? args['storeName'] as String
@@ -1134,13 +1151,6 @@ PageRoute? _collectionBrowseRoute(RouteSettings settings) {
           isOwnStore: isOwnStore,
           seedProducts: seedProducts,
         ),
-  );
-}
-
-PageRoute? _cartRoute(RouteSettings settings) {
-  return _buildAnimatedRoute(
-    settings: settings,
-    builder: (context) => const CartRoute(),
   );
 }
 
@@ -1186,8 +1196,7 @@ PageRoute? _productDetailsRoute(RouteSettings settings) {
       args is Map && args['category'] is String
           ? (args['category'] as String).trim()
           : '';
-  final showStoreGroupLink =
-      args is Map && args['showStoreGroupLink'] == true;
+  final showStoreGroupLink = args is Map && args['showStoreGroupLink'] == true;
   final likedPhotoIds = <String>{
     if (args is Map && args['likedPhotoIds'] is List)
       for (final e in args['likedPhotoIds'] as List)
@@ -1197,8 +1206,7 @@ PageRoute? _productDetailsRoute(RouteSettings settings) {
         (args['likedPhotoId'] as String).trim().isNotEmpty)
       (args['likedPhotoId'] as String).trim(),
   };
-  final initialIsWishlisted =
-      args is Map && args['isWishlisted'] == true;
+  final initialIsWishlisted = args is Map && args['isWishlisted'] == true;
   final photoSourceRect =
       args is Map ? rectFromArgs(args['photoSourceRect']) : null;
   final photoPath =
@@ -1217,8 +1225,7 @@ PageRoute? _productDetailsRoute(RouteSettings settings) {
       args is Map && args['photoHeight'] is num
           ? (args['photoHeight'] as num).toDouble()
           : null;
-  final useTelegramPhoto =
-      photoSourceRect != null && photoPath.isNotEmpty;
+  final useTelegramPhoto = photoSourceRect != null && photoPath.isNotEmpty;
 
   Widget page(BuildContext context) => Theme(
     // Opaque black under the route transition (avoids white→black flicker
@@ -1268,6 +1275,13 @@ PageRoute? _productDetailsRoute(RouteSettings settings) {
   return _buildAnimatedRoute(settings: settings, builder: page);
 }
 
+PageRoute? _cartRoute(RouteSettings settings) {
+  return _buildAnimatedRoute(
+    settings: settings,
+    builder: (context) => const CartRoute(),
+  );
+}
+
 PageRoute? _globalSearchRoute(RouteSettings settings) {
   final args = settings.arguments;
   final initialQuery =
@@ -1291,9 +1305,7 @@ PageRoute? _globalSearchRoute(RouteSettings settings) {
 PageRoute? _storeSearchRoute(RouteSettings settings) {
   final args = settings.arguments;
   final storeId =
-      args is Map && args['storeId'] is String
-          ? args['storeId'] as String
-          : '';
+      args is Map && args['storeId'] is String ? args['storeId'] as String : '';
   final storeName =
       args is Map && args['storeName'] is String
           ? args['storeName'] as String

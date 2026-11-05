@@ -34,7 +34,7 @@ class StoreSetupState extends Equatable {
       storeName.trim().isNotEmpty && isHandleAvailable && !isSubmitting;
 
   String get fullStoreLink =>
-      storeHandle.isEmpty ? '' : '$storeHandle.jewelflow.app';
+      storeHandle.isEmpty ? '' : 'https://catly.in/store/$storeHandle';
 
   StoreSetupState copyWith({
     String? storeName,

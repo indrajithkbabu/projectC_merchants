@@ -18,8 +18,6 @@ class AppSettingsStorage {
   static const _kAppearance = 'app_appearance';
   static const _kStorePrivacyMode = 'store_privacy_mode';
   static const _kMockPendingFollowRequests = 'mock_pending_follow_requests';
-  /// FE-local cart JSON until `GET/POST /me/cart` is wired.
-  static const _kCartJson = 'cart_items_json';
 
   final FlutterSecureStorage _storage;
 
@@ -124,17 +122,5 @@ class AppSettingsStorage {
       value: '$clamped',
     );
     AppLog.d(_tag, 'pendingFollowRequestCount=$clamped');
-  }
-
-  Future<String?> readCartJson() => _storage.read(key: _kCartJson);
-
-  Future<void> writeCartJson(String json) async {
-    await _storage.write(key: _kCartJson, value: json);
-    AppLog.d(_tag, 'cartJson bytes=${json.length}');
-  }
-
-  Future<void> clearCartJson() async {
-    await _storage.delete(key: _kCartJson);
-    AppLog.d(_tag, 'cartJson cleared');
   }
 }

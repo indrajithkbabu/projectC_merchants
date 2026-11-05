@@ -1,11 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:project_c/di/service_locator.dart';
 import 'package:project_c/helper/colors.dart';
+import 'package:project_c/services/cart_store.dart';
 import 'package:project_c/helper/product_image.dart';
 import 'package:project_c/helper/text_styles.dart';
 import 'package:project_c/models/catalog/catalog_stock_status.dart';
 import 'package:project_c/presentation/storeprofile/storeprofile_widgets/visitor_photo_selection_chrome.dart';
-import 'package:project_c/services/cart_store.dart';
 
 /// Telegram-style media album collage — layout unchanged; each photo is clipped
 /// with a subtle [tileBorderRadius] on every corner and a small [gap] between
@@ -112,7 +112,7 @@ class ProductImageCollage extends StatelessWidget {
   /// Parallel to [imagePaths] — destination import declined by source.
   final List<bool> imageImportDeclined;
 
-  /// Parallel to [imagePaths] — CatalogProduct ids for in-cart badges.
+  /// Parallel to [imagePaths] — catalog product id used for the in-cart mark.
   final List<String> imageCartProductIds;
 
   @override

@@ -7,9 +7,10 @@ import 'package:project_c/bloc/product_details/product_details_bloc.dart';
 import 'package:project_c/di/service_locator.dart';
 import 'package:project_c/helper/app_padding.dart';
 import 'package:project_c/helper/be_verify.dart';
-import 'package:project_c/helper/cart_qa.dart';
+import 'package:project_c/helper/catalog_responsive_image.dart';
 import 'package:project_c/helper/catalog_ui_mapper.dart';
 import 'package:project_c/helper/colors.dart';
+import 'package:project_c/helper/merchant_profile_link.dart';
 import 'package:project_c/helper/product_image.dart';
 import 'package:project_c/helper/text_styles.dart';
 import 'package:project_c/helper/widgets/app_back_button.dart';
@@ -20,12 +21,13 @@ import 'package:project_c/models/catalog/collection_specifications.dart';
 import 'package:project_c/models/store_product.dart';
 import 'package:project_c/navigation/routes.dart';
 import 'package:project_c/navigation/telegram_photo_page_route.dart';
-import 'package:project_c/presentation/cart/cart_route.dart';
+import 'package:project_c/presentation/chat/chat_mock_store.dart';
+import 'package:project_c/presentation/chat/chat_models.dart';
+import 'package:project_c/presentation/chat/chat_widgets/enquiry_basket_sheet.dart';
 import 'package:project_c/presentation/product_details/product_details_widgets/product_details_widgets.dart';
-import 'package:project_c/services/cart_store.dart';
 import 'package:project_c/services/product_details_preferences.dart';
+import 'package:share_plus/share_plus.dart';
 import 'package:project_c/services/view_beacon.dart';
-import 'package:project_c/webservice/cart/cart_repository.dart';
 import 'package:project_c/webservice/catalog_error_mapper.dart';
 import 'package:project_c/webservice/collection/collection_repository.dart';
 
@@ -71,6 +73,11 @@ class _ProductDetailsRouteState extends State<ProductDetailsRoute> {
   bool _dismissArmed = false;
   bool _pageSwipePreferred = false;
   double _dismissVelocityY = 0;
+
+  /// Visitor ask-about set for the full-size photo. Hidden after the first
+  /// long-press; cleared after the enquiry is sent.
+  bool _showAskHint = true;
+  final Map<String, _AskTarget> _asks = {};
 
   @override
   void initState() {
@@ -300,6 +307,135 @@ class _ProductDetailsRouteState extends State<ProductDetailsRoute> {
         storeLink: entry.storeLink,
         seedCategory: entry.seedCategory,
       ),
+    );
+  }
+
+  _AskTarget? _askTargetFor(ProductDetailsState state) {
+    if (state.isOwnStore || state.isContentLocked) return null;
+    final feed = state.galleryFeed;
+    final useFeed =
+        state.hasGalleryFeed &&
+        feed != null &&
+        _pageIndex >= 0 &&
+        _pageIndex < feed.length;
+    final StoreProduct product;
+    final int imageIndex;
+    final String storeId;
+    final String storeName;
+    if (useFeed) {
+      final item = feed[_pageIndex];
+      product = item.product;
+      imageIndex = item.imageIndex;
+      storeId = (item.storeId ?? state.storeId ?? '').trim();
+      storeName = (item.storeName ?? state.storeName).trim();
+    } else {
+      product = state.product;
+      imageIndex = _pageIndex;
+      storeId = (state.storeId ?? '').trim();
+      storeName = state.storeName.trim();
+    }
+    if (storeId.isEmpty || storeId == 'my_store' || storeId == 'other_store') {
+      return null;
+    }
+    final rawTitle =
+        useFeed && product.id != state.product.id
+            ? product.title
+            : state.titlePartsForPhoto(imageIndex).title;
+    final title = rawTitle.trim().isEmpty ? 'Product' : rawTitle.trim();
+    final meta = product.meta.trim();
+    const swatches = <Color>[
+      Color(0xFFC4A265),
+      Color(0xFFB76E79),
+      Color(0xFF8C6A3D),
+      Color(0xFF6E7F8C),
+    ];
+    return _AskTarget(
+      storeId: storeId,
+      storeName: storeName.isEmpty ? 'Store' : storeName,
+      product: ChatProductRef(
+        id: '$storeId|${product.id}|$imageIndex',
+        name: title,
+        detail: meta.isEmpty ? 'Product' : meta,
+        color: swatches[product.toneIndex.abs() % swatches.length],
+        imageUrl: product.urlForRole(imageIndex, CatalogImageRole.grid),
+      ),
+    );
+  }
+
+  void _toggleAskPhoto(ProductDetailsState state) {
+    final target = _askTargetFor(state);
+    if (target == null || _imageZoomed) return;
+    setState(() {
+      _showAskHint = false;
+      _showInfo = false;
+      final id = target.product.id;
+      if (_asks.containsKey(id)) {
+        _asks.remove(id);
+      } else {
+        _asks[id] = target;
+      }
+    });
+  }
+
+  Future<void> _openAskBasket(ProductDetailsState state) async {
+    if (_asks.isEmpty) return;
+    final items = [for (final target in _asks.values) target.product];
+    final currentStore = _askTargetFor(state)?.storeId;
+    await showEnquiryBasketSheet(
+      context: context,
+      products: items,
+      onRemove: (id) {
+        if (!mounted) return;
+        setState(() => _asks.remove(id));
+      },
+      onAddMore: () {
+        if (!mounted) return;
+        setState(() => _showInfo = false);
+      },
+      onSend: (text, remaining) {
+        if (!mounted) return;
+        final grouped = <String, List<ChatProductRef>>{};
+        final names = <String, String>{};
+        for (final product in remaining) {
+          final target = _asks[product.id];
+          if (target == null) continue;
+          grouped.putIfAbsent(target.storeId, () => []).add(product);
+          names[target.storeId] = target.storeName;
+        }
+        if (grouped.isEmpty) {
+          setState(() => _asks.clear());
+          return;
+        }
+        final preferred =
+            currentStore != null && grouped.containsKey(currentStore)
+                ? currentStore
+                : grouped.keys.first;
+        String? opened;
+        for (final entry in grouped.entries) {
+          final chatId = ChatMockStore.instance.sendEnquiry(
+            storeId: entry.key,
+            storeName: names[entry.key] ?? 'Store',
+            text: text,
+            products: entry.value,
+          );
+          if (entry.key == preferred) opened = chatId;
+        }
+        setState(() {
+          _asks.clear();
+          _showAskHint = false;
+          _showInfo = false;
+        });
+        if (opened == null) return;
+        final openId =
+            ChatMockStore.instance.threadById(opened)?.openDiscussionId;
+        Navigator.of(context).pushNamed(
+          Routes.chatThreadRoute,
+          arguments: <String, String?>{
+            'chatId': opened,
+            'openDiscussionId': openId,
+          },
+        );
+      },
     );
   }
 
@@ -690,69 +826,6 @@ class _ProductDetailsRouteState extends State<ProductDetailsRoute> {
     }
   }
 
-  Future<void> _toggleCartFromPhoto(
-    ProductDetailsState state,
-    int photoIndex,
-  ) async {
-    final productId = state.catalogProductIdForPhoto(photoIndex).trim();
-    if (productId.isEmpty) return;
-    final stock = state.product.stockStatusAt(photoIndex);
-    if (stock == CatalogStockStatus.outOfStock) {
-      CartQa.caseStart(
-        'TC-05b',
-        'Photo OOS add blocked id=${CartQa.shortId(productId)}',
-      );
-      CartQa.caseEnd('TC-05b', pass: true, detail: 'add blocked');
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Out of stock')),
-      );
-      return;
-    }
-    final cart = ServiceLocator.get<CartRepository>();
-    try {
-      if (cart.contains(productId)) {
-        CartQa.caseStart(
-          'TC-05',
-          'Photo remove id=${CartQa.shortId(productId)}',
-        );
-        await cart.removeProduct(productId);
-        if (!mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Removed from cart')),
-        );
-        CartQa.caseEnd('TC-05', pass: true, detail: 'removed');
-        return;
-      }
-      CartQa.caseStart(
-        'TC-05',
-        'Photo add id=${CartQa.shortId(productId)}',
-      );
-      final result = await cart.addProductId(productId);
-      if (!mounted) return;
-      showCartAddSnack(
-        context,
-        result,
-        storeCountAfter: result.storeCount ?? cart.storeCount,
-      );
-      CartQa.caseEnd(
-        'TC-05',
-        pass: true,
-        detail: 'toast="${result.toastMessage}"',
-      );
-    } catch (e) {
-      if (!mounted) return;
-      CartQa.caseEnd('TC-05', pass: false, detail: '$e');
-      final msg = CatalogErrorMapper.toUserMessage(e).trim();
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            msg.isEmpty ? 'Could not update cart. Please try again.' : msg,
-          ),
-        ),
-      );
-    }
-  }
-
   void _popDetails() {
     // So Telegram close continues from the dragged frame (not a full-size flash).
     if (_dismissDy > 0) {
@@ -1096,6 +1169,7 @@ class _ProductDetailsRouteState extends State<ProductDetailsRoute> {
             final imagePaths = product.imagePaths;
             final feed = state.galleryFeed;
             final useFeed = state.hasGalleryFeed;
+            final askTarget = _askTargetFor(state);
             final pageCount =
                 useFeed
                     ? feed!.length
@@ -1164,6 +1238,10 @@ class _ProductDetailsRouteState extends State<ProductDetailsRoute> {
                                       ? feed![index].product.toneIndex
                                       : product.toneIndex;
 
+                              final askHere =
+                                  index == _pageIndex &&
+                                  _askTargetFor(state) != null &&
+                                  !_imageZoomed;
                               if (path == null ||
                                   path.isEmpty ||
                                   !ProductImagePaths.isDisplayable(path)) {
@@ -1173,6 +1251,10 @@ class _ProductDetailsRouteState extends State<ProductDetailsRoute> {
                                       () => setState(
                                         () => _showInfo = !_showInfo,
                                       ),
+                                  onLongPress:
+                                      askHere
+                                          ? () => _toggleAskPhoto(state)
+                                          : null,
                                   child: _ImagePlaceholder(tone: tone),
                                 );
                               }
@@ -1187,6 +1269,10 @@ class _ProductDetailsRouteState extends State<ProductDetailsRoute> {
                                     () => setState(
                                       () => _showInfo = !_showInfo,
                                     ),
+                                onLongPress:
+                                    askHere
+                                        ? () => _toggleAskPhoto(state)
+                                        : null,
                                 onZoomChanged: (zoomed) {
                                   if (!mounted) return;
                                   if (index != _pageIndex && zoomed) {
@@ -1311,24 +1397,6 @@ class _ProductDetailsRouteState extends State<ProductDetailsRoute> {
                                       },
                                     ),
                                     const SizedBox(width: 4),
-                                    _CartToggleIconButton(
-                                      productId: state.catalogProductIdForPhoto(
-                                        photoIndex,
-                                      ),
-                                      stock: state.product.stockStatusAt(
-                                        photoIndex,
-                                      ),
-                                      onToggle:
-                                          () => _toggleCartFromPhoto(
-                                            state,
-                                            photoIndex,
-                                          ),
-                                      onOpenCart:
-                                          () => Navigator.of(
-                                            context,
-                                          ).pushNamed(Routes.cartRoute),
-                                    ),
-                                    const SizedBox(width: 4),
                                   ],
                                   PopupMenuButton<_OverflowAction>(
                                     tooltip: 'More',
@@ -1363,6 +1431,25 @@ class _ProductDetailsRouteState extends State<ProductDetailsRoute> {
                                                   imagePath: path ?? '',
                                                 ),
                                               );
+                                        case _OverflowAction.shareLink:
+                                          final message =
+                                              MerchantProfileLink.productShareMessage(
+                                                storeLinkOrSlug: state.storeLink,
+                                                productId: state.product.id,
+                                              );
+                                          if (message.isEmpty) {
+                                            ScaffoldMessenger.of(
+                                              context,
+                                            ).showSnackBar(
+                                              const SnackBar(
+                                                content: Text(
+                                                  'Could not share this product link.',
+                                                ),
+                                              ),
+                                            );
+                                          } else {
+                                            unawaited(Share.share(message));
+                                          }
                                         case _OverflowAction.delete:
                                           if (!state.isDeleting) {
                                             _confirmDeletePhoto(state);
@@ -1436,6 +1523,23 @@ class _ProductDetailsRouteState extends State<ProductDetailsRoute> {
                                               const SizedBox(width: 12),
                                               Text(
                                                 'Share',
+                                                style: AppTextStyles.body(),
+                                              ),
+                                            ],
+                                          ),
+                                        ),
+                                        PopupMenuItem(
+                                          value: _OverflowAction.shareLink,
+                                          child: Row(
+                                            children: [
+                                              Icon(
+                                                Icons.link_rounded,
+                                                size: 20,
+                                                color: AppColors.textPrimary,
+                                              ),
+                                              const SizedBox(width: 12),
+                                              Text(
+                                                'Share link',
                                                 style: AppTextStyles.body(),
                                               ),
                                             ],
@@ -1590,6 +1694,37 @@ class _ProductDetailsRouteState extends State<ProductDetailsRoute> {
                     ),
                   ),
                 ),
+                if (_showAskHint &&
+                    askTarget != null &&
+                    _asks.isEmpty &&
+                    !_showInfo)
+                  Positioned(
+                    left: 24,
+                    right: 24,
+                    bottom: MediaQuery.viewPaddingOf(context).bottom + 18,
+                    child: const Center(child: _AskPhotoHint()),
+                  ),
+                if (_asks.isNotEmpty)
+                  Positioned(
+                    left: 24,
+                    right: 24,
+                    bottom: MediaQuery.viewPaddingOf(context).bottom + 16,
+                    child: Center(
+                      child: _AskAboutPill(
+                        count: _asks.length,
+                        onTap: () => _openAskBasket(state),
+                      ),
+                    ),
+                  ),
+                if (askTarget != null &&
+                    _asks.containsKey(askTarget.product.id))
+                  Positioned(
+                    top:
+                        ScreenWrapper.statusBarTop(context) +
+                        (_showInfo ? 72 : 12),
+                    right: 16,
+                    child: const IgnorePointer(child: _AskCheckBadge()),
+                  ),
               ],
             ),
                   ),
@@ -1599,6 +1734,102 @@ class _ProductDetailsRouteState extends State<ProductDetailsRoute> {
           },
         ),
         ),
+      ),
+    );
+  }
+}
+
+class _AskTarget {
+  const _AskTarget({
+    required this.storeId,
+    required this.storeName,
+    required this.product,
+  });
+
+  final String storeId;
+  final String storeName;
+  final ChatProductRef product;
+}
+
+class _AskPhotoHint extends StatelessWidget {
+  const _AskPhotoHint();
+
+  @override
+  Widget build(BuildContext context) {
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: AppColors.grey900.withValues(alpha: 0.88),
+        borderRadius: BorderRadius.circular(16),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+        child: Text(
+          'Long-press the photo to ask about it',
+          style: AppTextStyles.caption(
+            fontSize: 12,
+            fontWeight: FontWeight.w500,
+            color: Colors.white,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _AskAboutPill extends StatelessWidget {
+  const _AskAboutPill({required this.count, required this.onTap});
+
+  final int count;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: Colors.white,
+      borderRadius: BorderRadius.circular(16),
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(16),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 14),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                Icons.chat_bubble_outline_rounded,
+                size: 18,
+                color: AppColors.grey900,
+              ),
+              const SizedBox(width: 8),
+              Text(
+                'Ask about $count',
+                style: AppTextStyles.label(
+                  fontSize: 16,
+                  fontWeight: FontWeight.w600,
+                  color: AppColors.grey900,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _AskCheckBadge extends StatelessWidget {
+  const _AskCheckBadge();
+
+  @override
+  Widget build(BuildContext context) {
+    return DecoratedBox(
+      decoration: const BoxDecoration(
+        color: Color(0xFF16A34A),
+        shape: BoxShape.circle,
+      ),
+      child: const Padding(
+        padding: EdgeInsets.all(6),
+        child: Icon(Icons.check_rounded, color: Colors.white, size: 18),
       ),
     );
   }
@@ -1961,63 +2192,6 @@ class _WishlistIconButton extends StatelessWidget {
   }
 }
 
-/// Add / remove cart for the current photo (FE-local [CartStore]).
-class _CartToggleIconButton extends StatelessWidget {
-  const _CartToggleIconButton({
-    required this.productId,
-    required this.onToggle,
-    required this.onOpenCart,
-    this.stock,
-  });
-
-  final String productId;
-  final CatalogStockStatus? stock;
-  final VoidCallback onToggle;
-  final VoidCallback onOpenCart;
-
-  @override
-  Widget build(BuildContext context) {
-    final cart = ServiceLocator.get<CartStore>();
-    final out = stock == CatalogStockStatus.outOfStock;
-    return ListenableBuilder(
-      listenable: cart,
-      builder: (context, _) {
-        final inCart = productId.isNotEmpty && cart.contains(productId);
-        // Photo overlay: fixed white/black so Night textOnPrimary==textPrimary
-        // never washes out the in-cart check.
-        return Material(
-          color:
-              inCart
-                  ? Colors.white
-                  : Colors.black.withValues(alpha: 0.35),
-          shape: const CircleBorder(),
-          child: InkWell(
-            onTap: out ? null : onToggle,
-            onLongPress: onOpenCart,
-            customBorder: const CircleBorder(),
-            child: SizedBox(
-              width: 36,
-              height: 36,
-              child: Center(
-                child: Opacity(
-                  opacity: out ? 0.4 : 1,
-                  child: Icon(
-                    inCart
-                        ? Icons.check_rounded
-                        : Icons.shopping_cart_outlined,
-                    size: 18,
-                    color: inCart ? Colors.black : Colors.white,
-                  ),
-                ),
-              ),
-            ),
-          ),
-        );
-      },
-    );
-  }
-}
-
 String _formatCount(int value) {
   if (value < 1000) return '$value';
   if (value < 10000) {
@@ -2080,6 +2254,7 @@ enum _OverflowAction {
   edit,
   availability,
   share,
+  shareLink,
   delete,
   previewAll,
   previewDetails,

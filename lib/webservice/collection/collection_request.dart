@@ -377,36 +377,6 @@ class CollectionRequest {
     );
   }
 
-  /// `POST /stores/:storeId/products/delete-batch` — soft-delete up to 100
-  /// product / `img_*` ids in one request (CATALOG_MULTI_SELECT_DELETE_API).
-  /// Callers with more than 100 ids should chunk; this enforces the BE max.
-  Future<CatalogProductDeleteBatchResult> deleteProductsBatch({
-    required String storeId,
-    required List<String> productIds,
-  }) async {
-    final ids = <String>[
-      for (final raw in productIds)
-        if (raw.trim().isNotEmpty) raw.trim(),
-    ];
-    if (ids.isEmpty) {
-      return const CatalogProductDeleteBatchResult();
-    }
-    if (ids.length > 100) {
-      throw CatalogApiException(
-        statusCode: 400,
-        code: 'VALIDATION_ERROR',
-        message: 'At most 100 products can be deleted per batch.',
-      );
-    }
-    final json = await _api.sendJson(
-      method: HttpMethod.post,
-      path: Endpoints.storeProductsDeleteBatch(storeId),
-      body: <String, dynamic>{'productIds': ids},
-      requiresAuth: true,
-    );
-    return CatalogProductDeleteBatchResult.fromJson(json ?? const {});
-  }
-
   /// Phase 2 JSON commit after direct S3 uploads (no multipart file parts).
   Future<CollectionCreateResult> createCollectionFromUploads({
     required String storeId,

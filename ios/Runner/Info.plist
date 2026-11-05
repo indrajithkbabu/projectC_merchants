@@ -58,6 +58,21 @@
 	<string>Jewel Flow needs photo library access so you can choose product images for your store.</string>
 	<key>NSPhotoLibraryAddUsageDescription</key>
 	<string>Jewel Flow may save edited product photos to your library when you choose to.</string>
+	<key>FlutterDeepLinkingEnabled</key>
+	<false/>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleTypeRole</key>
+			<string>Editor</string>
+			<key>CFBundleURLName</key>
+			<string>in.catly.profile</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>catly</string>
+			</array>
+		</dict>
+	</array>
 	<key>LSApplicationQueriesSchemes</key>
 	<array>
 		<string>whatsapp</string>

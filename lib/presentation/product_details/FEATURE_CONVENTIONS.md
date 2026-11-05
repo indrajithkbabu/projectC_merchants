@@ -32,6 +32,12 @@ This file defines what to follow for UI and logic inside `lib/presentation/produ
   grids keep half-width). Channel/browse tap starts a full-width decode before
   push. API `quality: low` disables deep zoom. At 1× horizontal swipes change
   photos. Page swipe is disabled while zoomed so pan stays smooth.
+- Visitor only (not own store, not locked, real store id): while chrome is
+  hidden, a bottom hint says "Long-press the photo to ask about it".
+  Long-press toggles the current full-size photo into an ask set (green
+  check). Swipe and long-press to add more. **Ask about N** opens the enquiry
+  basket; send starts one discussion per photo and opens that store's chat.
+  Hidden on the owner's own store. Zoomed photos ignore the long-press.
 - Product **title** sits to the right of the back button when chrome is shown.
   System / `PopScope` back still works when chrome is hidden.
 - **Lock / stock / pending** (Preview details on): exceptional chrome — lock
@@ -44,7 +50,7 @@ This file defines what to follow for UI and logic inside `lib/presentation/produ
   auto publish pattern `{title} precise|standalone {n}` — those fall back to the
   collection name; Precise is still marked by the browse blue dot). No photo
   counter next to the title. Swiping updates the title.
-- Top actions (Edit / Share / Delete / Preview all / Preview details) open from
+- Top actions (Edit / Share / Share link / Delete / Preview all / Preview details) open from
   a **popup dropdown** on the three-dot button (not a bottom sheet). Edit and
   Delete only when `canEdit`. **Preview all** (multi-photo only) is a checkbox:
   when checked, a horizontal thumbnail strip appears under the bottom weight
@@ -59,6 +65,9 @@ This file defines what to follow for UI and logic inside `lib/presentation/produ
 - Share shares the **current photo file** (not a link) via the system share
   sheet so WhatsApp can send the image. Network photos are resolved through
   `CatalogImageCache` first.
+- **Share link** shares `https://catly.in/store/{slug}/p/{productId}` through the
+  same sheet. A tap opens this product details screen (`GET` store by slug,
+  then the existing product load for that id).
 - Bottom panel (when chrome is visible and **Preview details** is on): one
   **primary weight** line — `Fine` / `Net` / `Gross` title (white) + value in
   muted grey (e.g. `Net 78.35g`). Fine = net × (purity% + wastage%) / 100
@@ -91,11 +100,6 @@ This file defines what to follow for UI and logic inside `lib/presentation/produ
   refreshes chips without a snackbar. No snackbar on like/unlike; like stays
   interactive (no spinner) while the short API call runs (`isLikeBusy`
   still guards double-submit). Double-tap zoom is unchanged.
-- **Cart (visitors):** trolley icon beside heart calls
-  `POST /products/:id/cart` (alias → `POST /me/cart`) or
-  `DELETE /me/cart/:id`. Out-of-stock dims the control. In-cart state shows
-  a check; snack prefers server `toastMessage` + **View** → `cart_route`.
-  Long-press the icon also opens the cart. Own-store chrome has no cart.
 - **Photo views:** after ≥1s dwell on the current photo, enqueue
   `photo` (+ `collection` / `subgroup` when applicable) via `ViewBeacon`
   (`POST /views`). Chrome shows **photo `viewCount`** (eye chip) when the

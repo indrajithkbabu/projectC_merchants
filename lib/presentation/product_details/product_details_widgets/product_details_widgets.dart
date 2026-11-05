@@ -623,6 +623,7 @@ class ProductDetailsZoomablePhoto extends StatefulWidget {
     super.key,
     required this.path,
     required this.onTap,
+    this.onLongPress,
     required this.onZoomChanged,
     this.onMultiTouchChanged,
     this.isActive = true,
@@ -632,6 +633,7 @@ class ProductDetailsZoomablePhoto extends StatefulWidget {
 
   final String path;
   final VoidCallback onTap;
+  final VoidCallback? onLongPress;
   final ValueChanged<bool> onZoomChanged;
 
   /// Two fingers down — parent should lock [PageView] so pinch can start at 1×.
@@ -806,6 +808,7 @@ class _ProductDetailsZoomablePhotoState
         child: GestureDetector(
           behavior: HitTestBehavior.opaque,
           onTap: widget.onTap,
+          onLongPress: widget.onLongPress,
           onDoubleTap: widget.allowsDeepZoom ? _onDoubleTap : null,
           child: framed,
         ),

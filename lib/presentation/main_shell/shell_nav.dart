@@ -13,6 +13,7 @@ enum ShellNavTab {
   wishlist,
   cart,
   myStore,
+  chats,
 }
 
 /// Pane inside the Wishlist shell hub (Wishlist | Cart pills).
