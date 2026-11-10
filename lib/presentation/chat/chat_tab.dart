@@ -305,23 +305,26 @@ class _Filters extends StatelessWidget {
   Widget build(BuildContext context) {
     const labels = ['All', 'Unread', 'Stores', 'Groups'];
     return Row(
+      mainAxisAlignment: MainAxisAlignment.center,
       children: [
         for (var i = 0; i < labels.length; i++) ...[
-          if (i > 0) const SizedBox(width: 6),
+          if (i > 0) const SizedBox(width: 8),
           ChoiceChip(
             label: Text(labels[i]),
             selected: index == i,
+            showCheckmark: false,
             onSelected: (_) => onChanged(i),
             visualDensity: VisualDensity.compact,
-            labelStyle: AppTextStyles.caption(
-              fontSize: 12,
-              fontWeight: FontWeight.w700,
-              color: AppColors.textPrimary,
+            labelStyle: AppTextStyles.label(
+              fontSize: 13,
+              fontWeight: FontWeight.w600,
+              color: index == i ? AppColors.primary : AppColors.textPrimary,
             ),
-            selectedColor: AppColors.surfaceSecondary,
-            backgroundColor: AppColors.surface,
-            side: BorderSide(
-              color: index == i ? AppColors.textPrimary : AppColors.border,
+            // selectedColor: AppColors.navBarActivePill,
+            backgroundColor: AppColors.surfaceSecondary,
+            side: BorderSide.none,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(20),
             ),
           ),
         ],
