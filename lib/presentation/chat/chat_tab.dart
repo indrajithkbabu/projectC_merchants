@@ -49,7 +49,8 @@ class ChatTab extends StatelessWidget {
   }
 
   static ChatProductRef _catalogItem(StoreProduct product, int index) {
-    final detail = product.meta.trim().isEmpty ? 'Product' : product.meta.trim();
+    final detail =
+        product.meta.trim().isEmpty ? 'Product' : product.meta.trim();
     return ChatMockStore.productFromTitle(
       id: product.id,
       title: product.title,
@@ -118,33 +119,83 @@ class _MessageBodyState extends State<_MessageBody> {
                         icon: Icon(
                           Icons.add_rounded,
                           color: AppColors.textPrimary,
+                          size: 24,
                         ),
                       ),
                     ),
-                    const SizedBox(height: 8),
-                    TextField(
-                      controller: _search,
-                      onChanged: (value) => setState(() => _query = value),
-                      style: AppTextStyles.body(fontSize: 15),
-                      decoration: InputDecoration(
-                        hintText: 'Search',
-                        hintStyle: AppTextStyles.hint(
-                          fontSize: 15,
-                          fontWeight: FontWeight.w400,
-                        ),
-                        prefixIcon: Icon(
-                          Icons.search_rounded,
-                          color: AppColors.textSecondary,
-                        ),
-                        isDense: true,
-                        filled: true,
-                        fillColor: AppColors.surface,
-                        border: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(12),
-                          borderSide: BorderSide.none,
+                    const SizedBox(height: 12),
+
+                    Material(
+                      color: Colors.transparent,
+                      child: TextField(
+                        controller: _search,
+                        //  readOnly: true,
+                        showCursor: true,
+                        onChanged: (value) => setState(() => _query = value),
+                        // onTap: () {
+                        //   // _dismissKeyboard();
+                        //   Navigator.of(
+                        //     context,
+                        //   ).pushNamed(Routes.globalSearchRoute);
+                        // },
+                        style: AppTextStyles.body(fontSize: 15),
+                        decoration: InputDecoration(
+                          hintText: 'Search',
+                          hintStyle: AppTextStyles.hint(
+                            fontSize: 15,
+                            fontWeight: FontWeight.w400,
+                          ),
+                          prefixIcon: Icon(
+                            Icons.search_rounded,
+                            color: AppColors.textSecondary,
+                          ),
+                          filled: true,
+                          fillColor: AppColors.surfaceSecondary,
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(32),
+                            borderSide: BorderSide.none,
+                          ),
+                          enabledBorder: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(32),
+                            borderSide: BorderSide.none,
+                          ),
+                          focusedBorder: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(32),
+                            borderSide: BorderSide(
+                              color: AppColors.primary,
+                              width: 1.2,
+                            ),
+                          ),
+                          contentPadding: const EdgeInsets.symmetric(
+                            horizontal: 12,
+                            vertical: 12,
+                          ),
                         ),
                       ),
                     ),
+                    // TextField(
+                    //   controller: _search,
+                    //   onChanged: (value) => setState(() => _query = value),
+                    //   style: AppTextStyles.body(fontSize: 15),
+                    //   decoration: InputDecoration(
+                    //     hintText: 'Search',
+                    //     hintStyle: AppTextStyles.hint(
+                    //       fontSize: 15,
+                    //       fontWeight: FontWeight.w400,
+                    //     ),
+                    //     prefixIcon: Icon(
+                    //       Icons.search_rounded,
+                    //       color: AppColors.textSecondary,
+                    //     ),
+                    //     isDense: true,
+                    //     filled: true,
+                    //     fillColor: AppColors.surface,
+                    //     border: OutlineInputBorder(
+                    //       borderRadius: BorderRadius.circular(12),
+                    //       borderSide: BorderSide.none,
+                    //     ),
+                    //   ),
+                    // ),
                     const SizedBox(height: 8),
                     _Filters(
                       index: _filter,
@@ -208,8 +259,7 @@ class _MessageBodyState extends State<_MessageBody> {
           if (thread.kind != ChatKind.group) return false;
       }
       if (query.isEmpty) return true;
-      final preview =
-          ChatMockStore.instance.inboxPreview(thread).toLowerCase();
+      final preview = ChatMockStore.instance.inboxPreview(thread).toLowerCase();
       return thread.customer.name.toLowerCase().contains(query) ||
           preview.contains(query);
     }).toList();
@@ -255,23 +305,26 @@ class _Filters extends StatelessWidget {
   Widget build(BuildContext context) {
     const labels = ['All', 'Unread', 'Stores', 'Groups'];
     return Row(
+      mainAxisAlignment: MainAxisAlignment.center,
       children: [
         for (var i = 0; i < labels.length; i++) ...[
-          if (i > 0) const SizedBox(width: 6),
+          if (i > 0) const SizedBox(width: 8),
           ChoiceChip(
             label: Text(labels[i]),
             selected: index == i,
+            showCheckmark: false,
             onSelected: (_) => onChanged(i),
             visualDensity: VisualDensity.compact,
-            labelStyle: AppTextStyles.caption(
-              fontSize: 12,
-              fontWeight: FontWeight.w700,
-              color: AppColors.textPrimary,
+            labelStyle: AppTextStyles.label(
+              fontSize: 13,
+              fontWeight: FontWeight.w600,
+              color: index == i ? AppColors.primary : AppColors.textPrimary,
             ),
-            selectedColor: AppColors.surfaceSecondary,
-            backgroundColor: AppColors.surface,
-            side: BorderSide(
-              color: index == i ? AppColors.textPrimary : AppColors.border,
+            // selectedColor: AppColors.navBarActivePill,
+            backgroundColor: AppColors.surfaceSecondary,
+            side: BorderSide.none,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(20),
             ),
           ),
         ],

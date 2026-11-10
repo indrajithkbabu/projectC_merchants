@@ -79,12 +79,27 @@ class _ProductDetailsRouteState extends State<ProductDetailsRoute> {
   bool _pageSwipePreferred = false;
   double _dismissVelocityY = 0;
 
-  /// Visitor composer for the photo on screen. Tap opens it; send starts
-  /// that store's chat. Hidden on the owner's own store.
+  /// Visitor reply chrome for the photo on screen. The first tap shows the
+  /// Reply bar only. Send starts that store's chat. Hidden on the owner's
+  /// own store.
   bool _askComposerOpen = false;
+
+  /// True after Reply is tapped: the You / Photo composer replaces the bar.
+  bool _askReplyExpanded = false;
 
   /// Weight chrome stays hidden while this is true (keyboard is up).
   bool _askShowKeyboard = false;
+
+  /// Guards focus changes while collapsing You / Photo back to the Reply bar.
+  bool _collapsingAskReply = false;
+
+  /// True for the rest of the frame that collapsed You / Photo, so the same
+  /// tap does not also dismiss the Reply bar.
+  bool _askJustCollapsed = false;
+
+  /// Last keyboard inset. Android back hides the keyboard without dropping
+  /// focus, so the You / Photo bar would otherwise stay on screen.
+  double _askKeyboardInset = 0;
   final TextEditingController _askController = TextEditingController();
   final FocusNode _askFocus = FocusNode();
 
@@ -122,6 +137,20 @@ class _ProductDetailsRouteState extends State<ProductDetailsRoute> {
     }
     _warmMedia(blocState);
     _restartViewDwell(blocState);
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final keyboard = MediaQuery.viewInsetsOf(context).bottom;
+    final keyboardClosed = _askKeyboardInset > 0 && keyboard == 0;
+    _askKeyboardInset = keyboard;
+    if (!keyboardClosed || !_askReplyExpanded || _collapsingAskReply) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !_askReplyExpanded) return;
+      if (MediaQuery.viewInsetsOf(context).bottom > 0) return;
+      _collapseAskReply();
+    });
   }
 
   void _warmMedia(ProductDetailsState state) {
@@ -294,6 +323,7 @@ class _ProductDetailsRouteState extends State<ProductDetailsRoute> {
         final current = context.read<ProductDetailsBloc>().state;
         if (_askComposerOpen && _askTargetFor(current) == null) {
           _askComposerOpen = false;
+          _askReplyExpanded = false;
           _askShowKeyboard = false;
         }
       });
@@ -382,36 +412,73 @@ class _ProductDetailsRouteState extends State<ProductDetailsRoute> {
   }
 
   void _onAskFocusChanged() {
-    if (!mounted || !_askComposerOpen) return;
+    if (!mounted || !_askComposerOpen || _collapsingAskReply) return;
+    // System back closes the keyboard without a route pop. Leave the
+    // You / Photo composer and return to the Reply bar.
+    if (!_askFocus.hasFocus && _askReplyExpanded && _askShowKeyboard) {
+      _collapseAskReply();
+      return;
+    }
     if (_askFocus.hasFocus == _askShowKeyboard) return;
     setState(() => _askShowKeyboard = _askFocus.hasFocus);
   }
 
+  /// Reply bar only. The keyboard stays down until Reply is tapped.
   void _openAskComposer() {
+    _askFocus.unfocus();
     setState(() {
       _askComposerOpen = true;
-      _askShowKeyboard = true;
+      _askReplyExpanded = false;
+      _askShowKeyboard = false;
       _showInfo = true;
     });
+  }
+
+  /// You / Photo composer. Focus runs after the field is in the tree.
+  void _expandAskReply() {
+    setState(() {
+      _askReplyExpanded = true;
+      _askShowKeyboard = true;
+    });
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted || !_askComposerOpen) return;
+      if (!mounted || !_askComposerOpen || !_askReplyExpanded) return;
       _askFocus.requestFocus();
+    });
+  }
+
+  /// Drop You / Photo and the keyboard. The Reply bar stays.
+  void _collapseAskReply() {
+    if (_collapsingAskReply) return;
+    _collapsingAskReply = true;
+    _askFocus.unfocus();
+    _collapsingAskReply = false;
+    if (!mounted) return;
+    _askJustCollapsed = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _askJustCollapsed = false;
+    });
+    if (!_askReplyExpanded && !_askShowKeyboard) return;
+    setState(() {
+      _askReplyExpanded = false;
+      _askShowKeyboard = false;
     });
   }
 
   void _closeAskComposer() {
     _askFocus.unfocus();
-    if (!_askComposerOpen && !_askShowKeyboard) return;
+    if (!_askComposerOpen && !_askReplyExpanded && !_askShowKeyboard) return;
     setState(() {
       _askComposerOpen = false;
+      _askReplyExpanded = false;
       _askShowKeyboard = false;
       _showInfo = false;
     });
   }
 
-  /// Visitors who can ask: tap opens the composer. A second tap drops the
-  /// keyboard so weight details can show; a third tap closes it.
-  /// Own-store and zoomed photos keep the chrome toggle.
+  /// Visitors who can ask: the first tap shows the Reply bar (no keyboard).
+  /// Reply opens the You / Photo composer and the keyboard. A photo tap
+  /// while that composer is open returns to the Reply bar. Another tap
+  /// closes it. Own-store and zoomed photos keep the chrome toggle.
   void _onPhotoTap(ProductDetailsState state) {
     if (_imageZoomed) {
       setState(() => _showInfo = !_showInfo);
@@ -419,11 +486,8 @@ class _ProductDetailsRouteState extends State<ProductDetailsRoute> {
     }
     final canAsk = _askTargetFor(state) != null;
     if (_askComposerOpen) {
-      if (_askShowKeyboard || _askFocus.hasFocus) {
-        _askFocus.unfocus();
-        if (_askShowKeyboard) {
-          setState(() => _askShowKeyboard = false);
-        }
+      if (_askReplyExpanded || _askJustCollapsed) {
+        if (_askReplyExpanded) _collapseAskReply();
         return;
       }
       _closeAskComposer();
@@ -446,6 +510,7 @@ class _ProductDetailsRouteState extends State<ProductDetailsRoute> {
       _imageZoomed = zoomed;
       if (zoomed) {
         _askComposerOpen = false;
+        _askReplyExpanded = false;
         _askShowKeyboard = false;
       }
     });
@@ -466,6 +531,7 @@ class _ProductDetailsRouteState extends State<ProductDetailsRoute> {
     _askFocus.unfocus();
     setState(() {
       _askComposerOpen = false;
+      _askReplyExpanded = false;
       _askShowKeyboard = false;
       _showInfo = false;
     });
@@ -560,6 +626,7 @@ class _ProductDetailsRouteState extends State<ProductDetailsRoute> {
       _multiTouchLockingPage = false;
       if (_askComposerOpen && _askTargetFor(state) == null) {
         _askComposerOpen = false;
+        _askReplyExpanded = false;
         _askShowKeyboard = false;
       }
     });
@@ -918,10 +985,7 @@ class _ProductDetailsRouteState extends State<ProductDetailsRoute> {
         fallbackIndex: photoIndexBefore,
       );
 
-      _popResult = <String, Object?>{
-        'updated': true,
-        ...product.toMap(),
-      };
+      _popResult = <String, Object?>{'updated': true, ...product.toMap()};
       // PageView indexes the gallery feed when present — resolve stay page
       // from the pre-apply feed (bloc state is not updated synchronously).
       final latest = context.read<ProductDetailsBloc>().state;
@@ -1338,6 +1402,10 @@ class _ProductDetailsRouteState extends State<ProductDetailsRoute> {
           canPop: false,
           onPopInvokedWithResult: (didPop, result) {
             if (didPop) return;
+            if (_askReplyExpanded || _askJustCollapsed) {
+              if (_askReplyExpanded) _collapseAskReply();
+              return;
+            }
             if (_askComposerOpen) {
               _closeAskComposer();
               return;
@@ -1429,6 +1497,34 @@ class _ProductDetailsRouteState extends State<ProductDetailsRoute> {
               final keyboard = MediaQuery.viewInsetsOf(context).bottom;
               final safeBottom = MediaQuery.viewPaddingOf(context).bottom;
               final askPhotoPath = _currentImagePath(state);
+              final quickReply =
+                  _askComposerOpen && !_askReplyExpanded && askTarget != null;
+
+              Widget likeButton({bool plain = false}) {
+                return _LikeIconButton(
+                  liked: state.isPhotoLiked(photoIndex),
+                  likeCount: state.likeCountForPhoto(photoIndex),
+                  plain: plain,
+                  onTap: () {
+                    context.read<ProductDetailsBloc>().add(
+                      ProductDetailsLikePressed(imageIndex: photoIndex),
+                    );
+                  },
+                );
+              }
+
+              Widget wishlistButton({bool plain = false}) {
+                return _WishlistIconButton(
+                  wishlisted: state.isPhotoWishlisted(photoIndex),
+                  busy: state.isWishlistBusy,
+                  plain: plain,
+                  onTap: () {
+                    context.read<ProductDetailsBloc>().add(
+                      ProductDetailsWishlistPressed(imageIndex: photoIndex),
+                    );
+                  },
+                );
+              }
 
               Widget detailsPanel({required double bottom}) {
                 return DecoratedBox(
@@ -1638,45 +1734,10 @@ class _ProductDetailsRouteState extends State<ProductDetailsRoute> {
                                                 photoIndex,
                                               ),
                                             ),
-                                            _LikeIconButton(
-                                              liked: state.isPhotoLiked(
-                                                photoIndex,
-                                              ),
-                                              likeCount: state
-                                                  .likeCountForPhoto(
-                                                    photoIndex,
-                                                  ),
-                                              onTap: () {
-                                                context
-                                                    .read<ProductDetailsBloc>()
-                                                    .add(
-                                                      ProductDetailsLikePressed(
-                                                        imageIndex: photoIndex,
-                                                      ),
-                                                    );
-                                              },
-                                            ),
+                                            likeButton(),
                                             const SizedBox(width: 4),
                                             if (!state.isOwnStore) ...[
-                                              _WishlistIconButton(
-                                                wishlisted: state
-                                                    .isPhotoWishlisted(
-                                                      photoIndex,
-                                                    ),
-                                                busy: state.isWishlistBusy,
-                                                onTap: () {
-                                                  context
-                                                      .read<
-                                                        ProductDetailsBloc
-                                                      >()
-                                                      .add(
-                                                        ProductDetailsWishlistPressed(
-                                                          imageIndex:
-                                                              photoIndex,
-                                                        ),
-                                                      );
-                                                },
-                                              ),
+                                              wishlistButton(),
                                               const SizedBox(width: 4),
                                             ],
                                             PopupMenuButton<_OverflowAction>(
@@ -2010,12 +2071,27 @@ class _ProductDetailsRouteState extends State<ProductDetailsRoute> {
                                     padding: const EdgeInsets.symmetric(
                                       horizontal: 8,
                                     ),
-                                    child: _AskPhotoComposer(
-                                      controller: _askController,
-                                      focusNode: _askFocus,
-                                      imagePath: askPhotoPath,
-                                      onSend: () => _sendAsk(state),
-                                    ),
+                                    child:
+                                        quickReply
+                                            ? _AskQuickReplyBar(
+                                              onReply: _expandAskReply,
+                                              trailing: Row(
+                                                mainAxisSize: MainAxisSize.min,
+                                                children: [
+                                                  likeButton(plain: true),
+                                                  if (!state.isOwnStore) ...[
+                                                    const SizedBox(width: 2),
+                                                    wishlistButton(plain: true),
+                                                  ],
+                                                ],
+                                              ),
+                                            )
+                                            : _AskPhotoComposer(
+                                              controller: _askController,
+                                              focusNode: _askFocus,
+                                              imagePath: askPhotoPath,
+                                              onSend: () => _sendAsk(state),
+                                            ),
                                   ),
                                 ],
                               ),
@@ -2046,7 +2122,50 @@ class _AskTarget {
   final ChatProductRef product;
 }
 
-/// WhatsApp-style reply bar for the photo on screen. No suggestion chips.
+/// First-tap bar: "Reply" on the left, like and wishlist on the right.
+/// Tapping Reply opens [_AskPhotoComposer] and the keyboard.
+class _AskQuickReplyBar extends StatelessWidget {
+  const _AskQuickReplyBar({required this.onReply, required this.trailing});
+
+  final VoidCallback onReply;
+  final Widget trailing;
+
+  static const _bar = Color(0xFF1F2C34);
+  static const _hint = Color(0xFF8696A0);
+
+  @override
+  Widget build(BuildContext context) {
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: _bar,
+        borderRadius: BorderRadius.circular(32),
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTap: onReply,
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(16, 14, 8, 14),
+                child: Text(
+                  'Reply',
+                  style: AppTextStyles.body(fontSize: 16, color: _hint),
+                ),
+              ),
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(0, 4, 6, 4),
+            child: trailing,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// You / Photo composer shown after Reply is tapped. No suggestion chips.
 class _AskPhotoComposer extends StatefulWidget {
   const _AskPhotoComposer({
     required this.controller,
@@ -2100,168 +2219,162 @@ class _AskPhotoComposerState extends State<_AskPhotoComposer> {
     final canSend = widget.controller.text.trim().isNotEmpty;
     final path = widget.imagePath?.trim() ?? '';
     final showPhoto = path.isNotEmpty && ProductImagePaths.isDisplayable(path);
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.end,
-      children: [
-        Expanded(
-          child: DecoratedBox(
-            decoration: BoxDecoration(
-              color: _bar,
-              borderRadius: BorderRadius.circular(8),
-            ),
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(8, 8, 6, 4),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  DecoratedBox(
-                    decoration: const BoxDecoration(
-                      border: Border(
-                        left: BorderSide(color: _accent, width: 3),
-                      ),
-                    ),
-                    child: Padding(
-                      padding: const EdgeInsets.only(left: 8),
-                      child: Row(
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: _bar,
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(8, 8, 6, 6),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            DecoratedBox(
+              decoration: const BoxDecoration(
+                border: Border(left: BorderSide(color: _accent, width: 3)),
+              ),
+              child: Padding(
+                padding: const EdgeInsets.only(left: 8),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  'You',
-                                  style: AppTextStyles.label(
-                                    fontSize: 14,
-                                    fontWeight: FontWeight.w700,
-                                    color: _accent,
-                                  ),
-                                ),
-                                const SizedBox(height: 2),
-                                Row(
-                                  children: [
-                                    const Icon(
-                                      Icons.photo_outlined,
-                                      size: 15,
-                                      color: _icon,
-                                    ),
-                                    const SizedBox(width: 4),
-                                    Text(
-                                      'Photo',
-                                      style: AppTextStyles.body(
-                                        fontSize: 14,
-                                        color: _icon,
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ],
+                          Text(
+                            'You',
+                            style: AppTextStyles.label(
+                              fontSize: 14,
+                              fontWeight: FontWeight.w700,
+                              color: _accent,
                             ),
                           ),
-                          const SizedBox(width: 8),
-                          ClipRRect(
-                            borderRadius: BorderRadius.circular(4),
-                            child: SizedBox(
-                              width: 46,
-                              height: 46,
-                              child:
-                                  showPhoto
-                                      ? ProductMediaImage(
-                                        path: path,
-                                        fit: BoxFit.cover,
-                                        width: 46,
-                                        height: 46,
-                                      )
-                                      : const ColoredBox(
-                                        color: Color(0xFF111B21),
-                                        child: Icon(
-                                          Icons.photo_outlined,
-                                          color: _icon,
-                                          size: 18,
-                                        ),
-                                      ),
-                            ),
+                          const SizedBox(height: 2),
+                          Row(
+                            children: [
+                              const Icon(
+                                Icons.photo_outlined,
+                                size: 15,
+                                color: _icon,
+                              ),
+                              const SizedBox(width: 4),
+                              Text(
+                                'Photo',
+                                style: AppTextStyles.body(
+                                  fontSize: 14,
+                                  color: _icon,
+                                ),
+                              ),
+                            ],
                           ),
                         ],
                       ),
                     ),
+                    const SizedBox(width: 8),
+                    ClipRRect(
+                      borderRadius: BorderRadius.circular(4),
+                      child: SizedBox(
+                        width: 46,
+                        height: 46,
+                        child:
+                            showPhoto
+                                ? ProductMediaImage(
+                                  path: path,
+                                  fit: BoxFit.cover,
+                                  width: 46,
+                                  height: 46,
+                                )
+                                : const ColoredBox(
+                                  color: Color(0xFF111B21),
+                                  child: Icon(
+                                    Icons.photo_outlined,
+                                    color: _icon,
+                                    size: 18,
+                                  ),
+                                ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(height: 2),
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                // Smiley — hidden for now.
+                // const Padding(
+                //   padding: EdgeInsets.fromLTRB(2, 0, 2, 8),
+                //   child: Icon(
+                //     Icons.emoji_emotions_outlined,
+                //     color: _icon,
+                //     size: 24,
+                //   ),
+                // ),
+                Expanded(
+                  child: TextField(
+                    controller: widget.controller,
+                    focusNode: widget.focusNode,
+                    minLines: 1,
+                    maxLines: 4,
+                    cursorColor: _accent,
+                    textCapitalization: TextCapitalization.sentences,
+                    style: AppTextStyles.body(fontSize: 16, color: _text),
+                    decoration: const InputDecoration(
+                      isCollapsed: true,
+                      border: InputBorder.none,
+                      contentPadding: EdgeInsets.symmetric(
+                        horizontal: 4,
+                        vertical: 8,
+                      ),
+                    ),
                   ),
-                  const SizedBox(height: 2),
-                  Row(
-                    crossAxisAlignment: CrossAxisAlignment.end,
-                    children: [
-                      // Smiley — hidden for now.
-                      // const Padding(
-                      //   padding: EdgeInsets.fromLTRB(2, 0, 2, 8),
-                      //   child: Icon(
-                      //     Icons.emoji_emotions_outlined,
-                      //     color: _icon,
-                      //     size: 24,
-                      //   ),
-                      // ),
-                      Expanded(
-                        child: TextField(
-                          controller: widget.controller,
-                          focusNode: widget.focusNode,
-                          minLines: 1,
-                          maxLines: 4,
-                          cursorColor: _accent,
-                          textCapitalization: TextCapitalization.sentences,
-                          style: AppTextStyles.body(fontSize: 16, color: _text),
-                          decoration: const InputDecoration(
-                            isCollapsed: true,
-                            border: InputBorder.none,
-                            contentPadding: EdgeInsets.symmetric(
-                              horizontal: 4,
-                              vertical: 8,
-                            ),
-                          ),
+                ),
+                // Attachment — hidden for now.
+                // const Padding(
+                //   padding: EdgeInsets.fromLTRB(2, 0, 2, 8),
+                //   child: Icon(
+                //     Icons.attach_file,
+                //     color: _icon,
+                //     size: 22,
+                //   ),
+                // ),
+                // Camera — hidden for now.
+                // const Padding(
+                //   padding: EdgeInsets.fromLTRB(2, 0, 2, 8),
+                //   child: Icon(
+                //     Icons.photo_camera_outlined,
+                //     color: _icon,
+                //     size: 22,
+                //   ),
+                // ),
+                const SizedBox(width: 4),
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 2),
+                  child: Material(
+                    color: canSend ? _button : _button.withValues(alpha: 0.45),
+                    shape: const CircleBorder(),
+                    clipBehavior: Clip.antiAlias,
+                    child: InkWell(
+                      customBorder: const CircleBorder(),
+                      onTap: canSend ? widget.onSend : null,
+                      child: const SizedBox(
+                        width: 36,
+                        height: 36,
+                        child: Icon(
+                          Icons.send_rounded,
+                          color: Colors.white,
+                          size: 18,
                         ),
                       ),
-                      // Attachment — hidden for now.
-                      // const Padding(
-                      //   padding: EdgeInsets.fromLTRB(2, 0, 2, 8),
-                      //   child: Icon(
-                      //     Icons.attach_file,
-                      //     color: _icon,
-                      //     size: 22,
-                      //   ),
-                      // ),
-                      // Camera — hidden for now.
-                      // const Padding(
-                      //   padding: EdgeInsets.fromLTRB(2, 0, 2, 8),
-                      //   child: Icon(
-                      //     Icons.photo_camera_outlined,
-                      //     color: _icon,
-                      //     size: 22,
-                      //   ),
-                      // ),
-                    ],
+                    ),
                   ),
-                ],
-              ),
+                ),
+              ],
             ),
-          ),
+          ],
         ),
-        const SizedBox(width: 6),
-        Material(
-          color: canSend ? _button : _button.withValues(alpha: 0.45),
-          shape: const CircleBorder(),
-          clipBehavior: Clip.antiAlias,
-          child: InkWell(
-            customBorder: const CircleBorder(),
-            onTap: canSend ? widget.onSend : null,
-            child: const SizedBox(
-              width: 48,
-              height: 48,
-              child: Icon(
-                Icons.send_rounded,
-                color: Colors.white,
-                size: 20,
-              ),
-            ),
-          ),
-        ),
-      ],
+      ),
     );
   }
 }
@@ -2513,11 +2626,15 @@ class _LikeIconButton extends StatelessWidget {
     required this.liked,
     required this.onTap,
     this.likeCount,
+    this.plain = false,
   });
 
   final bool liked;
   final int? likeCount;
   final VoidCallback onTap;
+
+  /// No dark chip — sits inside the reply bar like a reaction.
+  final bool plain;
 
   @override
   Widget build(BuildContext context) {
@@ -2527,7 +2644,7 @@ class _LikeIconButton extends StatelessWidget {
       children: [
         Icon(
           liked ? Icons.thumb_up_rounded : Icons.thumb_up_outlined,
-          size: 18,
+          size: plain ? 22 : 18,
           color: liked ? AppColors.accent : AppColors.textOnPrimary,
         ),
         if (showCount) ...[
@@ -2544,9 +2661,12 @@ class _LikeIconButton extends StatelessWidget {
       ],
     );
 
+    final chip =
+        plain ? Colors.transparent : Colors.black.withValues(alpha: 0.35);
+
     if (!showCount) {
       return Material(
-        color: Colors.black.withValues(alpha: 0.35),
+        color: chip,
         shape: const CircleBorder(),
         child: InkWell(
           onTap: onTap,
@@ -2557,14 +2677,14 @@ class _LikeIconButton extends StatelessWidget {
     }
 
     return Material(
-      color: Colors.black.withValues(alpha: 0.35),
+      color: chip,
       borderRadius: BorderRadius.circular(18),
       child: InkWell(
         onTap: onTap,
         borderRadius: BorderRadius.circular(18),
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
-          child: SizedBox(height: 20, child: child),
+          child: SizedBox(height: plain ? 24 : 20, child: child),
         ),
       ),
     );
@@ -2577,16 +2697,20 @@ class _WishlistIconButton extends StatelessWidget {
     required this.wishlisted,
     required this.onTap,
     this.busy = false,
+    this.plain = false,
   });
 
   final bool wishlisted;
   final bool busy;
   final VoidCallback onTap;
 
+  /// No dark chip — sits inside the reply bar like a reaction.
+  final bool plain;
+
   @override
   Widget build(BuildContext context) {
     return Material(
-      color: Colors.black.withValues(alpha: 0.35),
+      color: plain ? Colors.transparent : Colors.black.withValues(alpha: 0.35),
       shape: const CircleBorder(),
       child: InkWell(
         onTap: busy ? null : onTap,
@@ -2609,7 +2733,7 @@ class _WishlistIconButton extends StatelessWidget {
                       wishlisted
                           ? Icons.favorite_rounded
                           : Icons.favorite_border_rounded,
-                      size: 18,
+                      size: plain ? 22 : 18,
                       color:
                           wishlisted
                               ? AppColors.error

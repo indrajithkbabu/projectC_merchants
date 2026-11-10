@@ -116,6 +116,7 @@ flutter:
   assets:
     - assets/icons/app_logo.png
     - assets/sounds/ui_pop.mp3
+    - assets/images/chat_bg.png
 
   # An image asset can refer to one or more resolution-specific "variants", see
   # https://flutter.dev/to/resolution-aware-images

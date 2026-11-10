@@ -432,6 +432,7 @@ class ChatMockStore extends ChangeNotifier {
             at: now,
             text: body,
             mine: true,
+            receipt: ChatReceipt.sent,
             discussionId: discussionId,
           ),
         );
@@ -626,10 +627,7 @@ class ChatMockStore extends ChangeNotifier {
     return id;
   }
 
-  String createGroup({
-    required String name,
-    required List<ChatActor> picked,
-  }) {
+  String createGroup({required String name, required List<ChatActor> picked}) {
     final members = <ChatMember>[
       ChatMember(id: 'self', name: staffName, storeName: storeName),
     ];
@@ -876,7 +874,11 @@ class ChatMockStore extends ChangeNotifier {
         members: const [
           ChatMember(id: 'self', name: 'Suresh', storeName: 'My store'),
           ChatMember(id: 'staff-priya', name: 'Priya', storeName: 'My store'),
-          ChatMember(id: 'staff-karthik', name: 'Karthik', storeName: 'My store'),
+          ChatMember(
+            id: 'staff-karthik',
+            name: 'Karthik',
+            storeName: 'My store',
+          ),
           ChatMember(id: 'cust-ajith', name: 'Ajith', phone: '9840099001'),
         ],
         discussions: [

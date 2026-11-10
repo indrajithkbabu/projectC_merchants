@@ -98,33 +98,52 @@ class _ChatThreadRouteState extends State<ChatThreadRoute> {
                         : () => _openPinned(thread, discussion!.product!),
               ),
               Expanded(
-                child: ChatTimeline(
-                  scrollController: _scroll,
-                  thread: thread,
-                  onReply: (message) => _reply(thread, message, team: false),
-                  onMessageMenu: (message) => _menu(thread, message),
-                  onOpenProduct: (product) => _openPinned(thread, product),
+                child: Stack(
+                  fit: StackFit.expand,
+                  children: [
+                    Image.asset(
+                      'assets/images/chat_bg.png',
+                      fit: BoxFit.cover,
+                      alignment: Alignment.center,
+                    ),
+                    Column(
+                      children: [
+                        Expanded(
+                          child: ChatTimeline(
+                            scrollController: _scroll,
+                            thread: thread,
+                            onReply:
+                                (message) =>
+                                    _reply(thread, message, team: false),
+                            onMessageMenu: (message) => _menu(thread, message),
+                            onOpenProduct:
+                                (product) => _openPinned(thread, product),
+                          ),
+                        ),
+                        if (closed)
+                          _ClosedBar(
+                            onReopen: () {
+                              HapticFeedback.selectionClick();
+                              ChatMockStore.instance.reopenChat(thread.id);
+                            },
+                          )
+                        else
+                          _Composer(
+                            controller: _composer,
+                            focusNode: _focus,
+                            quote: _quote,
+                            teamNote: _teamNote,
+                            storeName: ChatMockStore.instance.storeName,
+                            onClearQuote: () => setState(() => _quote = null),
+                            onToggleTeam:
+                                () => setState(() => _teamNote = !_teamNote),
+                            onSend: () => _send(thread),
+                          ),
+                      ],
+                    ),
+                  ],
                 ),
               ),
-              if (closed)
-                _ClosedBar(
-                  onReopen: () {
-                    HapticFeedback.selectionClick();
-                    ChatMockStore.instance.reopenChat(thread.id);
-                  },
-                )
-              else
-                _Composer(
-                  controller: _composer,
-                  focusNode: _focus,
-                  quote: _quote,
-                  teamNote: _teamNote,
-                  storeName: ChatMockStore.instance.storeName,
-                  onClearQuote: () => setState(() => _quote = null),
-                  onToggleTeam: () => setState(() => _teamNote = !_teamNote),
-                  onShare: () => _share(thread),
-                  onSend: () => _send(thread),
-                ),
             ],
           );
         },
@@ -269,16 +288,6 @@ class _ChatThreadRouteState extends State<ChatThreadRoute> {
     _composer.clear();
     setState(() => _quote = null);
   }
-
-  Future<void> _share(ChatThread thread) async {
-    final product = await showShareProductSheet(context);
-    if (product == null || !mounted) return;
-    ChatMockStore.instance.sendProduct(
-      thread.id,
-      product,
-      discussionId: _targetDiscussion(thread),
-    );
-  }
 }
 
 class _ThreadHeader extends StatelessWidget {
@@ -298,8 +307,18 @@ class _ThreadHeader extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return ColoredBox(
-      color: chatWallpaper,
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: chatBar,
+        border: Border(
+          bottom: BorderSide(
+            color:
+                AppColors.isNight
+                    ? const Color(0xFF222D34)
+                    : const Color(0xFFE4E4E4),
+          ),
+        ),
+      ),
       child: Padding(
         padding: EdgeInsets.fromLTRB(
           2,
@@ -412,7 +431,6 @@ class _Composer extends StatelessWidget {
     required this.storeName,
     required this.onClearQuote,
     required this.onToggleTeam,
-    required this.onShare,
     required this.onSend,
   });
 
@@ -423,23 +441,17 @@ class _Composer extends StatelessWidget {
   final String storeName;
   final VoidCallback onClearQuote;
   final VoidCallback onToggleTeam;
-  final VoidCallback onShare;
   final VoidCallback onSend;
 
   @override
   Widget build(BuildContext context) {
     final bottom = MediaQuery.paddingOf(context).bottom;
     final canSend = controller.text.trim().isNotEmpty;
-    final sendColor =
-        teamNote && canSend
-            ? chatTeamNote
-            : (AppColors.isNight
-                ? AppColors.grey700
-                : AppColors.surfaceSecondary);
-    final sendIcon = canSend && teamNote ? const Color(0xFF1A1408) : chatInk;
+    final sendColor = teamNote ? chatTeamNote : chatSend;
+    final sendIcon = teamNote ? const Color(0xFF1A1408) : Colors.white;
     return Container(
-      color: chatWallpaper,
-      padding: EdgeInsets.fromLTRB(10, 4, 10, 8 + bottom),
+      color: Colors.transparent,
+      padding: EdgeInsets.fromLTRB(6, 6, 6, 6 + bottom),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -493,36 +505,30 @@ class _Composer extends StatelessWidget {
           const SizedBox(height: 4),
           DecoratedBox(
             decoration: BoxDecoration(
-              color:
-                  AppColors.isNight ? AppColors.background : AppColors.surface,
-              borderRadius: BorderRadius.circular(28),
-              border: Border.all(
-                color: teamNote ? chatTeamNote : AppColors.divider,
-                width: teamNote ? 1.4 : 1,
-              ),
+              color: chatField,
+              borderRadius: BorderRadius.circular(24),
+              border:
+                  teamNote ? Border.all(color: chatTeamNote, width: 1.4) : null,
             ),
             child: Padding(
-              padding: const EdgeInsets.fromLTRB(4, 4, 4, 4),
+              padding: const EdgeInsets.fromLTRB(2, 2, 4, 2),
               child: Row(
                 crossAxisAlignment: CrossAxisAlignment.end,
                 children: [
-                  if (!teamNote)
-                    IconButton(
-                      tooltip: 'Share a product',
-                      onPressed: onShare,
-                      visualDensity: VisualDensity.compact,
-                      icon: Icon(Icons.add_rounded, color: chatMuted),
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 4, left: 2),
+                    child: _RoundIcon(
+                      tooltip: teamNote ? 'Team note on' : 'Note to your team',
+                      onTap: onToggleTeam,
+                      color: teamNote ? chatTeamNote : Colors.transparent,
+                      icon: Icons.lock_rounded,
+                      iconColor: teamNote ? const Color(0xFF1A1408) : chatMuted,
                     ),
-                  _RoundIcon(
-                    tooltip: teamNote ? 'Team note on' : 'Note to your team',
-                    onTap: onToggleTeam,
-                    color: teamNote ? chatTeamNote : Colors.transparent,
-                    icon: Icons.lock_rounded,
-                    iconColor: teamNote ? const Color(0xFF1A1408) : chatMuted,
                   ),
                   Expanded(
                     child: TextField(
                       controller: controller,
+                      cursorColor: Colors.white,
                       focusNode: focusNode,
                       minLines: 1,
                       maxLines: 4,
@@ -533,7 +539,7 @@ class _Composer extends StatelessWidget {
                         hintStyle: AppTextStyles.hint(
                           fontSize: 16,
                           fontWeight: FontWeight.w400,
-                          color: chatMuted,
+                          color: Colors.grey,
                         ),
                         filled: false,
                         isDense: true,
@@ -544,12 +550,26 @@ class _Composer extends StatelessWidget {
                       ),
                     ),
                   ),
-                  _RoundIcon(
-                    tooltip: 'Send',
-                    onTap: canSend ? onSend : null,
-                    color: sendColor,
-                    icon: Icons.send_rounded,
-                    iconColor: canSend ? sendIcon : chatMuted,
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 4, right: 2),
+                    child: Material(
+                      color: canSend ? sendColor : Colors.transparent,
+                      shape: const CircleBorder(),
+                      clipBehavior: Clip.antiAlias,
+                      child: InkWell(
+                        customBorder: const CircleBorder(),
+                        onTap: canSend ? onSend : null,
+                        child: SizedBox(
+                          width: 36,
+                          height: 36,
+                          child: Icon(
+                            Icons.send_rounded,
+                            color: canSend ? sendIcon : chatMuted,
+                            size: 18,
+                          ),
+                        ),
+                      ),
+                    ),
                   ),
                 ],
               ),

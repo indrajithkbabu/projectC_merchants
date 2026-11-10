@@ -103,15 +103,35 @@ class _ChatDiscussionsRouteState extends State<ChatDiscussionsRoute> {
                     filled: true,
                     fillColor: AppColors.surface,
                     border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(12),
+                      borderRadius: BorderRadius.circular(32),
                       borderSide: BorderSide.none,
+                    ),
+                    enabledBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(32),
+                      borderSide: BorderSide.none,
+                    ),
+                    focusedBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(32),
+                      borderSide: BorderSide(
+                        color: AppColors.primary,
+                        width: 1.2,
+                      ),
+                    ),
+                    contentPadding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 12,
                     ),
                   ),
                 ),
               ),
               const SizedBox(height: 8),
               Expanded(child: _body(thread, searching: searching)),
-              if (_selecting) _SelectBar(enabled: _selected.isNotEmpty, onRead: () => _markRead(thread), onClose: () => _closeSelected(thread)),
+              if (_selecting)
+                _SelectBar(
+                  enabled: _selected.isNotEmpty,
+                  onRead: () => _markRead(thread),
+                  onClose: () => _closeSelected(thread),
+                ),
             ],
           );
         },
@@ -139,7 +159,8 @@ class _ChatDiscussionsRouteState extends State<ChatDiscussionsRoute> {
       }
       return ListView.separated(
         itemCount: matches.length,
-        separatorBuilder: (_, _) => Divider(height: 1, color: AppColors.divider),
+        separatorBuilder:
+            (_, _) => Divider(height: 1, color: AppColors.divider),
         itemBuilder: (context, index) {
           final discussion = matches[index];
           return _DiscussionRow(
@@ -160,7 +181,8 @@ class _ChatDiscussionsRouteState extends State<ChatDiscussionsRoute> {
       final closed = thread.discussionsByOrder(open: false);
       return ListView.separated(
         itemCount: closed.length,
-        separatorBuilder: (_, _) => Divider(height: 1, color: AppColors.divider),
+        separatorBuilder:
+            (_, _) => Divider(height: 1, color: AppColors.divider),
         itemBuilder: (context, index) {
           final discussion = closed[index];
           return _DiscussionRow(
@@ -243,7 +265,8 @@ class _ChatDiscussionsRouteState extends State<ChatDiscussionsRoute> {
   }
 
   void _beginSelect(ProductDiscussion discussion) {
-    if (discussion.status == DiscussionStatus.closed || _query.trim().isNotEmpty) {
+    if (discussion.status == DiscussionStatus.closed ||
+        _query.trim().isNotEmpty) {
       return;
     }
     HapticFeedback.mediumImpact();
@@ -283,9 +306,7 @@ class _ChatDiscussionsRouteState extends State<ChatDiscussionsRoute> {
       _selected.clear();
     });
     if (count > 0) {
-      _toast(
-        count == 1 ? '1 discussion closed' : '$count discussions closed',
-      );
+      _toast(count == 1 ? '1 discussion closed' : '$count discussions closed');
     }
   }
 
@@ -361,7 +382,9 @@ class _Header extends StatelessWidget {
             tooltip: selecting ? 'Cancel' : 'Back',
             onPressed: onBack,
             icon: Icon(
-              selecting ? Icons.close_rounded : Icons.arrow_back_ios_new_rounded,
+              selecting
+                  ? Icons.close_rounded
+                  : Icons.arrow_back_ios_new_rounded,
               size: selecting ? 24 : 20,
               color: AppColors.backIcon,
             ),
@@ -473,9 +496,7 @@ class _DiscussionRow extends StatelessWidget {
             children: [
               if (selecting) ...[
                 Icon(
-                  selected
-                      ? Icons.check_circle_rounded
-                      : Icons.circle_outlined,
+                  selected ? Icons.check_circle_rounded : Icons.circle_outlined,
                   color: selected ? chatReadTick : AppColors.textSecondary,
                 ),
                 const SizedBox(width: 8),
@@ -665,10 +686,7 @@ class _NewDiscussionSheetState extends State<_NewDiscussionSheet> {
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Text(
-            'New discussion',
-            style: AppTextStyles.headline(fontSize: 20),
-          ),
+          Text('New discussion', style: AppTextStyles.headline(fontSize: 20)),
           const SizedBox(height: 12),
           TextField(
             controller: _name,
