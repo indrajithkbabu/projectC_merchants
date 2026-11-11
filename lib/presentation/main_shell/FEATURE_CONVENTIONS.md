@@ -8,12 +8,13 @@ This file defines what to follow for UI and logic inside `lib/presentation/main_
 ## UI Rules
 - Root shell uses `ScreenWrapper` with `extendBodyBehindBottom: true`.
 - Floating capsule nav is `FloatingBottomNavBar` from `lib/helper/widgets/`.
-- **Tab sets (driven by `AccountProfileBloc` / `CatalogSession.ownStoreId`):**
-  - **No own store:** **Stores** (home icon) | **Message** | **Settings** | **Profile**
-  - **Own store:** **Stores** (home icon) | **Message** | **Wishlist** (heart) | **My store**
-- Own-store Settings is **not** a bottom tab. Open it from My store toolbar gear →
-  `settings_route` (`SettingsTab(showBack: true)`), including Account privacy +
-  Import requests, Appearance, View products, screenshots, logout / delete.
+- **Tab set (always):** **Stores** | **Message** | **Wishlist** | **Profile**.
+- Profile content follows `ProfileContextBloc.activeProfile`: Personal →
+  `PersonalProfileTab`; store Owner/Staff → `MyStoreTab` for that store.
+- Profile ☰ opens `settings_route` for Personal / Owner / Staff. Role actions
+  (Create a store, Staff, Leave store, Delete store, Log out, Delete account)
+  live on Settings. Profile switcher: `showProfileSwitcherSheet` from name
+  chevron or long-press Profile avatar.
 - Shell home titles (Stores / Message / Wishlist) share `ShellTabTitleBar`
   (40px row, 22pt, top = statusBar + 8) so tab switches stay vertically stable.
   Trailing stays right-aligned (`Expanded` title cluster + trailing). Wishlist
@@ -57,19 +58,19 @@ This file defines what to follow for UI and logic inside `lib/presentation/main_
   do not add per-screen FLAG_SECURE hacks.
 
 ## Anti-flicker Rules
-- Keep tab bodies in an `IndexedStack` (4 slots either way).
-  Slot 1 is **Message** (`ChatTab`) for every account. Swap slots 2–3 only when
-  own-store presence changes (after store create the shell usually remounts via
-  `pushNamedAndRemoveUntil`).
-- Own-store: provide one `StoreProfileBloc` keyed by store id above the stack;
-  seed from `StoreMetaCache` / `StoreProductsCache` + `StoreProductsPrefetcher`.
+- Keep tab bodies in an `IndexedStack` (4 fixed slots).
+  Slot 1 is **Message** (`ChatTab`); slot 2 Wishlist; slot 3 Profile.
+- When acting as a store: provide one `StoreProfileBloc` keyed by active store
+  id above the stack; seed from caches + `StoreProductsPrefetcher`.
 - Do **not** remount `WishlistRoute` on every Wishlist tab select (no epoch keys).
-- Quiet refresh only when switching to My store (follow-request previews) —
+- Quiet refresh when opening Profile (follow-request previews for store) —
   never wipe a painted product grid for a soft refresh.
+- Keep response ownership with the profile that started a request after a switch.
 
 ## Logic Ownership
-- Shell hosts `StoreListingBloc`, `ContactsBloc`, and `AccountProfileBloc`.
-- Own-store shell also hosts `StoreProfileBloc` for My store (and shared meta).
+- Shell hosts `StoreListingBloc`, `ContactsBloc`, `AccountProfileBloc`, and
+  `ProfileContextBloc` (bootstrap / switch / invites / leave / delete).
+- Active-store shell also hosts `StoreProfileBloc` for Profile (shared meta).
 - Stores tab → `GET /home` via existing store listing.
 - Message tab lists chats (see chat FEATURE_CONVENTIONS). Find stores, opened from New chat, is the old Contacts screen (`ContactsTab(showBack: true)`):
   - Title **Find stores** with back + capsule search. Not a bottom-nav tab.
@@ -100,6 +101,9 @@ This file defines what to follow for UI and logic inside `lib/presentation/main_
 - Settings → **View products** (group / single / gallery) persists via
   `ProductViewPreferences` + `AppSettingsStorage` (survives logout) and
   drives store-profile layout.
+- Settings → **Image arrangement** (2×2 / 3×3 / 4×4) is **disabled** (code
+  kept). Re-enable with `kEnableCollageImageArrangement = true` and uncomment
+  the Settings block in `settings_tab.dart`.
 - Screenshot / screen-recording preference lives in `AppSettingsStorage` (survives logout) and is applied by `ScreenshotProtectionService` at app start.
 - Keep tab content in `tabs/`; keep shell chrome in `main_shell_route.dart`.
 

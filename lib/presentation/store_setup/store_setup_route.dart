@@ -1,16 +1,21 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:project_c/bloc/store_setup/store_setup_bloc.dart';
+import 'package:project_c/di/service_locator.dart';
 import 'package:project_c/helper/app_padding.dart';
 import 'package:project_c/helper/colors.dart';
+import 'package:project_c/helper/profile_switching_log.dart';
 import 'package:project_c/helper/text_styles.dart';
 import 'package:project_c/helper/widgets/app_back_button.dart';
 import 'package:project_c/helper/widgets/primary_button.dart';
 import 'package:project_c/helper/widgets/screen_wrapper.dart';
+import 'package:project_c/main/app.dart' show scaffoldMessengerKey;
 import 'package:project_c/navigation/routes.dart';
+import 'package:project_c/presentation/main_shell/shell_nav.dart';
 import 'package:project_c/presentation/store_setup/store_setup_widgets/store_link_card.dart';
 import 'package:project_c/presentation/store_setup/store_setup_widgets/store_setup_identity_card.dart';
 import 'package:project_c/presentation/store_setup/store_setup_widgets/store_setup_photos_preview_sheet.dart';
+import 'package:project_c/webservice/profile/profile_repository.dart';
 import 'package:project_c/webservice/store/store_request.dart';
 
 class StoreSetupRoute extends StatefulWidget {
@@ -73,7 +78,7 @@ class _StoreSetupRouteState extends State<StoreSetupRoute> {
         ),
         BlocListener<StoreSetupBloc, StoreSetupState>(
           listenWhen: (prev, curr) => curr.isCompleted && !prev.isCompleted,
-          listener: (context, state) {
+          listener: (context, state) async {
             context.read<StoreSetupBloc>().add(const StoreClearCompleted());
             if (state.skippedStore) {
               Navigator.of(context).pushNamedAndRemoveUntil(
@@ -82,9 +87,49 @@ class _StoreSetupRouteState extends State<StoreSetupRoute> {
               );
               return;
             }
-            Navigator.of(
-              context,
-            ).pushNamed(Routes.addTeamRoute, arguments: state.storeName);
+
+            final storeId = state.createdStoreId?.trim() ?? '';
+            final storeName = state.storeName.trim();
+            final toast =
+                storeName.isEmpty ? 'Store created' : '$storeName created';
+
+            ProfileSwitchingLog.d(
+              'PS-30/31/32',
+              'create completed storeId=$storeId name=$storeName '
+              '→ PATCH active-profile store:$storeId',
+            );
+
+            // Create does not auto-select — FE must PATCH before remounting shell.
+            if (storeId.isNotEmpty) {
+              try {
+                await ServiceLocator.get<ProfileRepository>()
+                    .selectActiveProfile('store:$storeId');
+                ProfileSwitchingLog.d(
+                  'PS-30/34',
+                  'post-create select ok store:$storeId',
+                );
+              } catch (e) {
+                ProfileSwitchingLog.e(
+                  'PS-32',
+                  'post-create select failed storeId=$storeId '
+                  '(store exists — do not create again)',
+                  e,
+                );
+                // Shell refresh will reconcile; still land on listing.
+              }
+            }
+
+            if (!context.mounted) return;
+            Navigator.of(context).pushNamedAndRemoveUntil(
+              Routes.storeListingRoute,
+              (route) => false,
+            );
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              ShellNav.request(ShellNavTab.profile);
+              scaffoldMessengerKey.currentState?.showSnackBar(
+                SnackBar(content: Text(toast)),
+              );
+            });
           },
         ),
       ],

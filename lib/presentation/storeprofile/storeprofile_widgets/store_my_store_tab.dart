@@ -8,7 +8,6 @@ import 'package:project_c/helper/text_styles.dart';
 import 'package:project_c/helper/widgets/app_back_button.dart';
 import 'package:project_c/models/store_product.dart';
 import 'package:project_c/presentation/privacy/privacy_widgets/follow_requests_banner.dart';
-import 'package:project_c/presentation/store_import/quick_import_flow.dart';
 import 'package:project_c/models/product_view_mode.dart';
 import 'package:project_c/presentation/storeprofile/storeprofile_widgets/store_product_grid_shimmer.dart';
 import 'package:project_c/presentation/storeprofile/storeprofile_widgets/store_profile_header_card.dart';
@@ -53,6 +52,11 @@ class StoreMyStoreTab extends StatelessWidget {
     required this.onProductLongPress,
     this.onOpenFollowRequests,
     this.onOpenSettings,
+    this.onOpenSwitcher,
+    this.onOpenStaff,
+    this.showSwitcherDot = false,
+    this.roleBadge,
+    this.canManageStore = true,
     this.showBack = true,
     this.bottomInset = 0,
     this.selectedProductIds = const {},
@@ -63,14 +67,23 @@ class StoreMyStoreTab extends StatelessWidget {
   final VoidCallback onBack;
   final VoidCallback onFollowersTap;
   final VoidCallback onFollowingTap;
-  /// Opens import-requests inbox (replaces former Edit store CTA).
+  /// Opens import-requests inbox (legacy / settings path).
   final VoidCallback onOpenImportRequests;
   final void Function(StoreProduct product, int imageIndex) onProductTap;
   /// Long-press a mosaic cell → `(product, imageIndex)` for item select.
   final void Function(StoreProduct product, int imageIndex)? onProductLongPress;
   final VoidCallback? onOpenFollowRequests;
-  /// When set (shell My store tab), shows a hamburger that opens Settings.
+  /// When set (shell My store tab), shows a hamburger that opens Settings/menu.
   final VoidCallback? onOpenSettings;
+  /// Opens the profile switcher (name + chevron).
+  final VoidCallback? onOpenSwitcher;
+  /// Owner: opens Staff list (UI 4.3 / 5.2).
+  final VoidCallback? onOpenStaff;
+  final bool showSwitcherDot;
+  /// Optional role pill under the store name (e.g. Staff / Owner).
+  final String? roleBadge;
+  /// When false (staff), hide owner management CTAs.
+  final bool canManageStore;
   /// Hide back when hosted as a shell tab (no stack to pop).
   final bool showBack;
   final double bottomInset;
@@ -107,8 +120,6 @@ class StoreMyStoreTab extends StatelessWidget {
     // Prefer enriched albums (full imagePaths); fall back to cover list.
     final products = state.productsForMedia;
     final photoCells = myStorePhotoCells(products);
-    final serverPending = state.pendingImportRequestCount;
-
     return CustomScrollView(
       physics: const BouncingScrollPhysics(),
       slivers: [
@@ -120,6 +131,9 @@ class StoreMyStoreTab extends StatelessWidget {
                 onBack: onBack,
                 showBack: showBack,
                 onOpenSettings: onOpenSettings,
+                storeName: state.storeName,
+                onOpenSwitcher: onOpenSwitcher,
+                showSwitcherDot: showSwitcherDot,
               ),
               const SizedBox(height: 12),
               Row(
@@ -144,54 +158,79 @@ class StoreMyStoreTab extends StatelessWidget {
                           maxLines: 2,
                           overflow: TextOverflow.ellipsis,
                         ),
-                        const SizedBox(height: 8),
-                        StoreVisitorCountsRow(
-                          // Match mosaic: every displayable album frame.
-                          productCount: photoCells.length,
-                          followerCount: state.followerCount,
-                          followingCount: state.followingCount,
-                          onFollowersTap: onFollowersTap,
-                          onFollowingTap: onFollowingTap,
-                          alignStart: true,
-                        ),
+                        if (roleBadge != null && roleBadge!.trim().isNotEmpty) ...[
+                          const SizedBox(height: 6),
+                          Row(
+                            children: [
+                              Container(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 8,
+                                  vertical: 3,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: AppColors.surfaceSecondary,
+                                  borderRadius: BorderRadius.circular(20),
+                                ),
+                                child: Text(
+                                  roleBadge!,
+                                  style: AppTextStyles.caption(
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(width: 8),
+                              Flexible(
+                                child: Text(
+                                  state.storeLink.trim().isEmpty
+                                      ? ''
+                                      : '@${state.storeLink.trim().split('/').last}',
+                                  style: AppTextStyles.caption(),
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ] else ...[
+                          const SizedBox(height: 8),
+                          StoreVisitorCountsRow(
+                            productCount: photoCells.length,
+                            followerCount: state.followerCount,
+                            followingCount: state.followingCount,
+                            onFollowersTap: onFollowersTap,
+                            onFollowingTap: onFollowingTap,
+                            alignStart: true,
+                          ),
+                        ],
                       ],
                     ),
                   ),
                 ],
               ),
               const SizedBox(height: 14),
-              Row(
-                children: [
-                  Expanded(
-                    child: ValueListenableBuilder<List<QuickImportRecord>>(
-                      valueListenable: QuickImportSession.instance.items,
-                      builder: (context, records, _) {
-                        final pending =
-                            serverPending +
-                            records
-                                .where(
-                                  (r) => r.status == QuickImportStatus.pending,
-                                )
-                                .length;
-                        return _GreyActionButton(
-                          label:
-                              pending > 0
-                                  ? 'Import requests ($pending)'
-                                  : 'Import requests',
-                          onTap: onOpenImportRequests,
-                        );
-                      },
+              if (canManageStore)
+                Row(
+                  children: [
+                    Expanded(
+                      child: _GreyActionButton(
+                        label: 'Edit store',
+                        onTap: onOpenSettings ?? onOpenImportRequests,
+                      ),
                     ),
-                  ),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: _GreyActionButton(
-                      label: 'Share profile',
-                      onTap: () => _shareStore(context),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: _GreyActionButton(
+                        label: 'Staff',
+                        onTap: onOpenStaff ?? onOpenImportRequests,
+                      ),
                     ),
-                  ),
-                ],
-              ),
+                  ],
+                )
+              else
+                _GreyActionButton(
+                  label: 'Share store',
+                  onTap: () => _shareStore(context),
+                ),
               if (showBanner) ...[
                 const SizedBox(height: 14),
                 FollowRequestsBanner(
@@ -301,11 +340,17 @@ class _MyStoreToolbar extends StatelessWidget {
     required this.onBack,
     this.showBack = true,
     this.onOpenSettings,
+    this.storeName = '',
+    this.onOpenSwitcher,
+    this.showSwitcherDot = false,
   });
 
   final VoidCallback onBack;
   final bool showBack;
   final VoidCallback? onOpenSettings;
+  final String storeName;
+  final VoidCallback? onOpenSwitcher;
+  final bool showSwitcherDot;
 
   @override
   Widget build(BuildContext context) {
@@ -313,13 +358,55 @@ class _MyStoreToolbar extends StatelessWidget {
       children: [
         if (showBack)
           AppBackButton(onPressed: onBack)
+        else if (onOpenSwitcher != null)
+          Expanded(
+            child: InkWell(
+              onTap: onOpenSwitcher,
+              borderRadius: BorderRadius.circular(8),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(vertical: 6),
+                child: Row(
+                  children: [
+                    Flexible(
+                      child: Text(
+                        storeName.trim().isEmpty ? 'Store' : storeName.trim(),
+                        style: AppTextStyles.headline(
+                          fontSize: 22,
+                          fontWeight: FontWeight.w700,
+                        ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                    const SizedBox(width: 4),
+                    Icon(
+                      Icons.keyboard_arrow_down_rounded,
+                      color: AppColors.textPrimary,
+                      size: 22,
+                    ),
+                    if (showSwitcherDot) ...[
+                      const SizedBox(width: 4),
+                      Container(
+                        width: 8,
+                        height: 8,
+                        decoration: BoxDecoration(
+                          color: AppColors.error,
+                          shape: BoxShape.circle,
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+            ),
+          )
         else
           const SizedBox(width: 8),
-        const Spacer(),
+        if (onOpenSwitcher == null) const Spacer(),
         if (onOpenSettings != null)
           IconButton(
             onPressed: onOpenSettings,
-            tooltip: 'Settings',
+            tooltip: 'Menu',
             icon: Icon(
               Icons.menu_rounded,
               color: AppColors.textPrimary,

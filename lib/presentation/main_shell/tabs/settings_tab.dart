@@ -2,16 +2,22 @@ import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:project_c/bloc/account_profile/account_profile_bloc.dart';
 import 'package:project_c/bloc/auth/auth_bloc.dart';
+import 'package:project_c/bloc/profile_context/profile_context_bloc.dart';
 import 'package:project_c/di/service_locator.dart';
 import 'package:project_c/helper/app_padding.dart';
 import 'package:project_c/helper/colors.dart';
+import 'package:project_c/helper/profile_switching_log.dart';
 import 'package:project_c/helper/text_styles.dart';
 import 'package:project_c/helper/widgets/app_back_button.dart';
 import 'package:project_c/helper/widgets/floating_bottom_nav_bar.dart';
 import 'package:project_c/helper/widgets/screen_wrapper.dart';
+// ROLLBACK image arrangement: uncomment import + Settings block below, and set
+// kEnableCollageImageArrangement = true in collage_grid_arrangement.dart.
+// import 'package:project_c/models/collage_grid_arrangement.dart';
 import 'package:project_c/models/product_view_mode.dart';
 import 'package:project_c/models/store_privacy_mode.dart';
 import 'package:project_c/navigation/routes.dart';
+import 'package:project_c/presentation/main_shell/profile_sheets.dart';
 import 'package:project_c/services/product_view_preferences.dart';
 import 'package:project_c/services/screenshot_protection_service.dart';
 import 'package:project_c/services/store_privacy_preferences.dart';
@@ -67,11 +73,52 @@ class SettingsTab extends StatelessWidget {
   }
 
   Future<void> _logout(BuildContext context) async {
+    ProfileSwitchingLog.d('PS-02/12', 'Settings → Log out');
     context.read<AuthBloc>().add(const AuthLoggedOut());
     Navigator.of(context).pushNamedAndRemoveUntil(
       Routes.authPhoneRoute,
       (route) => false,
     );
+  }
+
+  ProfileContextState? _profileContextOrNull(BuildContext context) {
+    try {
+      return context.read<ProfileContextBloc>().state;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<void> _leaveStore(BuildContext context, String storeName) async {
+    ProfileSwitchingLog.d('PS-50/60', 'Settings → Leave $storeName confirm');
+    final ok = await showDestructiveConfirmDialog(
+      context,
+      title: 'Leave $storeName?',
+      body: 'You will lose access to its chats and products.',
+      confirmLabel: 'Leave',
+    );
+    if (ok != true || !context.mounted) return;
+    ProfileSwitchingLog.d('PS-50', 'Leave confirmed');
+    context.read<ProfileContextBloc>().add(
+      const ProfileContextLeaveActiveStore(),
+    );
+    Navigator.of(context).maybePop();
+  }
+
+  Future<void> _deleteStore(BuildContext context, String storeName) async {
+    ProfileSwitchingLog.d('PS-51/52/61', 'Settings → Delete $storeName confirm');
+    final ok = await showDestructiveConfirmDialog(
+      context,
+      title: 'Delete $storeName?',
+      body: 'Products, chats and staff access will be removed.',
+      confirmLabel: 'Delete',
+    );
+    if (ok != true || !context.mounted) return;
+    ProfileSwitchingLog.d('PS-52', 'Delete store confirmed');
+    context.read<ProfileContextBloc>().add(
+      const ProfileContextDeleteActiveStore(),
+    );
+    Navigator.of(context).maybePop();
   }
 
   @override
@@ -83,165 +130,266 @@ class SettingsTab extends StatelessWidget {
     final protection = ServiceLocator.get<ScreenshotProtectionService>();
     final viewPrefs = ServiceLocator.get<ProductViewPreferences>();
     final themePrefs = ServiceLocator.get<ThemePreferences>();
-    return BlocBuilder<AccountProfileBloc, AccountProfileState>(
-      builder: (context, state) {
-        final profile = state.profile;
-        final ownStore = profile?.ownStore;
 
-        return ListView(
-          padding: AppPadding.screen(
-            top:
-                showBack
-                    ? ScreenWrapper.statusBarTop(context) + 4
-                    : ScreenWrapper.statusBarTop(context) + 8,
-            bottom: bottomPad,
+    Widget buildBody(
+      AccountProfileState state, {
+      ProfileContextState? profileCtx,
+    }) {
+      final profile = state.profile;
+      final active = profileCtx?.activeProfile;
+      final perms = profileCtx?.permissions;
+      final isPersonal = active == null || active.isPersonal;
+      final isOwner = active?.isOwner == true;
+      final isStaff = active?.isStaff == true;
+      final storeName =
+          active?.name.trim().isNotEmpty == true
+              ? active!.name.trim()
+              : (profile?.ownStore?.name.trim().isNotEmpty == true
+                  ? profile!.ownStore!.name.trim()
+                  : 'store');
+      final storeId =
+          profileCtx?.activeStoreId?.trim() ??
+          profile?.ownStore?.id.trim() ??
+          '';
+      final canCreateStore =
+          isPersonal &&
+          (profileCtx?.canCreateStore == true ||
+              perms?.createStore == true ||
+              profileCtx == null);
+      final showAccountPrivacy =
+          showBack && (isOwner || profile?.ownStore != null);
+
+      final profileActions = <Widget>[];
+      if (canCreateStore) {
+        profileActions.add(
+          _SettingsAction(
+            label: 'Create a store',
+            color: AppColors.textPrimary,
+            onTap: () {
+              ProfileSwitchingLog.d(
+                'PS-30',
+                'Settings → Create a store',
+              );
+              Navigator.of(context).pushNamed(Routes.storeSetupRoute);
+            },
           ),
-          children: [
-            if (showBack) ...[
-              Row(
-                children: [
-                  AppBackButton(
-                    onPressed: () => Navigator.of(context).maybePop(),
-                  ),
-                  const SizedBox(width: 4),
-                  Expanded(
-                    child: Text(
-                      'Settings',
-                      style: AppTextStyles.headline(
-                        fontSize: 22,
-                        fontWeight: FontWeight.w700,
-                      ),
+        );
+      }
+      if (isOwner && (perms?.manageMembers ?? true) && storeId.isNotEmpty) {
+        profileActions.add(
+          _SettingsAction(
+            label: 'Staff',
+            color: AppColors.textPrimary,
+            onTap: () {
+              ProfileSwitchingLog.d(
+                'PS-40/61',
+                'Settings → Staff storeId=$storeId',
+              );
+              Navigator.of(context).pushNamed(
+                Routes.staffListRoute,
+                arguments: <String, Object?>{
+                  'storeId': storeId,
+                  'storeName': storeName,
+                },
+              );
+            },
+          ),
+        );
+      }
+      if (isStaff) {
+        profileActions.add(
+          _SettingsAction(
+            label: 'Leave $storeName',
+            color: AppColors.error,
+            onTap: () => _leaveStore(context, storeName),
+          ),
+        );
+      }
+      if (isOwner && (perms?.manageStore ?? true)) {
+        profileActions.add(
+          _SettingsAction(
+            label: 'Delete store',
+            color: AppColors.error,
+            onTap: () => _deleteStore(context, storeName),
+          ),
+        );
+      }
+
+      return ListView(
+        padding: AppPadding.screen(
+          top:
+              showBack
+                  ? ScreenWrapper.statusBarTop(context) + 4
+                  : ScreenWrapper.statusBarTop(context) + 8,
+          bottom: bottomPad,
+        ),
+        children: [
+          if (showBack) ...[
+            Row(
+              children: [
+                AppBackButton(
+                  onPressed: () => Navigator.of(context).maybePop(),
+                ),
+                const SizedBox(width: 4),
+                Expanded(
+                  child: Text(
+                    'Settings',
+                    style: AppTextStyles.headline(
+                      fontSize: 22,
+                      fontWeight: FontWeight.w700,
                     ),
                   ),
-                ],
-              ),
-            ] else
-              Text(
-                'Settings',
-                style: AppTextStyles.headline(
-                  fontSize: 28,
-                  fontWeight: FontWeight.w700,
                 ),
-              ),
-            const SizedBox(height: 16),
-            _SettingsGroup(
-              children: [
-                _SettingsRow(
-                  label: 'Name',
-                  value: profile?.displayName ?? '—',
-                ),
-                _SettingsRow(
-                  label: 'Mobile',
-                  value: profile?.phone ?? '—',
-                ),
-                if (ownStore != null)
-                  _SettingsRow(
-                    label: 'Store',
-                    value: ownStore.name,
-                  ),
               ],
             ),
-            if (showBack && ownStore != null) ...[
-              const SizedBox(height: 16),
-              _AccountPrivacyTile(
-                onTap:
-                    () => Navigator.of(
-                      context,
-                    ).pushNamed(Routes.accountPrivacyRoute),
+          ] else
+            Text(
+              'Settings',
+              style: AppTextStyles.headline(
+                fontSize: 28,
+                fontWeight: FontWeight.w700,
               ),
-              // Import requests moved to My store primary CTA (not shown here).
+            ),
+          const SizedBox(height: 16),
+          _SettingsGroup(
+            children: [
+              _SettingsRow(
+                label: 'Name',
+                value: profile?.displayName ?? '—',
+              ),
+              _SettingsRow(
+                label: 'Mobile',
+                value: profile?.phone ?? '—',
+              ),
+              if (!isPersonal && storeName != 'store')
+                _SettingsRow(
+                  label: isStaff ? 'Staff at' : 'Store',
+                  value: storeName,
+                )
+              else if (profile?.ownStore != null && isPersonal)
+                _SettingsRow(
+                  label: 'Store',
+                  value: profile!.ownStore!.name,
+                ),
             ],
+          ),
+          if (profileActions.isNotEmpty) ...[
             const SizedBox(height: 16),
-            Text(
-              'View products',
-              style: AppTextStyles.label(
-                fontWeight: FontWeight.w600,
-                color: AppColors.textSecondary,
-              ),
-            ),
-            const SizedBox(height: 8),
-            ListenableBuilder(
-              listenable: viewPrefs,
-              builder: (context, _) {
-                return _SettingsGroup(
-                  children: [
-                    for (final mode in ProductViewMode.values)
-                      _SettingsRadioRow(
-                        label: mode.label,
-                        subtitle: mode.subtitle,
-                        selected: viewPrefs.mode == mode,
-                        onTap: () => viewPrefs.setMode(mode),
-                      ),
-                  ],
-                );
-              },
-            ),
+            _SettingsGroup(children: profileActions),
+          ],
+          if (showAccountPrivacy) ...[
             const SizedBox(height: 16),
-            Text(
-              'Appearance',
-              style: AppTextStyles.label(
-                fontWeight: FontWeight.w600,
-                color: AppColors.textSecondary,
-              ),
-            ),
-            const SizedBox(height: 8),
-            ListenableBuilder(
-              listenable: themePrefs,
-              builder: (context, _) {
-                return _SettingsGroup(
-                  children: [
-                    for (final mode in AppAppearance.values)
-                      _SettingsRadioRow(
-                        label: mode.label,
-                        subtitle: mode.subtitle,
-                        selected: themePrefs.appearance == mode,
-                        onTap: () => themePrefs.setAppearance(mode),
-                      ),
-                  ],
-                );
-              },
-            ),
-            const SizedBox(height: 16),
-            _SettingsGroup(
-              children: [
-                ListenableBuilder(
-                  listenable: protection,
-                  builder: (context, _) {
-                    return _SettingsToggle(
-                      label: 'Allow screenshots',
-                      subtitle:
-                          'Also controls screen recording. Off by default for privacy.',
-                      value: protection.allowScreenshots,
-                      onChanged: (value) {
-                        protection.setAllowScreenshots(value);
-                      },
-                    );
-                  },
-                ),
-              ],
-            ),
-            const SizedBox(height: 16),
-            _SettingsGroup(
-              children: [
-                _SettingsAction(
-                  label: 'Log out',
-                  color: AppColors.accent,
-                  onTap: () => _logout(context),
-                ),
-                _SettingsAction(
-                  label:
-                      state.isDeletingAccount
-                          ? 'Deleting…'
-                          : 'Delete account',
-                  color: AppColors.error,
-                  onTap:
-                      state.isDeletingAccount
-                          ? null
-                          : () => _confirmDelete(context),
-                ),
-              ],
+            _AccountPrivacyTile(
+              onTap:
+                  () => Navigator.of(
+                    context,
+                  ).pushNamed(Routes.accountPrivacyRoute),
             ),
           ],
+          const SizedBox(height: 16),
+          Text(
+            'View products',
+            style: AppTextStyles.label(
+              fontWeight: FontWeight.w600,
+              color: AppColors.textSecondary,
+            ),
+          ),
+          const SizedBox(height: 8),
+          ListenableBuilder(
+            listenable: viewPrefs,
+            builder: (context, _) {
+              return _SettingsGroup(
+                children: [
+                  for (final mode in ProductViewMode.values)
+                    _SettingsRadioRow(
+                      label: mode.label,
+                      subtitle: mode.subtitle,
+                      selected: viewPrefs.mode == mode,
+                      onTap: () => viewPrefs.setMode(mode),
+                    ),
+                ],
+              );
+            },
+          ),
+          const SizedBox(height: 16),
+          Text(
+            'Appearance',
+            style: AppTextStyles.label(
+              fontWeight: FontWeight.w600,
+              color: AppColors.textSecondary,
+            ),
+          ),
+          const SizedBox(height: 8),
+          ListenableBuilder(
+            listenable: themePrefs,
+            builder: (context, _) {
+              return _SettingsGroup(
+                children: [
+                  for (final mode in AppAppearance.values)
+                    _SettingsRadioRow(
+                      label: mode.label,
+                      subtitle: mode.subtitle,
+                      selected: themePrefs.appearance == mode,
+                      onTap: () => themePrefs.setAppearance(mode),
+                    ),
+                ],
+              );
+            },
+          ),
+          const SizedBox(height: 16),
+          _SettingsGroup(
+            children: [
+              ListenableBuilder(
+                listenable: protection,
+                builder: (context, _) {
+                  return _SettingsToggle(
+                    label: 'Allow screenshots',
+                    subtitle:
+                        'Also controls screen recording. Off by default for privacy.',
+                    value: protection.allowScreenshots,
+                    onChanged: (value) {
+                      protection.setAllowScreenshots(value);
+                    },
+                  );
+                },
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          _SettingsGroup(
+            children: [
+              _SettingsAction(
+                label: 'Log out',
+                color: AppColors.accent,
+                onTap: () => _logout(context),
+              ),
+              _SettingsAction(
+                label:
+                    state.isDeletingAccount
+                        ? 'Deleting…'
+                        : 'Delete account',
+                color: AppColors.error,
+                onTap:
+                    state.isDeletingAccount
+                        ? null
+                        : () => _confirmDelete(context),
+              ),
+            ],
+          ),
+        ],
+      );
+    }
+
+    return BlocBuilder<AccountProfileBloc, AccountProfileState>(
+      builder: (context, state) {
+        final hasProfileCtx = _profileContextOrNull(context) != null;
+        if (!hasProfileCtx) {
+          return buildBody(state);
+        }
+        return BlocBuilder<ProfileContextBloc, ProfileContextState>(
+          builder: (context, profileCtx) {
+            return buildBody(state, profileCtx: profileCtx);
+          },
         );
       },
     );

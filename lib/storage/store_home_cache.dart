@@ -4,12 +4,14 @@ import 'dart:io';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:project_c/helper/app_log.dart';
+import 'package:project_c/helper/phone_normalize.dart';
 import 'package:project_c/models/catalog/catalog_page.dart';
 import 'package:project_c/models/catalog/catalog_store.dart';
 
 /// Disk + memory cache of the Stores home page (`GET /home` first page).
 ///
 /// Cold reopen paints from here immediately (no shimmer), then soft-refreshes.
+/// Contact-name sidecar survives home rewrites until an enriched map is merged.
 class StoreHomeCache {
   StoreHomeCache._();
 
@@ -31,6 +33,23 @@ class StoreHomeCache {
   /// Phone → device contact name from the last enriched paint.
   Map<String, String> contactNamesMemory() =>
       Map<String, String>.from(_contactNames);
+
+  /// True when at least one phone→name pair is cached for kill+reopen subtitles.
+  bool get hasContactNames => _contactNames.isNotEmpty;
+
+  /// Resolve a stored contact name for [phone] (raw or E.164 key).
+  String? contactNameFor(String phone) {
+    final key = phone.trim();
+    if (key.isEmpty || _contactNames.isEmpty) return null;
+    final direct = _contactNames[key]?.trim() ?? '';
+    if (direct.isNotEmpty) return direct;
+    final e164 = PhoneNormalize.toE164(key);
+    if (e164 != null && e164 != key) {
+      final hit = _contactNames[e164]?.trim() ?? '';
+      if (hit.isNotEmpty) return hit;
+    }
+    return null;
+  }
 
   /// Load disk into memory (auth restore / listing mount).
   Future<CatalogPage<CatalogStore>?> read() async {
@@ -64,7 +83,8 @@ class StoreHomeCache {
         for (final e in namesRaw.entries) {
           final phone = '${e.key}'.trim();
           final name = '${e.value}'.trim();
-          if (phone.isNotEmpty && name.isNotEmpty) names[phone] = name;
+          if (phone.isEmpty || name.isEmpty) continue;
+          _putName(names, phone, name);
         }
       }
       final page = CatalogPage<CatalogStore>(
@@ -81,22 +101,28 @@ class StoreHomeCache {
     }
   }
 
+  /// Write home rows. Pass [contactNames] to merge enriched names; omit it to
+  /// keep the existing sidecar (prefetch must not wipe names with `{}`).
   Future<void> write(
     CatalogPage<CatalogStore> page, {
-    Map<String, String> contactNames = const {},
+    Map<String, String>? contactNames,
   }) async {
     if (page.items.isEmpty) return;
     final snapshot = CatalogPage<CatalogStore>(
       items: List<CatalogStore>.from(page.items),
       nextCursor: page.nextCursor,
     );
-    final names = <String, String>{
-      for (final e in contactNames.entries)
-        if (e.key.trim().isNotEmpty && e.value.trim().isNotEmpty)
-          e.key.trim(): e.value.trim(),
-    };
     _memory = snapshot;
-    _contactNames = names;
+    if (contactNames != null) {
+      final merged = Map<String, String>.from(_contactNames);
+      for (final e in contactNames.entries) {
+        final phone = e.key.trim();
+        final name = e.value.trim();
+        if (phone.isEmpty || name.isEmpty) continue;
+        _putName(merged, phone, name);
+      }
+      _contactNames = merged;
+    }
 
     try {
       final file = await _file();
@@ -104,10 +130,13 @@ class StoreHomeCache {
       final payload = jsonEncode({
         'items': [for (final s in snapshot.items) s.toJson()],
         if (snapshot.nextCursor != null) 'nextCursor': snapshot.nextCursor,
-        if (names.isNotEmpty) 'contactNames': names,
+        if (_contactNames.isNotEmpty) 'contactNames': _contactNames,
       });
       await file.writeAsString(payload, flush: true);
-      AppLog.d(_tag, 'write items=${snapshot.items.length}');
+      AppLog.d(
+        _tag,
+        'write items=${snapshot.items.length} names=${_contactNames.length}',
+      );
     } catch (e) {
       AppLog.e(_tag, 'write failed', e);
     }
@@ -122,6 +151,14 @@ class StoreHomeCache {
       AppLog.d(_tag, 'clearAll done');
     } catch (e) {
       AppLog.e(_tag, 'clearAll failed', e);
+    }
+  }
+
+  static void _putName(Map<String, String> names, String phone, String name) {
+    names[phone] = name;
+    final e164 = PhoneNormalize.toE164(phone);
+    if (e164 != null && e164 != phone) {
+      names[e164] = name;
     }
   }
 

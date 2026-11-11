@@ -7,12 +7,15 @@ import 'package:project_c/helper/colors.dart';
 import 'package:project_c/helper/product_image.dart';
 import 'package:project_c/helper/text_styles.dart';
 import 'package:project_c/helper/widgets/appearance_scope.dart';
+import 'package:project_c/di/service_locator.dart';
 import 'package:project_c/models/catalog/collection_models.dart';
 import 'package:project_c/models/catalog/import_models.dart';
+import 'package:project_c/models/collage_grid_arrangement.dart';
 import 'package:project_c/models/product_view_mode.dart';
 import 'package:project_c/models/store_product.dart';
 import 'package:project_c/presentation/storeprofile/storeprofile_widgets/product_image_collage.dart';
 import 'package:project_c/presentation/storeprofile/storeprofile_widgets/store_product_grid_shimmer.dart';
+import 'package:project_c/services/product_view_preferences.dart';
 
 class StoreProductGrid extends StatelessWidget {
   const StoreProductGrid({
@@ -416,6 +419,25 @@ class _ProductCardState extends State<_ProductCard> {
   @override
   Widget build(BuildContext context) {
     AppearanceScope.maybeOf(context);
+    // ROLLBACK image arrangement: listen to prefs when flag is on.
+    if (kEnableCollageImageArrangement) {
+      final viewPrefs = ServiceLocator.get<ProductViewPreferences>();
+      return ListenableBuilder(
+        listenable: viewPrefs,
+        builder:
+            (context, _) => _buildCardBody(
+              context,
+              arrangement: viewPrefs.collageGridArrangement,
+            ),
+      );
+    }
+    return _buildCardBody(context, arrangement: null);
+  }
+
+  Widget _buildCardBody(
+    BuildContext context, {
+    required CollageGridArrangement? arrangement,
+  }) {
     final product = widget.product;
     final large = widget.large;
     final selectionMode = widget.selectionMode;
@@ -456,9 +478,15 @@ class _ProductCardState extends State<_ProductCard> {
     final showPrimaryBorder =
         (selectionMode && widget.isSelected) ||
         (!selectionMode && widget.isFocused);
-    final isPagedAlbum = existingPaths.length > 9;
+    // Classic Telegram: page dots only for 10+ (9 per page). Arrangement
+    // path uses Settings N×N page slices when the flag is on.
     final albumPageCount =
-        isPagedAlbum ? (existingPaths.length + 8) ~/ 9 : 0;
+        arrangement != null
+            ? arrangement.pageCountFor(existingPaths.length)
+            : (existingPaths.length > 9
+                ? (existingPaths.length + 8) ~/ 9
+                : 0);
+    final isPagedAlbum = albumPageCount > 1;
     final albumPage =
         albumPageCount > 0
             ? _albumPage.clamp(0, albumPageCount - 1)
@@ -502,7 +530,16 @@ class _ProductCardState extends State<_ProductCard> {
             if (hasImages)
               ProductImageCollage(
                 imagePaths: existingPaths,
-                imageThumbhashes: product.imageThumbhashes,
+                imageThumbhashes: [
+                  for (final c in displayCells)
+                    product.thumbhashAt(c.index) ?? '',
+                ],
+                imageAspectRatios: [
+                  for (final c in displayCells)
+                    ProductImagePaths.thumbhashAspectRatio(
+                      product.thumbhashAt(c.index),
+                    ),
+                ],
                 tileBorderRadius: large ? 3.5 : 2.5,
                 selectionMode: widget.photoSelectionMode,
                 // Lock / out-of-stock only for visitor import selection.

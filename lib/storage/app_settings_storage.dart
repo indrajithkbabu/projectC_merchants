@@ -1,6 +1,7 @@
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:project_c/helper/app_log.dart';
 import 'package:project_c/helper/colors.dart';
+import 'package:project_c/models/collage_grid_arrangement.dart';
 import 'package:project_c/models/product_view_mode.dart';
 import 'package:project_c/models/store_privacy_mode.dart';
 
@@ -12,6 +13,7 @@ class AppSettingsStorage {
   static const _tag = 'AppSettingsStorage';
   static const _kAllowScreenshots = 'allow_screenshots';
   static const _kProductViewMode = 'product_view_mode';
+  static const _kCollageGridArrangement = 'collage_grid_arrangement';
   static const _kSearchRecents = 'search_recents_json';
   static const _kPreviewAll = 'product_details_preview_all';
   static const _kPreviewDetails = 'product_details_preview_details';
@@ -45,6 +47,22 @@ class AppSettingsStorage {
   Future<void> writeProductViewMode(ProductViewMode mode) async {
     await _storage.write(key: _kProductViewMode, value: mode.storageValue);
     AppLog.d(_tag, 'productViewMode=${mode.storageValue}');
+  }
+
+  /// Inside-card collage N×N. Defaults to 2×2.
+  Future<CollageGridArrangement> readCollageGridArrangement() async {
+    final raw = await _storage.read(key: _kCollageGridArrangement);
+    return CollageGridArrangementX.fromStorage(raw);
+  }
+
+  Future<void> writeCollageGridArrangement(
+    CollageGridArrangement arrangement,
+  ) async {
+    await _storage.write(
+      key: _kCollageGridArrangement,
+      value: arrangement.storageValue,
+    );
+    AppLog.d(_tag, 'collageGridArrangement=${arrangement.storageValue}');
   }
 
   /// Defaults to [AppAppearance.system] (follow device light/dark).

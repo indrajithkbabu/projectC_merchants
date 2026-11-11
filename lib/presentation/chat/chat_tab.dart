@@ -16,33 +16,82 @@ import 'package:project_c/presentation/chat/chat_widgets/chat_pieces.dart';
 
 /// Message tab: chats only. Product enquiries and new chats land here.
 class ChatTab extends StatelessWidget {
-  const ChatTab({super.key});
+  const ChatTab({
+    super.key,
+    this.activeProfileName,
+    this.storesOnly,
+    this.storeId,
+  });
+
+  /// Active actable profile display name for the "as {name}" subtitle.
+  final String? activeProfileName;
+
+  /// When set, overrides own-store detection for inbox scoping.
+  final bool? storesOnly;
+
+  /// Active store id when acting as a store profile.
+  final String? storeId;
 
   @override
   Widget build(BuildContext context) {
     final profile = context.watch<AccountProfileBloc>().state.profile;
-    final storeId = profile?.ownStore?.id.trim() ?? '';
-    final hasStore = storeId.isNotEmpty;
-    if (!hasStore) {
+    final resolvedStoreId =
+        (storeId?.trim().isNotEmpty == true)
+            ? storeId!.trim()
+            : (profile?.ownStore?.id.trim() ?? '');
+    final asStore = storesOnly == false
+        ? true
+        : (storesOnly == true
+            ? false
+            : resolvedStoreId.isNotEmpty);
+    final asName = (activeProfileName?.trim().isNotEmpty == true)
+        ? activeProfileName!.trim()
+        : (asStore
+            ? (profile?.ownStore?.name.trim() ?? '')
+            : (profile?.displayName.trim() ?? ''));
+
+    if (!asStore) {
       return _MessageBody(
         staffName: profile?.displayName.trim() ?? '',
-        storeName: 'My store',
+        storeName: asName.isEmpty ? 'Personal' : asName,
         catalog: const [],
         storesOnly: true,
+        asProfileName: asName,
       );
     }
+
+    StoreProfileBloc? storeBloc;
+    try {
+      storeBloc = context.read<StoreProfileBloc>();
+    } catch (_) {
+      storeBloc = null;
+    }
+    if (storeBloc == null) {
+      return _MessageBody(
+        staffName: profile?.displayName.trim() ?? '',
+        storeName: asName.isEmpty ? 'My store' : asName,
+        catalog: const [],
+        storesOnly: false,
+        asProfileName: asName,
+      );
+    }
+
     return BlocBuilder<StoreProfileBloc, StoreProfileState>(
       buildWhen: (prev, curr) => prev.productsForMedia != curr.productsForMedia,
       builder: (context, state) {
         final products = state.productsForMedia;
         return _MessageBody(
           staffName: profile?.displayName.trim() ?? '',
-          storeName: profile?.ownStore?.name.trim() ?? '',
+          storeName:
+              asName.isNotEmpty
+                  ? asName
+                  : (profile?.ownStore?.name.trim() ?? ''),
           catalog: [
             for (var i = 0; i < products.length && i < 60; i++)
               _catalogItem(products[i], i),
           ],
           storesOnly: false,
+          asProfileName: asName,
         );
       },
     );
@@ -67,12 +116,14 @@ class _MessageBody extends StatefulWidget {
     required this.storeName,
     required this.catalog,
     required this.storesOnly,
+    this.asProfileName,
   });
 
   final String staffName;
   final String storeName;
   final List<ChatProductRef> catalog;
   final bool storesOnly;
+  final String? asProfileName;
 
   @override
   State<_MessageBody> createState() => _MessageBodyState();
@@ -112,7 +163,7 @@ class _MessageBodyState extends State<_MessageBody> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     ShellTabTitleBar(
-                      title: 'Message',
+                      title: 'Chats',
                       trailing: IconButton(
                         tooltip: 'New chat',
                         onPressed: _newChat,
@@ -123,6 +174,16 @@ class _MessageBodyState extends State<_MessageBody> {
                         ),
                       ),
                     ),
+                    if ((widget.asProfileName ?? '').trim().isNotEmpty) ...[
+                      const SizedBox(height: 2),
+                      Text(
+                        'as ${widget.asProfileName!.trim()}',
+                        style: AppTextStyles.caption(
+                          fontSize: 13,
+                          color: AppColors.textSecondary,
+                        ),
+                      ),
+                    ],
                     const SizedBox(height: 12),
 
                     Material(

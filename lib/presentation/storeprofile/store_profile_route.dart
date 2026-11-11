@@ -15,6 +15,7 @@ import 'package:project_c/helper/colors.dart';
 import 'package:project_c/helper/import_qa.dart';
 import 'package:project_c/helper/product_gallery_picker.dart';
 import 'package:project_c/helper/product_image.dart';
+import 'package:project_c/helper/profile_switching_log.dart';
 import 'package:project_c/helper/text_styles.dart';
 import 'package:project_c/helper/cart_qa.dart';
 import 'package:project_c/helper/visitor_cart_batch.dart';
@@ -26,6 +27,8 @@ import 'package:project_c/models/product_view_mode.dart';
 import 'package:project_c/models/store_privacy_mode.dart';
 import 'package:project_c/models/store_product.dart';
 import 'package:project_c/navigation/routes.dart';
+import 'package:project_c/session/catalog_session.dart';
+import 'package:project_c/webservice/profile/profile_repository.dart';
 import 'package:project_c/presentation/chat/chat_mock_store.dart';
 import 'package:project_c/navigation/smooth_fade_page_route.dart';
 import 'package:project_c/navigation/telegram_photo_page_route.dart';
@@ -726,7 +729,41 @@ class _StoreProfileRouteState extends State<StoreProfileRoute> {
     context.read<StoreProfileBloc>().add(StoreProfileItemsDeleted(keys));
   }
 
+  /// Ownership label ≠ acting profile. Select `store:<id>` before manage/upload.
+  Future<bool> _ensureActingAsStoreProfile(BuildContext context) async {
+    final storeId =
+        context.read<StoreProfileBloc>().state.storeId.trim();
+    if (storeId.isEmpty || storeId == 'my_store' || storeId == 'other_store') {
+      return false;
+    }
+    final session = ServiceLocator.get<CatalogSession>();
+    final active = session.activeStoreId?.trim() ?? '';
+    if (active == storeId) return true;
+    final profileId = 'store:$storeId';
+    try {
+      ProfileSwitchingLog.d(
+        'PS-81',
+        'select store profile before manage profileId=$profileId '
+        '(was active=${session.activeProfileId ?? "(none)"})',
+      );
+      await ServiceLocator.get<ProfileRepository>().selectActiveProfile(
+        profileId,
+      );
+      return true;
+    } catch (e) {
+      if (!context.mounted) return false;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(CatalogErrorMapper.toUserMessage(e))),
+      );
+      return false;
+    }
+  }
+
   Future<void> _addProducts(BuildContext context) async {
+    // Relationship=owner shows Add; uploads still need X-Catalog-Profile store.
+    final ready = await _ensureActingAsStoreProfile(context);
+    if (!ready || !context.mounted) return;
+
     // Telegram gallery → WhatsApp compose (edit + title) → group form.
     // Compose back re-opens the sheet with the same selection (asset ids).
     List<String>? restoreAssetIds;

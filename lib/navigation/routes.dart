@@ -7,6 +7,7 @@ class Routes {
   static const String profileSetupRoute = 'profile_setup_route';
   static const String storeSetupRoute = 'store_setup_route';
   static const String addTeamRoute = 'add_team_route';
+  static const String staffListRoute = 'staff_list_route';
   static const String storeListingRoute = 'store_listing_route';
   static const String storeProfileRoute = 'store_profile_route';
   static const String storeChannelRoute = 'store_channel_route';

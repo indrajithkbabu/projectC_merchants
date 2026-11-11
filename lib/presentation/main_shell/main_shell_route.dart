@@ -3,30 +3,33 @@ import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:project_c/bloc/account_profile/account_profile_bloc.dart';
 import 'package:project_c/bloc/auth/auth_bloc.dart';
+import 'package:project_c/bloc/profile_context/profile_context_bloc.dart';
 import 'package:project_c/bloc/store_listing/store_listing_bloc.dart';
 import 'package:project_c/bloc/storeprofile/store_profile_bloc.dart';
 import 'package:project_c/helper/colors.dart';
 import 'package:project_c/helper/product_image.dart';
+import 'package:project_c/helper/profile_switching_log.dart';
 import 'package:project_c/helper/text_styles.dart';
 import 'package:project_c/helper/widgets/floating_bottom_nav_bar.dart';
 import 'package:project_c/helper/widgets/screen_wrapper.dart';
+import 'package:project_c/main/app.dart' show scaffoldMessengerKey;
+import 'package:project_c/models/catalog/profile_context.dart';
 import 'package:project_c/navigation/routes.dart';
+import 'package:project_c/presentation/main_shell/profile_sheets.dart';
 import 'package:project_c/presentation/main_shell/shell_nav.dart';
 import 'package:project_c/presentation/chat/chat_mock_store.dart';
 import 'package:project_c/presentation/chat/chat_tab.dart';
 import 'package:project_c/presentation/main_shell/tabs/my_store_tab.dart';
-import 'package:project_c/presentation/main_shell/tabs/profile_tab.dart';
-import 'package:project_c/presentation/main_shell/tabs/settings_tab.dart';
+import 'package:project_c/presentation/main_shell/tabs/personal_profile_tab.dart';
 import 'package:project_c/presentation/main_shell/tabs/wishlist_tab.dart';
 import 'package:project_c/presentation/store_listing/store_listing_route.dart';
 import 'package:project_c/services/store_products_prefetcher.dart';
 import 'package:project_c/services/wishlist_prefetcher.dart';
 
-/// Post-onboarding root: Telegram-style floating nav with Stores as home.
+/// Post-onboarding root: Stores · Message · Wishlist · Profile.
 ///
-/// No store yet: Stores · Message · Settings · Profile.
-/// Own store: Stores · Message · Wishlist · My store
-/// (Settings under My store).
+/// Profile tab is Personal-style when acting as Personal, otherwise the active
+/// store's My-store UI. Settings lives under the Profile hamburger sheet.
 class MainShellRoute extends StatefulWidget {
   const MainShellRoute({super.key});
 
@@ -35,17 +38,22 @@ class MainShellRoute extends StatefulWidget {
 }
 
 class _MainShellRouteState extends State<MainShellRoute> {
-  /// Always 0..3 for the visible tab set (IndexedStack index).
-  /// Slot 1 is Message for every account.
+  /// Always 0..3: Stores | Message | Wishlist | Profile.
   int _index = 0;
   int _wishlistRefreshSignal = 0;
   final GlobalKey<MyStoreTabState> _myStoreKey = GlobalKey<MyStoreTabState>();
   DateTime? _lastExitBackAt;
+  int? _handledSwitchToken;
+  String? _loggedProfileTabId;
 
   @override
   void initState() {
     super.initState();
     ShellNav.pending.addListener(_onShellNavRequest);
+    ProfileSwitchingLog.d(
+      'PS-10',
+      'MainShell tabs=Stores|Message|Wishlist|Profile (no Settings tab)',
+    );
   }
 
   @override
@@ -54,68 +62,72 @@ class _MainShellRouteState extends State<MainShellRoute> {
     super.dispose();
   }
 
-  static bool _hasOwnStore(AccountProfileState state) {
-    final id = state.profile?.ownStore?.id.trim() ?? '';
-    return id.isNotEmpty;
-  }
-
   void _onShellNavRequest() {
     final tab = ShellNav.takePending();
     if (tab == null || !mounted) return;
-    final hasStore = _hasOwnStore(context.read<AccountProfileBloc>().state);
     final index = switch (tab) {
       ShellNavTab.stores => 0,
       ShellNavTab.contacts => 1,
-      ShellNavTab.settings => hasStore ? null : 2,
-      ShellNavTab.profile => hasStore ? null : 3,
-      ShellNavTab.wishlist => hasStore ? 2 : null,
-      ShellNavTab.cart => hasStore ? 2 : null,
-      ShellNavTab.myStore => hasStore ? 3 : null,
       ShellNavTab.chats => 1,
+      ShellNavTab.wishlist => 2,
+      ShellNavTab.cart => 2,
+      ShellNavTab.profile => 3,
+      ShellNavTab.myStore => 3,
+      ShellNavTab.settings => null,
     };
     if (index == null) return;
-    _onTabChanged(context, index, hasStore: hasStore);
+    _onTabChanged(context, index);
   }
 
-  void _onTabChanged(
-    BuildContext context,
-    int value, {
-    required bool hasStore,
-  }) {
+  void _onTabChanged(BuildContext context, int value) {
     final sameTab = value == _index;
-    // Re-selecting Wishlist still quiet-refreshes so new likes appear.
-    if (sameTab && !(hasStore && value == 2)) return;
+    if (sameTab && value != 2) return;
     _lastExitBackAt = null;
     setState(() {
       _index = value;
-      if (hasStore && value == 2) {
+      if (value == 2) {
         _wishlistRefreshSignal++;
       }
     });
     if (value == 0) {
       context.read<StoreListingBloc>().add(const StoreListingRefreshed());
-    } else if (!hasStore && (value == 2 || value == 3)) {
+    } else if (value == 3) {
       context.read<AccountProfileBloc>().add(const AccountProfileRefreshed());
-    } else if (hasStore && value == 3) {
-      // Quiet follow-request preview refresh — no grid wipe.
-      final bloc = context.read<StoreProfileBloc>();
-      bloc.add(const StoreProfileLoadFollowRequestPreviews());
+      context.read<ProfileContextBloc>().add(
+        const ProfileContextRefreshed(quiet: true),
+      );
+      final profileCtx = context.read<ProfileContextBloc>().state;
+      final storeId = profileCtx.activeStoreId?.trim() ?? '';
+      // Follow-request inbox is owner-only; staff must not hit that API.
+      if (storeId.isNotEmpty && profileCtx.isOwner) {
+        try {
+          context.read<StoreProfileBloc>().add(
+            const StoreProfileLoadFollowRequestPreviews(),
+          );
+        } catch (_) {
+          // Store bloc may not exist while Personal is active.
+        }
+      }
     }
   }
 
-  /// Shell is root: other tabs → Stores; two backs on Stores exits the app.
-  /// Nested routes above the shell still pop normally.
-  void _handleShellBack({required bool hasStore}) {
-    if (hasStore && (_myStoreKey.currentState?.consumeSystemBack() ?? false)) {
+  void _handleShellBack({required bool actingAsStore}) {
+    if (actingAsStore &&
+        (_myStoreKey.currentState?.consumeSystemBack() ?? false)) {
       return;
     }
     if (_index != 0) {
-      _onTabChanged(context, 0, hasStore: hasStore);
+      ProfileSwitchingLog.d(
+        'PS-83',
+        'shell back from tab=$_index → Stores',
+      );
+      _onTabChanged(context, 0);
       return;
     }
     final now = DateTime.now();
     if (_lastExitBackAt != null &&
         now.difference(_lastExitBackAt!) < const Duration(seconds: 2)) {
+      ProfileSwitchingLog.d('PS-83', 'shell double-back → exit');
       SystemNavigator.pop();
       return;
     }
@@ -131,48 +143,13 @@ class _MainShellRouteState extends State<MainShellRoute> {
   }
 
   List<FloatingNavItem> _navItems({
-    required bool hasStore,
-    required String profileInitials,
-    required String profileImageUrl,
-    required String storeCoverUrl,
-    required bool profileOrMyStoreSelected,
+    required ActableProfile? active,
+    required bool profileSelected,
+    required bool showProfileDot,
     required int chatUnread,
   }) {
-    if (!hasStore) {
-      return [
-        const FloatingNavItem(
-          tab: FloatingNavTab.stores,
-          label: 'Stores',
-          icon: Icons.home_outlined,
-          activeIcon: Icons.home_rounded,
-        ),
-        FloatingNavItem(
-          tab: FloatingNavTab.contacts,
-          label: 'Message',
-          icon: Icons.chat_bubble_outline_rounded,
-          activeIcon: Icons.chat_bubble_rounded,
-          badgeCount: chatUnread,
-        ),
-        const FloatingNavItem(
-          tab: FloatingNavTab.settings,
-          label: 'Settings',
-          icon: Icons.settings_outlined,
-          activeIcon: Icons.settings_rounded,
-        ),
-        FloatingNavItem(
-          tab: FloatingNavTab.profile,
-          label: 'Profile',
-          icon: Icons.account_circle_outlined,
-          avatar: _NavProfileAvatar(
-            key: const ValueKey('shell-nav-profile-avatar'),
-            initials: profileInitials,
-            imageUrl: profileImageUrl,
-            selected: profileOrMyStoreSelected,
-          ),
-        ),
-      ];
-    }
-
+    final initials = active?.displayInitials ?? 'Me';
+    final imageUrl = active?.effectiveAvatarUrl.trim() ?? '';
     return [
       const FloatingNavItem(
         tab: FloatingNavTab.stores,
@@ -194,21 +171,59 @@ class _MainShellRouteState extends State<MainShellRoute> {
         activeIcon: Icons.favorite_rounded,
       ),
       FloatingNavItem(
-        tab: FloatingNavTab.myStore,
-        label: 'My store',
-        icon: Icons.store_mall_directory_outlined,
-        activeIcon: Icons.store_mall_directory_rounded,
-        avatar:
-            storeCoverUrl.isEmpty
-                ? null
-                : _NavProfileAvatar(
-                  key: const ValueKey('shell-nav-my-store-avatar'),
-                  initials: 'S',
-                  imageUrl: storeCoverUrl,
-                  selected: profileOrMyStoreSelected,
-                ),
+        tab: FloatingNavTab.profile,
+        label: 'Profile',
+        icon: Icons.account_circle_outlined,
+        showDot: showProfileDot,
+        avatar: _NavProfileAvatar(
+          key: const ValueKey('shell-nav-profile-avatar'),
+          initials: initials,
+          imageUrl: imageUrl,
+          selected: profileSelected,
+        ),
       ),
     ];
+  }
+
+  Widget _profileTab(ProfileContextState ctx) {
+    final active = ctx.activeProfile;
+    final activeId = active?.id ?? '(none)';
+    if (_loggedProfileTabId != activeId) {
+      _loggedProfileTabId = activeId;
+      if (active != null && active.isStore) {
+        final canManageStore =
+            (ctx.permissions.manageStore || ctx.permissions.manageProducts) &&
+            !active.isStaff;
+        ProfileSwitchingLog.d(
+          'PS-13/34/60/61',
+          'Profile tab store=$activeId role=${active.role.name} '
+          'badge=${active.isStaff ? "Staff" : (active.isOwner ? "Owner" : "?")} '
+          'canManageStore=$canManageStore '
+          'inviteDot=${ctx.hasOtherUnreadOrInvite}',
+        );
+      } else {
+        ProfileSwitchingLog.d(
+          'PS-11/13/24',
+          'Profile tab Personal active=$activeId '
+          'badge=Personal inviteDot=${ctx.hasOtherUnreadOrInvite}',
+        );
+      }
+    }
+    if (active != null && active.isStore) {
+      final canManage =
+          ctx.permissions.manageStore || ctx.permissions.manageProducts;
+      return MyStoreTab(
+        key: _myStoreKey,
+        onOpenMenu: () => showProfileHamburgerSheet(context),
+        onOpenSwitcher: () => showProfileSwitcherSheet(context),
+        showSwitcherDot: ctx.hasOtherUnreadOrInvite,
+        roleBadge: active.isStaff
+            ? 'Staff'
+            : (active.isOwner ? 'Owner' : null),
+        canManageStore: canManage && !active.isStaff,
+      );
+    }
+    return const PersonalProfileTab();
   }
 
   @override
@@ -244,30 +259,95 @@ class _MainShellRouteState extends State<MainShellRoute> {
             ).pushNamedAndRemoveUntil(Routes.authPhoneRoute, (route) => false);
           },
         ),
+        BlocListener<ProfileContextBloc, ProfileContextState>(
+          listenWhen:
+              (prev, curr) =>
+                  curr.toastMessage != null &&
+                  curr.toastMessage != prev.toastMessage,
+          listener: (context, state) {
+            final message = state.toastMessage?.trim();
+            if (message == null || message.isEmpty) return;
+            scaffoldMessengerKey.currentState?.showSnackBar(
+              SnackBar(content: Text(message)),
+            );
+            context.read<ProfileContextBloc>().add(
+              const ProfileContextClearToast(),
+            );
+          },
+        ),
+        BlocListener<ProfileContextBloc, ProfileContextState>(
+          listenWhen:
+              (prev, curr) =>
+                  curr.errorMessage != null &&
+                  curr.errorMessage != prev.errorMessage,
+          listener: (context, state) {
+            final message = state.errorMessage?.trim();
+            if (message == null || message.isEmpty) return;
+            scaffoldMessengerKey.currentState?.showSnackBar(
+              SnackBar(content: Text(message)),
+            );
+            context.read<ProfileContextBloc>().add(
+              const ProfileContextClearError(),
+            );
+          },
+        ),
+        BlocListener<ProfileContextBloc, ProfileContextState>(
+          listenWhen:
+              (prev, curr) =>
+                  curr.switchAnimationToken != null &&
+                  curr.switchAnimationToken != prev.switchAnimationToken,
+          listener: (context, state) async {
+            final token = state.switchAnimationToken;
+            if (token == null || token == _handledSwitchToken) return;
+            _handledSwitchToken = token;
+            final target = state.switchTarget ?? state.activeProfile;
+            if (target == null) {
+              context.read<ProfileContextBloc>().add(
+                const ProfileContextClearSwitchAnimation(),
+              );
+              return;
+            }
+            ProfileSwitchingLog.d(
+              'PS-22/23',
+              'switch moment ~500ms target=${target.id} '
+              'name=${target.name} role=${target.role.name}',
+            );
+            // Fire-and-forget overlay; close after ~500ms (UI 2.2).
+            // ignore: unawaited_futures
+            showGeneralDialog<void>(
+              context: context,
+              barrierDismissible: false,
+              barrierColor: Colors.black,
+              transitionDuration: const Duration(milliseconds: 160),
+              pageBuilder: (dialogContext, anim, secondary) {
+                return _SwitchMomentOverlay(profile: target);
+              },
+            );
+            await Future<void>.delayed(const Duration(milliseconds: 520));
+            if (context.mounted) {
+              Navigator.of(context, rootNavigator: true).maybePop();
+              context.read<ProfileContextBloc>().add(
+                const ProfileContextClearSwitchAnimation(),
+              );
+            }
+          },
+        ),
       ],
-      child: BlocBuilder<AccountProfileBloc, AccountProfileState>(
+      child: BlocBuilder<ProfileContextBloc, ProfileContextState>(
         buildWhen:
             (prev, curr) =>
-                prev.profile?.ownStore?.id != curr.profile?.ownStore?.id ||
-                prev.profile?.displayName != curr.profile?.displayName ||
-                prev.profile?.firstName != curr.profile?.firstName ||
-                prev.profile?.effectiveProfileImageUrl !=
-                    curr.profile?.effectiveProfileImageUrl ||
-                prev.profile?.ownStore?.coverImageUrl !=
-                    curr.profile?.ownStore?.coverImageUrl ||
-                prev.profile?.ownStore?.name != curr.profile?.ownStore?.name,
-        builder: (context, profileState) {
-          final hasStore = _hasOwnStore(profileState);
-          final ownStore = profileState.profile?.ownStore;
-          final storeId = ownStore?.id.trim() ?? '';
-          final storeName = ownStore?.name.trim() ?? 'My store';
-          final storeLink = ownStore?.storeLink.trim() ?? '';
-          final storeCover = ownStore?.coverImageUrl.trim() ?? '';
-          final initials = _profileInitials(profileState);
-          final imageUrl =
-              profileState.profile?.effectiveProfileImageUrl.trim() ?? '';
-
-          // Clamp index if tab set changed (e.g. store created mid-session).
+                prev.activeProfile?.id != curr.activeProfile?.id ||
+                prev.activeProfile?.effectiveAvatarUrl !=
+                    curr.activeProfile?.effectiveAvatarUrl ||
+                prev.activeProfile?.name != curr.activeProfile?.name ||
+                prev.hasOtherUnreadOrInvite != curr.hasOtherUnreadOrInvite ||
+                prev.permissions != curr.permissions,
+        builder: (context, ctx) {
+          final active = ctx.activeProfile;
+          final actingAsStore = active?.isStore == true;
+          final storeId = ctx.activeStoreId?.trim() ?? '';
+          final storeName = active?.name.trim() ?? 'My store';
+          final storeCover = active?.effectiveAvatarUrl.trim() ?? '';
           final safeIndex = _index.clamp(0, 3);
 
           Widget body = ScreenWrapper(
@@ -288,15 +368,13 @@ class _MainShellRouteState extends State<MainShellRoute> {
                           setState(() => _index = 3);
                         },
                       ),
-                      const ChatTab(),
-                      if (hasStore)
-                        WishlistTab(refreshSignal: _wishlistRefreshSignal)
-                      else
-                        const SettingsTab(),
-                      if (hasStore)
-                        MyStoreTab(key: _myStoreKey)
-                      else
-                        const ProfileTab(),
+                      ChatTab(
+                        activeProfileName: active?.name,
+                        storesOnly: !actingAsStore,
+                        storeId: storeId,
+                      ),
+                      WishlistTab(refreshSignal: _wishlistRefreshSignal),
+                      _profileTab(ctx),
                     ],
                   ),
                 ),
@@ -325,19 +403,21 @@ class _MainShellRouteState extends State<MainShellRoute> {
                                 return FloatingBottomNavBar(
                                   currentIndex: safeIndex,
                                   onChanged:
-                                      (value) => _onTabChanged(
+                                      (value) => _onTabChanged(context, value),
+                                  onLongPress: (value) {
+                                    if (value == 3) {
+                                      showProfileSwitcherSheet(
                                         context,
-                                        value,
-                                        hasStore: hasStore,
-                                      ),
+                                        source: 'longPress',
+                                      );
+                                    }
+                                  },
                                   items: _navItems(
-                                    hasStore: hasStore,
-                                    profileInitials: initials,
-                                    profileImageUrl: imageUrl,
-                                    storeCoverUrl: storeCover,
-                                    profileOrMyStoreSelected: safeIndex == 3,
+                                    active: active,
+                                    profileSelected: safeIndex == 3,
+                                    showProfileDot: ctx.hasOtherUnreadOrInvite,
                                     chatUnread: ChatMockStore.instance
-                                        .inbox(storesOnly: !hasStore)
+                                        .inbox(storesOnly: !actingAsStore)
                                         .fold<int>(
                                           0,
                                           (sum, thread) =>
@@ -361,28 +441,28 @@ class _MainShellRouteState extends State<MainShellRoute> {
             canPop: false,
             onPopInvokedWithResult: (didPop, _) {
               if (didPop) return;
-              _handleShellBack(hasStore: hasStore);
+              _handleShellBack(actingAsStore: actingAsStore);
             },
             child: body,
           );
 
-          if (!hasStore || storeId.isEmpty) return body;
+          if (!actingAsStore || storeId.isEmpty) return body;
 
           return BlocProvider(
-            key: ValueKey('shell-own-store:$storeId'),
+            key: ValueKey('shell-active-store:$storeId'),
             create: (_) {
               StoreProductsPrefetcher.instance.prefetch(
                 storeId,
                 coverImageUrl: storeCover,
               );
-              // Ensure wishlist is warm even if auth raced ahead of store create.
               WishlistPrefetcher.instance.prefetch();
+              // Always host as "own" shell profile; gate CTAs via permissions.
               return StoreProfileBloc(
                 storeName: storeName.isEmpty ? 'My store' : storeName,
                 members: const [],
                 isOwnStore: true,
                 storeId: storeId,
-                storeLink: storeLink.isEmpty ? null : storeLink,
+                storeLink: active?.slug,
                 coverImageUrl: storeCover.isEmpty ? null : storeCover,
               );
             },
@@ -392,25 +472,59 @@ class _MainShellRouteState extends State<MainShellRoute> {
       ),
     );
   }
+}
 
-  String _profileInitials(AccountProfileState state) {
-    final profile = state.profile;
-    final first = profile?.firstName?.trim() ?? '';
-    final last = profile?.lastName?.trim() ?? '';
-    if (first.isNotEmpty && last.isNotEmpty) {
-      return '${first[0]}${last[0]}'.toUpperCase();
-    }
-    if (first.isNotEmpty) {
-      return first.substring(0, first.length.clamp(0, 2)).toUpperCase();
-    }
-    return 'Me';
+class _SwitchMomentOverlay extends StatelessWidget {
+  const _SwitchMomentOverlay({required this.profile});
+
+  final ActableProfile profile;
+
+  @override
+  Widget build(BuildContext context) {
+    final url = profile.effectiveAvatarUrl.trim();
+    return Material(
+      color: Colors.black,
+      child: Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (url.isNotEmpty)
+              CatalogNetworkAvatar(
+                url: url,
+                size: 88,
+                backgroundColor: AppColors.surfaceSecondary,
+              )
+            else
+              CircleAvatar(
+                radius: 44,
+                backgroundColor: AppColors.primary.withValues(alpha: 0.85),
+                child: Text(
+                  profile.displayInitials,
+                  style: AppTextStyles.headline(
+                    fontSize: 28,
+                    fontWeight: FontWeight.w700,
+                    color: AppColors.textOnPrimary,
+                  ),
+                ),
+              ),
+            const SizedBox(height: 16),
+            Text(
+              profile.name,
+              style: AppTextStyles.headline(
+                fontSize: 20,
+                fontWeight: FontWeight.w700,
+                color: Colors.white,
+              ),
+              textAlign: TextAlign.center,
+            ),
+          ],
+        ),
+      ),
+    );
   }
 }
 
-/// Compact Profile / My-store nav avatar: photo when uploaded, otherwise initials.
-///
-/// Stateful so disk probe / decode can finish without flashing initials→photo
-/// on cold reopen (common when shell mounts before ImageCache is ready).
+/// Compact Profile nav avatar: photo when uploaded, otherwise initials.
 class _NavProfileAvatar extends StatefulWidget {
   const _NavProfileAvatar({
     super.key,
@@ -428,10 +542,7 @@ class _NavProfileAvatar extends StatefulWidget {
 }
 
 class _NavProfileAvatarState extends State<_NavProfileAvatar> {
-  /// Last URL we successfully warmed for paint.
   String _readyUrl = '';
-
-  /// Keep showing the previous photo while a new URL warms (no initials flash).
   String _displayUrl = '';
 
   @override
@@ -464,7 +575,6 @@ class _NavProfileAvatarState extends State<_NavProfileAvatar> {
         _readyUrl = url;
         _displayUrl = url;
       });
-      // Keep memory decode fresh without blocking paint.
       // ignore: unawaited_futures
       CatalogImageCache.warmAvatars([url]);
       return;
@@ -493,7 +603,6 @@ class _NavProfileAvatarState extends State<_NavProfileAvatar> {
     );
 
     final target = widget.imageUrl.trim();
-    // Prefer ready target; else keep last photo; never flash initials over a URL.
     final paintUrl =
         (_readyUrl == target && target.isNotEmpty)
             ? target
@@ -501,17 +610,14 @@ class _NavProfileAvatarState extends State<_NavProfileAvatar> {
 
     if (paintUrl.isNotEmpty) {
       return CatalogNetworkAvatar(
-        // Stable identity across selected/unselected rebuilds.
         key: ValueKey('nav-avatar:$paintUrl'),
         url: paintUrl,
         size: 22,
         backgroundColor: bg,
-        // No initials fallback — avoids initials→photo flicker on reopen.
       );
     }
 
     if (target.isNotEmpty) {
-      // URL known but still warming — solid circle, not initials.
       return Container(
         width: 22,
         height: 22,

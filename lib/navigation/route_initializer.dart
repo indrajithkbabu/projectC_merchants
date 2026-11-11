@@ -9,6 +9,7 @@ import 'package:project_c/bloc/import_requests/import_requests_bloc.dart';
 import 'package:project_c/bloc/onboarding/onboarding_bloc.dart';
 import 'package:project_c/bloc/product_details/product_details_bloc.dart';
 import 'package:project_c/bloc/profile/profile_bloc.dart';
+import 'package:project_c/bloc/profile_context/profile_context_bloc.dart';
 import 'package:project_c/bloc/store_gallery/store_gallery_bloc.dart';
 import 'package:project_c/bloc/store_import/store_import_bloc.dart';
 import 'package:project_c/bloc/store_listing/store_listing_bloc.dart';
@@ -21,6 +22,7 @@ import 'package:project_c/models/catalog/catalog_product_models.dart';
 import 'package:project_c/models/pending_product_upload.dart';
 import 'package:project_c/models/store_channel.dart';
 import 'package:project_c/models/product_details_feed_item.dart';
+import 'package:project_c/models/store_privacy_mode.dart';
 import 'package:project_c/models/store_product.dart';
 import 'package:project_c/navigation/routes.dart';
 import 'package:project_c/navigation/smooth_fade_page_route.dart';
@@ -68,6 +70,7 @@ import 'package:project_c/presentation/store_setup/store_setup_route.dart';
 import 'package:project_c/presentation/storeprofile/collection_browse_route.dart';
 import 'package:project_c/presentation/storeprofile/store_channel_route.dart';
 import 'package:project_c/presentation/storeprofile/store_profile_route.dart';
+import 'package:project_c/presentation/staff/staff_list_route.dart';
 import 'package:project_c/presentation/team/add_team_route.dart';
 
 PageRoute? onGenerateRoutes(RouteSettings settings) {
@@ -87,6 +90,8 @@ PageRoute? onGenerateRoutes(RouteSettings settings) {
       return _storeSetupRoute(settings);
     case Routes.addTeamRoute:
       return _addTeamRoute(settings);
+    case Routes.staffListRoute:
+      return _staffListRoute(settings);
     case Routes.storeListingRoute:
       return _storeListingRoute(settings);
     case Routes.storeProfileRoute:
@@ -247,6 +252,21 @@ PageRoute? _addTeamRoute(RouteSettings settings) {
   );
 }
 
+PageRoute? _staffListRoute(RouteSettings settings) {
+  final args = settings.arguments;
+  final map = args is Map ? args : const <dynamic, dynamic>{};
+  final storeId =
+      map['storeId'] is String ? (map['storeId'] as String).trim() : '';
+  final storeName =
+      map['storeName'] is String ? (map['storeName'] as String).trim() : 'Store';
+  if (storeId.isEmpty) return null;
+  return _buildAnimatedRoute(
+    settings: settings,
+    builder:
+        (_) => StaffListRoute(storeId: storeId, storeName: storeName),
+  );
+}
+
 PageRoute? _inviteFriendsRoute(RouteSettings settings) {
   final args = settings.arguments;
   final existing =
@@ -277,14 +297,24 @@ PageRoute? _settingsRoute(RouteSettings settings) {
       map['accountProfileBloc'] is AccountProfileBloc
           ? map['accountProfileBloc'] as AccountProfileBloc
           : null;
+  final profileCtx =
+      map['profileContextBloc'] is ProfileContextBloc
+          ? map['profileContextBloc'] as ProfileContextBloc
+          : null;
 
   return _buildAnimatedRoute(
     settings: settings,
     builder: (context) {
-      final child = ScreenWrapper(
+      Widget child = ScreenWrapper(
         backgroundColor: AppColors.background,
         child: const SettingsTab(showBack: true),
       );
+      if (profileCtx != null) {
+        child = BlocProvider<ProfileContextBloc>.value(
+          value: profileCtx,
+          child: child,
+        );
+      }
       if (existingBloc != null) {
         return BlocProvider<AccountProfileBloc>.value(
           value: existingBloc,
@@ -502,6 +532,10 @@ PageRoute? _storeListingRoute(RouteSettings settings) {
             BlocProvider(create: (_) => StoreListingBloc()),
             BlocProvider(create: (_) => ContactsBloc()),
             BlocProvider(create: (_) => AccountProfileBloc()),
+            BlocProvider(
+              create: (_) => ProfileContextBloc()
+                ..add(const ProfileContextStarted()),
+            ),
           ],
           child: const MainShellRoute(),
         ),
@@ -519,6 +553,7 @@ PageRoute? _storeProfileRoute(RouteSettings settings) {
 
   final bool isOwnStore;
   if (channel != null) {
+    // Management chrome (Add products) only for owned stores.
     isOwnStore = channel.isOwn;
   } else if (args is Map && args['isOwnStore'] is bool) {
     isOwnStore = args['isOwnStore'] as bool;
@@ -560,6 +595,14 @@ PageRoute? _storeProfileRoute(RouteSettings settings) {
       args is Map && args['focusProductId'] is String
           ? (args['focusProductId'] as String).trim()
           : '';
+  final initialFollow =
+      channel == null
+          ? null
+          : (channel.isSelfOrMember
+              ? (channel.followStatus == StoreFollowStatus.none
+                  ? StoreFollowStatus.self
+                  : channel.followStatus)
+              : channel.followStatus);
 
   return _buildAnimatedRoute(
     settings: settings,
@@ -576,6 +619,7 @@ PageRoute? _storeProfileRoute(RouteSettings settings) {
                 storeLink: storeLink,
                 coverImageUrl: channel?.coverImageUrl,
                 avatarColor: avatarColor,
+                initialFollowStatus: initialFollow,
               ),
           child: StoreProfileRoute(
             focusProductId: focusProductId.isEmpty ? null : focusProductId,

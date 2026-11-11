@@ -2,11 +2,20 @@ import 'dart:io';
 
 import 'package:project_c/helper/app_log.dart';
 import 'package:project_c/models/catalog/catalog_profile.dart';
+import 'package:project_c/models/catalog/profile_context.dart';
 import 'package:project_c/session/catalog_session.dart';
 import 'package:project_c/webservice/profile/profile_request.dart';
 
 abstract class ProfileRepository {
   Future<CatalogProfile> fetchMe();
+
+  Future<ProfileBootstrap> fetchProfiles();
+
+  Future<ProfileBootstrap> selectActiveProfile(String profileId);
+
+  Future<PendingInvitation> acceptInvitation(String invitationId);
+
+  Future<PendingInvitation> declineInvitation(String invitationId);
 
   Future<CatalogProfile> updateNames({
     required String firstName,
@@ -43,11 +52,45 @@ class ProfileRepositoryImpl implements ProfileRepository {
     return _session.profile ?? profile;
   }
 
+  Future<ProfileBootstrap> _commitBootstrap(ProfileBootstrap bootstrap) async {
+    await _session.applyBootstrap(bootstrap);
+    return _session.bootstrap ?? bootstrap;
+  }
+
   @override
   Future<CatalogProfile> fetchMe() async {
-    AppLog.d(_tag, 'fetchMe');
-    final profile = await _request.fetchMe();
-    return _commit(profile);
+    AppLog.d(_tag, 'fetchMe (with bootstrap when present)');
+    final result = await _request.fetchMeWithBootstrap();
+    if (result.bootstrap != null) {
+      await _commitBootstrap(result.bootstrap!);
+    }
+    return _commit(result.profile);
+  }
+
+  @override
+  Future<ProfileBootstrap> fetchProfiles() async {
+    AppLog.d(_tag, 'fetchProfiles');
+    final bootstrap = await _request.fetchProfiles();
+    return _commitBootstrap(bootstrap);
+  }
+
+  @override
+  Future<ProfileBootstrap> selectActiveProfile(String profileId) async {
+    AppLog.d(_tag, 'selectActiveProfile $profileId');
+    final bootstrap = await _request.selectActiveProfile(profileId);
+    return _commitBootstrap(bootstrap);
+  }
+
+  @override
+  Future<PendingInvitation> acceptInvitation(String invitationId) async {
+    AppLog.d(_tag, 'acceptInvitation $invitationId');
+    return _request.acceptInvitation(invitationId);
+  }
+
+  @override
+  Future<PendingInvitation> declineInvitation(String invitationId) async {
+    AppLog.d(_tag, 'declineInvitation $invitationId');
+    return _request.declineInvitation(invitationId);
   }
 
   @override
@@ -104,8 +147,14 @@ class ProfileRepositoryImpl implements ProfileRepository {
 
   @override
   Future<CatalogProfile> skipStoreOnboarding() async {
-    AppLog.d(_tag, 'skipStoreOnboarding');
-    final profile = await _request.skipStoreOnboarding();
+    final personalId = _session.personalProfileId?.trim() ?? '';
+    if (personalId.isEmpty) {
+      throw StateError('Personal profile id required to skip store onboarding');
+    }
+    AppLog.d(_tag, 'skipStoreOnboarding personal=$personalId');
+    final profile = await _request.skipStoreOnboarding(
+      personalProfileId: personalId,
+    );
     return _commit(profile);
   }
 
