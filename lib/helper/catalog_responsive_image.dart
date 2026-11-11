@@ -511,7 +511,7 @@ class CatalogResponsiveImage {
     return CatalogImageRole.grid;
   }
 
-  /// Row plan for 5–9 collages — mirrors [ProductImageCollage] `_rowPlan`.
+  /// Row plan for 5–9 Telegram collages — mirrors `ProductImageCollage`.
   static List<int> _collageRowPlan(int count) {
     return switch (count) {
       5 => const [2, 3],
@@ -537,7 +537,8 @@ class CatalogResponsiveImage {
 
   /// Per-cell Group/Single collage quality (all three CDN tiers).
   ///
-  /// Layouts must stay in sync with `ProductImageCollage`:
+  /// Classic Telegram layouts (active). Settings N×N path is disabled —
+  /// see `kEnableCollageImageArrangement` in collage_grid_arrangement.dart.
   /// - **1** full card → [CatalogImageRole.zoom] (master)
   /// - **2** equal halves → [CatalogImageRole.detail] (`detailUrl`)
   /// - **3–4** left hero → zoom; stacked right → [CatalogImageRole.grid]
@@ -566,7 +567,6 @@ class CatalogResponsiveImage {
     for (final rowSize in plan) {
       for (var c = 0; c < rowSize; c++) {
         if (i == imageIndex) {
-          // 2-col rows are medium tiles; 3-col rows are small.
           return rowSize <= 2
               ? CatalogImageRole.detail
               : CatalogImageRole.grid;

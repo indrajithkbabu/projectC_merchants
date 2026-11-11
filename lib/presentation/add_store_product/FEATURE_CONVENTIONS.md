@@ -81,10 +81,13 @@ This file defines what to follow for UI and logic inside `lib/presentation/add_s
   optional **stone scale** (0.1g); Range mode: tap inactive ring or net
   min/max readout to switch end; multi **product name** chips (+ / Return /
   comma / backspace; metal/category chips have no x); **crop** icon +
-  add/delete; send. Photo has **no** pinch-zoom. Keyboard does **not**
-  resize the photo (`resizeToAvoidBottomInset: false`). Payload: same
-  fields — `tags[]` may include spaces; no new BE keys. All-scope appends
-  inherit current draft. Do not send **edit** (`mode: edit`) through compose.
+  add/delete; send. Photo has **no** pinch-zoom. Hero fit: **portrait /
+  unknown → `BoxFit.cover`** (edge fill); **landscape → `BoxFit.contain`**
+  so the full frame is visible on the black canvas (no zoom-crop). Thumb
+  strip stays cover. Keyboard does **not** resize the photo
+  (`resizeToAvoidBottomInset: false`). Payload: same fields — `tags[]` may
+  include spaces; no new BE keys. All-scope appends inherit current draft.
+  Do not send **edit** (`mode: edit`) through compose.
 - Gallery continue → compose → `add_product_group_route` with
   `composeOverlay: true`, `groupSpec`, `tags`, `initialTitle` (derived), plus
   `stockStatus` / `mtoDays` / `isLocked`. Group route skips the old form UI and

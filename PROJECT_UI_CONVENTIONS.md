@@ -104,25 +104,24 @@ Common picks:
   - `lib/navigation/route_initializer.dart`
 - Current route flow (auth onboarding scope):
   - `onboarding_route` -> `auth_phone_route` -> `auth_otp_route` -> `profile_setup_route` -> `store_listing_route` (main shell with floating nav)
-  - Shell tabs depend on own-store: **no store** → Stores / Contacts / Settings / Profile; **own store** → Stores / Contacts / Wishlist / My store (Settings via My store gear → `settings_route`)
-  - Store creation is deferred: Profile tab (or Contacts empty CTA) -> `store_setup_route` -> `add_team_route` -> `store_listing_route`
+  - Shell tabs are unified for all signed-in users: **Stores / Message / Wishlist / Profile**. Profile tab content follows `activeProfile` (Personal Instagram-style vs active store My-store). Profile ☰ opens **Settings** for all roles; Create store / Staff / Leave / Delete store / Log out / Delete account live on Settings (role-gated). Profile switcher opens from name chevron or long-press on the Profile tab avatar.
+  - Store creation: Settings → Create a store (or switcher) → `store_setup_route` → select `store:<id>` → Profile as Owner (optional `add_team_route` / Staff list)
   - Contacts tab: Invite Friends → `invite_friends_route` (Share + phone contacts); default list shows peer stores only; search shows matching stores then invite contacts
   - Contacts invite / Share Catly uses WhatsApp copy `Hey, I'm using Catly… Download it here: https://…`
   - After store create, home `/home` warm cache is invalidated so the new store appears on Stores without a manual refresh
   - From store profile Discover/visitor compact header: `store_channel_route` (Telegram-style store info + Media/Group/Gallery); `store_gallery_route` still used for dedicated gallery edits; app-bar search icon → `store_search_route`
   - Stores home search field → `global_search_route` (Discover / suggestions / results / filters via catalog search APIs); Sort & Filter → `search_filters_route`
   - Own store profile: inbox badge → `store_import_requests_route` (accept / reject incoming; outgoing waits on source)
-  - Own-store shell: My store gear → `settings_route` (Appearance, View products, screenshots, logout/delete, **Account privacy**, **Import requests**). Profile tab (no-store only) still hosts Create store.
+  - Profile ☰ / My store gear → `settings_route` (role actions + Appearance, View products, screenshots, logout/delete; Owner also **Account privacy**). (Image arrangement N×N collage is disabled — see `kEnableCollageImageArrangement`.)
   - Stores home (own store): notification icon → `activity_route`. Store profile (pushed) is Discover-only for owner and visitor (no owner bottom nav). Shell Wishlist + My store tabs; product-details like snack **View** → shell Wishlist via `ShellNav` (quiet refresh).
   - From another store profile (only if viewer has own store): long-press photos → Import opens Quick upload prefilled (`quick_import_flow`). No visitor app-bar download/import icon beside search (browse = search only).
   - `country_picker_route` is opened from phone screen.
 
 ## Floating bottom navigation
 - Post-auth home is `MainShellRoute` with Telegram-style floating capsule (`FloatingBottomNavBar`).
-- Tab order:
-  - **No own store:** Stores · Contacts · Settings · Profile
-  - **Own store:** Stores · Contacts · Wishlist (heart) · My store — Settings moves under My store toolbar gear (`settings_route`). Wishlist + My store reuse the same widgets/logic as store-profile owner tabs.
-- Own-store shell hosts a long-lived `StoreProfileBloc` (cache-first + prefetch) so My store does not cold-shimmer on every visit.
+- Tab order (always): Stores · Message · Wishlist · Profile.
+- Profile tab avatar always reflects the **active** profile (Personal or store). Long-press opens the profile switcher.
+- When `activeProfile` is a store, shell hosts a long-lived `StoreProfileBloc` for that store so Profile does not cold-shimmer on every visit.
 - Content must reserve space with `FloatingBottomNavBar.reservedHeight` inside
   scrollables/empty states (not outer tab padding that leaves a blank band);
   shell uses `extendBodyBehindBottom: true`.

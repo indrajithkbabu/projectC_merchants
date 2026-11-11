@@ -15,6 +15,7 @@ class AuthRequest {
       body: {'phone': phone},
       requiresAuth: false,
       skipAuthRetry: true,
+      omitProfileHeader: true,
     );
     return OtpChallenge.fromJson(json ?? const {});
   }
@@ -23,6 +24,7 @@ class AuthRequest {
     required String phone,
     required String challengeId,
     required String code,
+    required String deviceId,
   }) async {
     final json = await _api.sendJson(
       method: HttpMethod.post,
@@ -31,9 +33,14 @@ class AuthRequest {
         'phone': phone,
         'challengeId': challengeId,
         'code': code,
+        'deviceId': deviceId,
       },
       requiresAuth: false,
       skipAuthRetry: true,
+      omitProfileHeader: true,
+      extraHeaders: {
+        CatalogApiClient.deviceHeader: deviceId,
+      },
     );
     return AuthSessionResult.fromJson(json ?? const {});
   }
@@ -45,6 +52,7 @@ class AuthRequest {
       body: {'refreshToken': refreshToken},
       requiresAuth: false,
       skipAuthRetry: true,
+      omitProfileHeader: true,
     );
     return CatalogTokens.fromJson(json ?? const {});
   }
@@ -56,6 +64,7 @@ class AuthRequest {
       body: {'refreshToken': refreshToken},
       requiresAuth: false,
       skipAuthRetry: true,
+      omitProfileHeader: true,
     );
   }
 }

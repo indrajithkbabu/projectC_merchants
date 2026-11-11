@@ -4,6 +4,7 @@ import 'package:project_c/helper/be_verify.dart';
 import 'package:project_c/models/catalog/catalog_page.dart';
 import 'package:project_c/models/catalog/catalog_store.dart';
 import 'package:project_c/models/catalog/follow_api_models.dart';
+import 'package:project_c/models/catalog/profile_context.dart';
 import 'package:project_c/models/catalog/store_member_models.dart';
 import 'package:project_c/models/store_privacy_mode.dart';
 import 'package:project_c/resources/endpoints.dart';
@@ -68,6 +69,8 @@ class StoreRequest {
     required String slug,
     String? legalName,
     List<File> imageFiles = const [],
+    /// Must be `personal:<personId>` — store creation requires Personal context.
+    required String personalProfileId,
   }) async {
     if (imageFiles.isEmpty) {
       final json = await _api.sendJson(
@@ -80,6 +83,7 @@ class StoreRequest {
             'legalName': legalName.trim(),
         },
         requiresAuth: true,
+        profileIdOverride: personalProfileId,
       );
       return CatalogStore.fromJson(json ?? const {});
     }
@@ -94,6 +98,7 @@ class StoreRequest {
       fields: fields,
       files: _imageParts(imageFiles),
       requiresAuth: true,
+      profileIdOverride: personalProfileId,
     );
     return CatalogStore.fromJson(json ?? const {});
   }
@@ -329,6 +334,7 @@ class StoreRequest {
       path: Endpoints.storeContacts(storeId),
       body: {'phones': phones},
       requiresAuth: true,
+      profileIdOverride: 'store:$storeId',
     );
     return ContactBatchResult.fromJson(json ?? const {});
   }
@@ -367,6 +373,7 @@ class StoreRequest {
       method: HttpMethod.delete,
       path: Endpoints.storeMember(storeId, userId),
       requiresAuth: true,
+      profileIdOverride: 'store:$storeId',
     );
   }
 
@@ -376,7 +383,77 @@ class StoreRequest {
       path: Endpoints.storeLeave(storeId),
       body: const <String, dynamic>{},
       requiresAuth: true,
+      profileIdOverride: 'store:$storeId',
     );
+  }
+
+  Future<CatalogPage<StaffListRow>> fetchStaff({
+    required String storeId,
+    int limit = 50,
+    String? cursor,
+  }) async {
+    final query = <String, String>{'limit': '$limit'};
+    if (cursor != null && cursor.isNotEmpty) {
+      query['cursor'] = cursor;
+    }
+    final json = await _api.sendJson(
+      method: HttpMethod.get,
+      path: Endpoints.storeStaff(storeId),
+      query: query,
+      requiresAuth: true,
+      profileIdOverride: 'store:$storeId',
+    );
+    final items =
+        (json?['items'] as List? ?? const [])
+            .whereType<Map<String, dynamic>>()
+            .map(StaffListRow.fromJson)
+            .toList();
+    return CatalogPage(
+      items: items,
+      nextCursor: json?['nextCursor'] as String?,
+    );
+  }
+
+  Future<List<PendingInvitation>> createInvitations({
+    required String storeId,
+    required List<String> phones,
+  }) async {
+    final json = await _api.sendJson(
+      method: HttpMethod.post,
+      path: Endpoints.storeInvitations(storeId),
+      body: {'phones': phones},
+      requiresAuth: true,
+      profileIdOverride: 'store:$storeId',
+    );
+    final items = json?['items'] as List? ?? const [];
+    return items
+        .whereType<Map<String, dynamic>>()
+        .map(PendingInvitation.fromJson)
+        .toList();
+  }
+
+  Future<PendingInvitation> revokeInvitation({
+    required String storeId,
+    required String invitationId,
+  }) async {
+    final json = await _api.sendJson(
+      method: HttpMethod.delete,
+      path: Endpoints.storeInvitation(storeId, invitationId),
+      requiresAuth: true,
+      profileIdOverride: 'store:$storeId',
+    );
+    return PendingInvitation.fromJson(json ?? const {});
+  }
+
+  /// Owner deletes store — returns Personal bootstrap.
+  Future<ProfileBootstrap> deleteStore(String storeId) async {
+    final json = await _api.sendJson(
+      method: HttpMethod.delete,
+      path: Endpoints.storeById(storeId),
+      requiresAuth: true,
+      profileIdOverride: 'store:$storeId',
+    );
+    return ProfileBootstrap.fromJson(json ?? const {});
   }
 
   List<CatalogMultipartFile> _imageParts(List<File> files) {

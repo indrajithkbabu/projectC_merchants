@@ -43,7 +43,7 @@ class StoreListingTile extends StatelessWidget {
               overflow: TextOverflow.ellipsis,
             ),
           ),
-          if (store.isOwn) ...[
+          if (store.isOwn || store.isMember) ...[
             const SizedBox(width: 6),
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
@@ -52,7 +52,7 @@ class StoreListingTile extends StatelessWidget {
                 borderRadius: BorderRadius.circular(8),
               ),
               child: Text(
-                'You',
+                store.isOwn ? 'You' : 'Staff',
                 style: AppTextStyles.caption(
                   fontSize: 11,
                   fontWeight: FontWeight.w700,

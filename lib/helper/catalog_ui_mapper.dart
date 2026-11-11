@@ -3,6 +3,7 @@ import 'package:project_c/models/catalog/catalog_store.dart';
 import 'package:project_c/models/catalog/collection_models.dart';
 import 'package:project_c/models/catalog/quick_import_api_models.dart';
 import 'package:project_c/models/store_channel.dart';
+import 'package:project_c/models/store_privacy_mode.dart';
 import 'package:project_c/models/store_product.dart';
 
 /// Maps catalog DTOs into existing UI models without rewriting every screen.
@@ -15,6 +16,15 @@ class CatalogUiMapper {
     int avatarColor = 0xFF2AABEE,
   }) {
     final urls = store.showcaseImageUrls;
+    final follow = storeFollowStatusFromString(store.followStatusRaw);
+    // Owner/member rows use followStatus "self" — keep that even if raw omitted.
+    final resolvedFollow =
+        store.relationship == StoreRelationship.owner ||
+                store.relationship == StoreRelationship.member
+            ? (follow == StoreFollowStatus.none
+                ? StoreFollowStatus.self
+                : follow)
+            : follow;
     return StoreChannel(
       id: store.id,
       name: store.name,
@@ -22,6 +32,8 @@ class CatalogUiMapper {
       avatarColor: avatarColor,
       products: products,
       isOwn: store.isOwn,
+      relationship: store.relationship,
+      followStatus: resolvedFollow,
       coverImageUrl: store.coverImageUrl,
       imageUrls: urls,
       phone: store.phone,

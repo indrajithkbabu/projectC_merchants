@@ -1,9 +1,11 @@
 import 'dart:io';
 
 import 'package:project_c/helper/app_log.dart';
+import 'package:project_c/helper/profile_switching_log.dart';
 import 'package:project_c/models/catalog/catalog_page.dart';
 import 'package:project_c/models/catalog/catalog_store.dart';
 import 'package:project_c/models/catalog/follow_api_models.dart';
+import 'package:project_c/models/catalog/profile_context.dart';
 import 'package:project_c/models/catalog/store_member_models.dart';
 import 'package:project_c/models/store_privacy_mode.dart';
 import 'package:project_c/services/store_home_prefetcher.dart';
@@ -21,6 +23,7 @@ abstract class StoreRepository {
 
   Future<SlugAvailability> checkSlugAvailability(String slug);
 
+  /// Creates a store under the session Personal profile. Does **not** select it.
   Future<CatalogStore> createStore({
     required String name,
     required String slug,
@@ -117,6 +120,25 @@ abstract class StoreRepository {
   });
 
   Future<void> leaveStore(String storeId);
+
+  Future<CatalogPage<StaffListRow>> fetchStaff({
+    required String storeId,
+    int limit = 50,
+    String? cursor,
+  });
+
+  Future<List<PendingInvitation>> createInvitations({
+    required String storeId,
+    required List<String> phones,
+  });
+
+  Future<PendingInvitation> revokeInvitation({
+    required String storeId,
+    required String invitationId,
+  });
+
+  /// Owner deletes store — returns Personal bootstrap (already applied).
+  Future<ProfileBootstrap> deleteStore(String storeId);
 }
 
 class StoreRepositoryImpl implements StoreRepository {
@@ -157,6 +179,14 @@ class StoreRepositoryImpl implements StoreRepository {
     return _request.checkSlugAvailability(slug);
   }
 
+  String _requirePersonalProfileId() {
+    final id = _session.personalProfileId?.trim() ?? '';
+    if (id.isEmpty) {
+      throw StateError('Personal profile id required to create a store');
+    }
+    return id;
+  }
+
   @override
   Future<CatalogStore> createStore({
     required String name,
@@ -164,14 +194,30 @@ class StoreRepositoryImpl implements StoreRepository {
     String? legalName,
     List<File> imageFiles = const [],
   }) async {
-    AppLog.d(_tag, 'createStore slug=$slug images=${imageFiles.length}');
+    final personalProfileId = _requirePersonalProfileId();
+    AppLog.d(
+      _tag,
+      'createStore slug=$slug images=${imageFiles.length} '
+      'personal=$personalProfileId',
+    );
+    ProfileSwitchingLog.d(
+      'PS-30/31/33',
+      'POST /stores via personal header=$personalProfileId '
+      'name=$name slug=$slug',
+    );
     final store = await _request.createStore(
       name: name,
       slug: slug,
       legalName: legalName,
       imageFiles: imageFiles,
+      personalProfileId: personalProfileId,
     );
-    // Refresh profile so ownStore is current.
+    ProfileSwitchingLog.d(
+      'PS-30/32',
+      'POST /stores 201 storeId=${store.id} '
+      '(select is separate step — do not create again on select fail)',
+    );
+    // Bridge ownStore for legacy callers; selection is caller's job.
     try {
       await ServiceLocator.get<ProfileRepository>().fetchMe();
     } catch (e) {
@@ -182,8 +228,6 @@ class StoreRepositoryImpl implements StoreRepository {
         );
       }
     }
-    // Drop stale /home warm so Stores tab shows the new store without a
-    // manual pull-to-refresh after create → team → listing.
     StoreHomePrefetcher.instance.invalidate();
     StoreHomePrefetcher.instance.prefetch();
     return store;
@@ -383,11 +427,71 @@ class StoreRepositoryImpl implements StoreRepository {
     required String storeId,
     required String userId,
   }) {
+    ProfileSwitchingLog.d(
+      'PS-46/55/72',
+      'removeMember store=$storeId userId=$userId',
+    );
     return _request.removeMember(storeId: storeId, userId: userId);
   }
 
   @override
   Future<void> leaveStore(String storeId) {
+    ProfileSwitchingLog.d('PS-50', 'leaveStore store=$storeId');
     return _request.leaveStore(storeId);
+  }
+
+  @override
+  Future<CatalogPage<StaffListRow>> fetchStaff({
+    required String storeId,
+    int limit = 50,
+    String? cursor,
+  }) {
+    AppLog.d(_tag, 'fetchStaff store=$storeId');
+    ProfileSwitchingLog.d('PS-40', 'fetchStaff store=$storeId');
+    return _request.fetchStaff(
+      storeId: storeId,
+      limit: limit,
+      cursor: cursor,
+    );
+  }
+
+  @override
+  Future<List<PendingInvitation>> createInvitations({
+    required String storeId,
+    required List<String> phones,
+  }) {
+    AppLog.d(_tag, 'createInvitations store=$storeId count=${phones.length}');
+    ProfileSwitchingLog.d(
+      'PS-41/42/71',
+      'createInvitations store=$storeId count=${phones.length}',
+    );
+    return _request.createInvitations(storeId: storeId, phones: phones);
+  }
+
+  @override
+  Future<PendingInvitation> revokeInvitation({
+    required String storeId,
+    required String invitationId,
+  }) {
+    AppLog.d(_tag, 'revokeInvitation store=$storeId id=$invitationId');
+    ProfileSwitchingLog.d(
+      'PS-47',
+      'revokeInvitation store=$storeId id=$invitationId',
+    );
+    return _request.revokeInvitation(
+      storeId: storeId,
+      invitationId: invitationId,
+    );
+  }
+
+  @override
+  Future<ProfileBootstrap> deleteStore(String storeId) async {
+    AppLog.d(_tag, 'deleteStore store=$storeId');
+    ProfileSwitchingLog.d('PS-52/73', 'deleteStore store=$storeId');
+    final bootstrap = await _request.deleteStore(storeId);
+    await _session.applyBootstrap(bootstrap);
+    StoreHomePrefetcher.instance.invalidate();
+    StoreHomePrefetcher.instance.prefetch();
+    return bootstrap;
   }
 }

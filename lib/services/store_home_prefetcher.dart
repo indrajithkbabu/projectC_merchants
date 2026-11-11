@@ -2,16 +2,17 @@ import 'dart:async';
 
 import 'package:project_c/di/service_locator.dart';
 import 'package:project_c/helper/app_log.dart';
+import 'package:project_c/helper/device_contact_names.dart';
 import 'package:project_c/helper/product_image.dart';
 import 'package:project_c/models/catalog/catalog_page.dart';
 import 'package:project_c/models/catalog/catalog_store.dart';
 import 'package:project_c/storage/store_home_cache.dart';
 import 'package:project_c/webservice/store/store_repository.dart';
 
-/// Warms `GET /home` before the Stores tab mounts (cold start / post-auth).
+/// Warms `GET /home` (+ contact index) before the Stores tab mounts.
 ///
 /// Call [prefetch] as soon as auth tokens are ready. [StoreListingBloc]
-/// awaits [ensure] so the first paint can use the in-flight or completed page.
+/// awaits [ensure] then contact enrich so the first paint is ordered + named.
 /// Successful fetches are written to [StoreHomeCache] for kill+reopen.
 class StoreHomePrefetcher {
   StoreHomePrefetcher._();
@@ -26,7 +27,9 @@ class StoreHomePrefetcher {
 
   /// Fire-and-forget warm (safe to call repeatedly).
   void prefetch({int limit = defaultLimit}) {
-    // Hydrate disk → memory so listing can paint before network returns.
+    // Contact index in parallel with home — listing awaits both before paint.
+    DeviceContactNames.prefetch();
+    // Hydrate disk → memory for cover warm only (not an early list paint).
     // ignore: unawaited_futures
     () async {
       final page = await StoreHomeCache.instance.read();
@@ -90,14 +93,19 @@ class StoreHomePrefetcher {
 
   Future<CatalogPage<CatalogStore>> _load({required int limit}) async {
     AppLog.d(_tag, 'fetchHome limit=$limit');
+    // Overlap contacts with network so listing enrich is usually a cache hit.
+    final contactsFuture = DeviceContactNames.load();
     final page = await ServiceLocator.get<StoreRepository>().fetchHome(
       limit: limit,
     );
-    // Keep prior contact-name sidecar; listing rewrite after enrich.
-    await StoreHomeCache.instance.write(
-      page,
-      contactNames: StoreHomeCache.instance.contactNamesMemory(),
-    );
+    try {
+      await contactsFuture;
+    } catch (_) {
+      // Permission deny / load failure — listing still paints with phones.
+    }
+    // Persist rows only — omit contactNames so prefetch never wipes the
+    // enriched sidecar; StoreListingBloc merges names after map+enrich.
+    await StoreHomeCache.instance.write(page);
     unawaited(
       CatalogImageCache.warmAvatars([
         for (final s in page.items) s.coverImageUrl,

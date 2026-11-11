@@ -11,10 +11,17 @@ class Endpoints {
   static const String refreshToken = '/auth/refresh';
   static const String logout = '/auth/logout';
 
-  // Profile / onboarding
+  // Profile / onboarding / multi-profile
   static const String me = '/me';
   static const String profileImage = '/me/profile-image';
   static const String skipStore = '/me/onboarding/skip-store';
+  static const String meProfiles = '/me/profiles';
+  static const String meActiveProfile = '/me/active-profile';
+  static const String meInvitations = '/me/invitations';
+  static String meInvitationAccept(String invitationId) =>
+      '/me/invitations/$invitationId/accept';
+  static String meInvitationDecline(String invitationId) =>
+      '/me/invitations/$invitationId/decline';
 
   // Stores / home
   static const String home = '/home';
@@ -31,6 +38,11 @@ class Endpoints {
   static String storeMember(String storeId, String userId) =>
       '/stores/$storeId/members/$userId';
   static String storeLeave(String storeId) => '/stores/$storeId/leave';
+  static String storeStaff(String storeId) => '/stores/$storeId/staff';
+  static String storeInvitations(String storeId) =>
+      '/stores/$storeId/invitations';
+  static String storeInvitation(String storeId, String invitationId) =>
+      '/stores/$storeId/invitations/$invitationId';
   static String storePrivacy(String storeId) => '/stores/$storeId/privacy';
   static String storeWastageMarkup(String storeId) =>
       '/stores/$storeId/wastage-markup';

@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
-import 'package:project_c/bloc/account_profile/account_profile_bloc.dart';
 import 'package:project_c/bloc/store_gallery/store_gallery_bloc.dart';
 import 'package:project_c/bloc/storeprofile/store_profile_bloc.dart';
 import 'package:project_c/di/service_locator.dart';
@@ -14,13 +13,27 @@ import 'package:project_c/helper/widgets/screen_wrapper.dart';
 import 'package:project_c/models/product_view_mode.dart';
 import 'package:project_c/models/store_product.dart';
 import 'package:project_c/navigation/routes.dart';
+import 'package:project_c/presentation/main_shell/profile_sheets.dart';
 import 'package:project_c/presentation/storeprofile/storeprofile_widgets/store_my_store_tab.dart';
 import 'package:project_c/services/product_view_preferences.dart';
 
-/// Shell "My store" tab — Instagram-style owner UI ([StoreMyStoreTab]).
-/// Settings opens from the toolbar hamburger.
+/// Shell "My store" / active-store Profile tab — Instagram-style UI.
+/// Menu opens from the toolbar hamburger (role-based sheet preferred).
 class MyStoreTab extends StatefulWidget {
-  const MyStoreTab({super.key});
+  const MyStoreTab({
+    super.key,
+    this.onOpenMenu,
+    this.onOpenSwitcher,
+    this.showSwitcherDot = false,
+    this.roleBadge,
+    this.canManageStore = true,
+  });
+
+  final VoidCallback? onOpenMenu;
+  final VoidCallback? onOpenSwitcher;
+  final bool showSwitcherDot;
+  final String? roleBadge;
+  final bool canManageStore;
 
   @override
   State<MyStoreTab> createState() => MyStoreTabState();
@@ -345,12 +358,9 @@ class MyStoreTabState extends State<MyStoreTab> {
   }
 
   void _openSettings(BuildContext context) {
-    Navigator.of(context).pushNamed(
-      Routes.settingsRoute,
-      arguments: <String, Object?>{
-        'accountProfileBloc': context.read<AccountProfileBloc>(),
-      },
-    );
+    // Prefer shared helper so ProfileContextBloc is passed for role actions.
+    // ignore: discarded_futures
+    openProfileSettings(context);
   }
 
   @override
@@ -419,7 +429,23 @@ class MyStoreTabState extends State<MyStoreTab> {
                         state: state,
                         showBack: false,
                         onBack: () {},
-                        onOpenSettings: () => _openSettings(context),
+                        onOpenSettings:
+                            widget.onOpenMenu ?? () => _openSettings(context),
+                        onOpenSwitcher: widget.onOpenSwitcher,
+                        onOpenStaff: () {
+                          final storeId = state.storeId.trim();
+                          if (storeId.isEmpty) return;
+                          Navigator.of(context).pushNamed(
+                            Routes.staffListRoute,
+                            arguments: <String, Object?>{
+                              'storeId': storeId,
+                              'storeName': state.storeName,
+                            },
+                          );
+                        },
+                        showSwitcherDot: widget.showSwitcherDot,
+                        roleBadge: widget.roleBadge,
+                        canManageStore: widget.canManageStore,
                         onFollowersTap:
                             () => _openFollowersFollowing(
                               context,
@@ -444,7 +470,8 @@ class MyStoreTabState extends State<MyStoreTab> {
                               viewMode,
                               imageIndex: imageIndex,
                             ),
-                        onProductLongPress: _enterSelection,
+                        onProductLongPress:
+                            widget.canManageStore ? _enterSelection : null,
                         selectedPhotoKeys: _selectedPhotoKeys,
                         bottomInset: bottomInset,
                       ),

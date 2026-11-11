@@ -847,6 +847,20 @@ class ProductImagePaths {
       return null;
     }
   }
+
+  /// Approximate width/height from ThumbHash (for collage orientation).
+  /// Returns null when the hash is missing or unreadable.
+  static double? thumbhashAspectRatio(String? thumbhashBase64) {
+    try {
+      final hash = parseThumbhash(thumbhashBase64);
+      if (hash == null) return null;
+      final ratio = hash.toAspectRatio();
+      if (!ratio.isFinite || ratio <= 0) return null;
+      return ratio;
+    } catch (_) {
+      return null;
+    }
+  }
 }
 
 /// Shared ThumbHash → [ui.Image] LRU so grids do not re-decode every rebuild

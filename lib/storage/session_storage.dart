@@ -4,6 +4,7 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:project_c/helper/app_log.dart';
 import 'package:project_c/models/catalog/catalog_tokens.dart';
 import 'package:project_c/models/catalog/catalog_profile.dart';
+import 'package:project_c/models/catalog/profile_context.dart';
 
 /// Persists catalog session tokens and a cached profile snapshot.
 class SessionStorage {
@@ -16,6 +17,8 @@ class SessionStorage {
   static const _kAccessExp = 'catalog_access_expires_at';
   static const _kRefreshExp = 'catalog_refresh_expires_at';
   static const _kProfile = 'catalog_profile_json';
+  static const _kBootstrap = 'catalog_profile_bootstrap_json';
+  static const _kActiveProfileId = 'catalog_active_profile_id';
 
   final FlutterSecureStorage _storage;
 
@@ -70,6 +73,47 @@ class SessionStorage {
     }
   }
 
+  Future<void> saveBootstrap(ProfileBootstrap bootstrap) async {
+    await Future.wait([
+      _storage.write(
+        key: _kBootstrap,
+        value: jsonEncode(bootstrap.toJson()),
+      ),
+      _storage.write(
+        key: _kActiveProfileId,
+        value: bootstrap.activeProfile.id,
+      ),
+    ]);
+  }
+
+  Future<ProfileBootstrap?> readBootstrap() async {
+    final raw = await _storage.read(key: _kBootstrap);
+    if (raw == null || raw.isEmpty) return null;
+    try {
+      return ProfileBootstrap.fromJson(
+        jsonDecode(raw) as Map<String, dynamic>,
+      );
+    } catch (e) {
+      AppLog.e(_tag, 'Failed to parse cached bootstrap', e);
+      return null;
+    }
+  }
+
+  Future<void> saveActiveProfileId(String? profileId) async {
+    final id = profileId?.trim() ?? '';
+    if (id.isEmpty) {
+      await _storage.delete(key: _kActiveProfileId);
+      return;
+    }
+    await _storage.write(key: _kActiveProfileId, value: id);
+  }
+
+  Future<String?> readActiveProfileId() async {
+    final raw = await _storage.read(key: _kActiveProfileId);
+    if (raw == null || raw.trim().isEmpty) return null;
+    return raw.trim();
+  }
+
   Future<void> clear() async {
     await Future.wait([
       _storage.delete(key: _kAccess),
@@ -77,6 +121,8 @@ class SessionStorage {
       _storage.delete(key: _kAccessExp),
       _storage.delete(key: _kRefreshExp),
       _storage.delete(key: _kProfile),
+      _storage.delete(key: _kBootstrap),
+      _storage.delete(key: _kActiveProfileId),
     ]);
     AppLog.d(_tag, 'Session cleared');
   }

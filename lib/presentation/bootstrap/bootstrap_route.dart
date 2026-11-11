@@ -115,31 +115,22 @@ class _BootstrapHomePreviewState extends State<_BootstrapHomePreview> {
     final page = StoreHomeCache.instance.readMemory();
     if (page == null) return null;
     if (page.items.isEmpty) return const [];
-    final names = StoreHomeCache.instance.contactNamesMemory();
     return [
       for (var i = 0; i < page.items.length; i++)
         CatalogUiMapper.storeToChannel(
           page.items[i],
           avatarColor: _avatarPalette[i % _avatarPalette.length],
         ).copyWith(
-          contactName: _staticContactName(
-            phone: page.items[i].phone,
-            cachedNames: names,
-          ),
+          contactName: _staticContactName(page.items[i].phone),
         ),
     ];
   }
 
-  static String _staticContactName({
-    required String phone,
-    required Map<String, String> cachedNames,
-  }) {
-    final key = phone.trim();
-    if (key.isEmpty) return '';
-    final cached = cachedNames[key]?.trim() ?? '';
+  static String _staticContactName(String phone) {
+    final cached = StoreHomeCache.instance.contactNameFor(phone)?.trim() ?? '';
     if (cached.isNotEmpty) return cached;
     if (!DeviceContactNames.isReady) return '';
-    return DeviceContactNames.lookup(key)?.trim() ?? '';
+    return DeviceContactNames.lookup(phone)?.trim() ?? '';
   }
 
   @override
@@ -166,17 +157,13 @@ class _BootstrapHomePreviewState extends State<_BootstrapHomePreview> {
         return;
       }
 
-      final names = StoreHomeCache.instance.contactNamesMemory();
       final stores = <StoreChannel>[
         for (var i = 0; i < page.items.length; i++)
           CatalogUiMapper.storeToChannel(
             page.items[i],
             avatarColor: _avatarPalette[i % _avatarPalette.length],
           ).copyWith(
-            contactName: _contactNameFor(
-              phone: page.items[i].phone,
-              cachedNames: names,
-            ),
+            contactName: _contactNameFor(page.items[i].phone),
           ),
       ];
 
@@ -192,16 +179,11 @@ class _BootstrapHomePreviewState extends State<_BootstrapHomePreview> {
     }
   }
 
-  String _contactNameFor({
-    required String phone,
-    required Map<String, String> cachedNames,
-  }) {
-    final key = phone.trim();
-    if (key.isEmpty) return '';
-    final cached = cachedNames[key]?.trim() ?? '';
+  String _contactNameFor(String phone) {
+    final cached = StoreHomeCache.instance.contactNameFor(phone)?.trim() ?? '';
     if (cached.isNotEmpty) return cached;
     if (!DeviceContactNames.isReady) return '';
-    return DeviceContactNames.lookup(key)?.trim() ?? '';
+    return DeviceContactNames.lookup(phone)?.trim() ?? '';
   }
 
   @override

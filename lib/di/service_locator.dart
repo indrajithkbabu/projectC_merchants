@@ -11,6 +11,7 @@ import 'package:project_c/services/store_privacy_preferences.dart';
 import 'package:project_c/services/theme_preferences.dart';
 import 'package:project_c/session/catalog_session.dart';
 import 'package:project_c/storage/app_settings_storage.dart';
+import 'package:project_c/storage/device_id_store.dart';
 import 'package:project_c/storage/session_storage.dart';
 import 'package:project_c/services/cart_store.dart';
 import 'package:project_c/webservice/auth/auth_repository.dart';
@@ -50,6 +51,7 @@ class ServiceLocator {
     _configured = true;
 
     final storage = SessionStorage();
+    final deviceIdStore = DeviceIdStore();
     final appSettings = AppSettingsStorage();
     final screenshotProtection = ScreenshotProtectionService(
       storage: appSettings,
@@ -65,7 +67,10 @@ class ServiceLocator {
     final storePrivacyPreferences = StorePrivacyPreferences(
       storage: appSettings,
     );
-    final apiClient = CatalogApiClient(sessionStorage: storage);
+    final apiClient = CatalogApiClient(
+      sessionStorage: storage,
+      deviceIdProvider: deviceIdStore.getOrCreate,
+    );
     final session = CatalogSession(storage: storage, apiClient: apiClient);
     final deviceTokenRequest = DeviceTokenRequest(apiClient: apiClient);
     final deviceTokenRepository = DeviceTokenRepositoryImpl(
@@ -79,6 +84,7 @@ class ServiceLocator {
     );
 
     injector.map<SessionStorage>((_) => storage, isSingleton: true);
+    injector.map<DeviceIdStore>((_) => deviceIdStore, isSingleton: true);
     injector.map<AppSettingsStorage>((_) => appSettings, isSingleton: true);
     injector.map<ScreenshotProtectionService>(
       (_) => screenshotProtection,
@@ -130,6 +136,7 @@ class ServiceLocator {
         request: i.get<AuthRequest>(),
         session: i.get<CatalogSession>(),
         apiClient: i.get<CatalogApiClient>(),
+        deviceIdStore: i.get<DeviceIdStore>(),
       ),
       isSingleton: true,
     );

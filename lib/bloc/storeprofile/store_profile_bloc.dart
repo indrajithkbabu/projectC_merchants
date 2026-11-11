@@ -43,6 +43,8 @@ class StoreProfileBloc extends Bloc<StoreProfileEvent, StoreProfileState> {
     String? storeLink,
     String? coverImageUrl,
     int avatarColor = 0xFF2AABEE,
+    /// Seeded from home/detail so owner/member never flash visitor Follow.
+    StoreFollowStatus? initialFollowStatus,
     CollectionRepository? collectionRepository,
     StoreRepository? storeRepository,
     ImportRepository? importRepository,
@@ -77,6 +79,12 @@ class StoreProfileBloc extends Bloc<StoreProfileEvent, StoreProfileState> {
            final cachedName = cachedMeta?.storeName.trim() ?? '';
            final cachedLink = cachedMeta?.storeLink.trim() ?? '';
            final own = isOwnStore;
+           final seededFollow =
+               own
+                   ? StoreFollowStatus.self
+                   : (initialFollowStatus ??
+                       cachedMeta?.followStatus ??
+                       StoreFollowStatus.none);
            // Visitors without cached meta stay locked until GET store resolves.
            final initialCanView =
                own || (cachedMeta?.canViewContent ?? false);
@@ -123,10 +131,7 @@ class StoreProfileBloc extends Bloc<StoreProfileEvent, StoreProfileState> {
              pendingFollowRequestCount:
                  own ? (cachedMeta?.pendingRequestsCount ?? 0) : 0,
              canViewContent: initialCanView,
-             followStatus:
-                 own
-                     ? StoreFollowStatus.self
-                     : (cachedMeta?.followStatus ?? StoreFollowStatus.none),
+             followStatus: seededFollow,
              currentUserId:
                  (session ?? ServiceLocator.get<CatalogSession>()).profile?.id,
              // Do not assume cold shimmer on process restart — memory is empty
@@ -135,7 +140,12 @@ class StoreProfileBloc extends Bloc<StoreProfileEvent, StoreProfileState> {
              isLoadingProducts: false,
              productsResolved:
                  gatedProducts.isNotEmpty || activeUploads.isNotEmpty,
-             isLoadingMembers: own,
+             // Members API is owner-only; staff uses isOwnStore shell but must
+             // not spin a members loader (avoids OWNER_REQUIRED toast on switch).
+             isLoadingMembers:
+                 own &&
+                 (session ?? ServiceLocator.get<CatalogSession>())
+                     .isActingAsOwner,
              isLoadingStoreMeta: cachedMeta == null,
              // Survive leave/return while create upload is still in flight.
              pendingUploads: own ? activeUploads : const [],
@@ -180,7 +190,11 @@ class StoreProfileBloc extends Bloc<StoreProfileEvent, StoreProfileState> {
     // resolves canViewContent (private gate).
     if (isOwnStore) {
       add(const StoreProfileLoadCollections());
-      add(const StoreProfileLoadMembers());
+      // Staff also mounts with isOwnStore=true for product chrome; members /
+      // follow-request admin APIs are owner-only — skip for staff.
+      if (_session.isActingAsOwner) {
+        add(const StoreProfileLoadMembers());
+      }
       // TODO(backend): re-enable when GET …/import-requests is live (404 today).
       // add(const StoreProfileLoadImportRequestCount());
     } else if (StoreMetaCache.instance.readMemory(
@@ -190,6 +204,9 @@ class StoreProfileBloc extends Bloc<StoreProfileEvent, StoreProfileState> {
       add(const StoreProfileLoadCollections());
     }
   }
+
+  /// Owner-only store admin reads (members / follow-request inbox).
+  bool get _canLoadOwnerAdminData => _session.isActingAsOwner;
 
   final CollectionRepository _collectionRepository;
   final StoreRepository _storeRepository;
@@ -779,7 +796,7 @@ class StoreProfileBloc extends Bloc<StoreProfileEvent, StoreProfileState> {
     StoreProfileLoadMembers event,
     Emitter<StoreProfileState> emit,
   ) async {
-    if (!state.isOwnStore) {
+    if (!state.isOwnStore || !_canLoadOwnerAdminData) {
       emit(state.copyWith(isLoadingMembers: false));
       return;
     }
@@ -836,6 +853,11 @@ class StoreProfileBloc extends Bloc<StoreProfileEvent, StoreProfileState> {
       );
     } catch (e) {
       AppLog.e(_tag, 'Members load failed', e);
+      // Staff / non-owner must not see OWNER_REQUIRED as a switch toast.
+      if (_isOwnerOnlyAdminError(e)) {
+        emit(state.copyWith(isLoadingMembers: false, clearError: true));
+        return;
+      }
       emit(
         state.copyWith(
           isLoadingMembers: false,
@@ -1005,10 +1027,25 @@ class StoreProfileBloc extends Bloc<StoreProfileEvent, StoreProfileState> {
         'notifyUploads=${store.notifyUploads}',
       );
       final previouslyCouldView = state.canViewContent;
+      final snapshot = StoreMetaSnapshot.fromCatalogStore(store);
+      // Person-level ownership from detail: promote to owner chrome (Add
+      // products). Never downgrade an owned open back to visitor.
+      final promoteToOwner = store.isOwn && !state.isOwnStore;
+      if (promoteToOwner) {
+        emit(
+          state.copyWith(
+            isOwnStore: true,
+            followStatus: StoreFollowStatus.self,
+          ),
+        );
+        if (_session.isActingAsOwner) {
+          add(const StoreProfileLoadMembers());
+        }
+      }
       await _commitStoreMeta(
         emit,
         storeId,
-        StoreMetaSnapshot.fromCatalogStore(store),
+        snapshot,
         isLoadingStoreMeta: false,
       );
       if (emit.isDone) return;
@@ -1027,7 +1064,8 @@ class StoreProfileBloc extends Bloc<StoreProfileEvent, StoreProfileState> {
             add(const StoreProfileLoadCollections());
           }
         }
-      } else if (state.privacy.isPrivate &&
+      } else if (_canLoadOwnerAdminData &&
+          state.privacy.isPrivate &&
           state.pendingFollowRequestCount > 0) {
         add(const StoreProfileLoadFollowRequestPreviews());
       }
@@ -1119,6 +1157,11 @@ class StoreProfileBloc extends Bloc<StoreProfileEvent, StoreProfileState> {
     Emitter<StoreProfileState> emit,
   ) async {
     if (state.isOwnStore || state.isFollowBusy) return;
+    // Owner/member rows use followStatus self — never Follow yourself.
+    if (state.followStatus == StoreFollowStatus.self ||
+        state.followStatus == StoreFollowStatus.member) {
+      return;
+    }
     if (state.followStatus.isFollowing || state.followStatus.isPending) return;
     final storeId = state.storeId;
     if (storeId.isEmpty || storeId == 'other_store') return;
@@ -1286,7 +1329,7 @@ class StoreProfileBloc extends Bloc<StoreProfileEvent, StoreProfileState> {
     StoreProfileLoadFollowRequestPreviews event,
     Emitter<StoreProfileState> emit,
   ) async {
-    if (!state.isOwnStore) return;
+    if (!state.isOwnStore || !_canLoadOwnerAdminData) return;
     final storeId = state.storeId;
     if (storeId.isEmpty || storeId == 'my_store') return;
     try {
@@ -1308,6 +1351,19 @@ class StoreProfileBloc extends Bloc<StoreProfileEvent, StoreProfileState> {
       );
     } catch (e) {
       AppLog.e(_tag, 'Follow request previews failed', e);
+    }
+  }
+
+  bool _isOwnerOnlyAdminError(Object e) {
+    if (e is! CatalogApiException) return false;
+    switch (e.code) {
+      case 'OWNER_REQUIRED':
+      case 'UPLOAD_OWNER_REQUIRED':
+      case 'PROFILE_STORE_MISMATCH':
+      case 'STORE_PROFILE_REQUIRED':
+        return true;
+      default:
+        return false;
     }
   }
 

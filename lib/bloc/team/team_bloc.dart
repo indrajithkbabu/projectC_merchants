@@ -3,6 +3,7 @@ import 'package:equatable/equatable.dart';
 import 'package:project_c/di/service_locator.dart';
 import 'package:project_c/helper/app_log.dart';
 import 'package:project_c/helper/device_contact_names.dart';
+import 'package:project_c/helper/profile_switching_log.dart';
 import 'package:project_c/helper/safe_display_text.dart';
 import 'package:project_c/session/catalog_session.dart';
 import 'package:project_c/webservice/catalog_error_mapper.dart';
@@ -59,6 +60,10 @@ class TeamBloc extends Bloc<TeamEvent, TeamState> {
       final result = await DeviceContactNames.loadContactList();
       if (result.permissionDenied) {
         AppLog.d(_tag, 'Contacts permission denied');
+        ProfileSwitchingLog.d(
+          'PS-42',
+          'contacts permission denied → manual phone path',
+        );
         emit(
           state.copyWith(
             isLoadingContacts: false,
@@ -121,7 +126,10 @@ class TeamBloc extends Bloc<TeamEvent, TeamState> {
     Emitter<TeamState> emit,
   ) async {
     emit(state.copyWith(isSubmitting: true, clearError: true));
-    final storeId = _session.ownStoreId;
+    final storeId =
+        (_session.activeStoreId?.trim().isNotEmpty == true)
+            ? _session.activeStoreId
+            : _session.ownStoreId;
     final phones =
         state.addedMembers
             .map((m) => m.phone)
@@ -136,13 +144,40 @@ class TeamBloc extends Bloc<TeamEvent, TeamState> {
     }
 
     try {
-      // Catalog allows max 30 phones per batch.
-      for (var i = 0; i < phones.length; i += 30) {
-        final end = (i + 30 < phones.length) ? i + 30 : phones.length;
-        final batch = phones.sublist(i, end);
-        await _storeRepository.addContacts(storeId: storeId, phones: batch);
+      // Prefer invitations API; fall back to legacy contacts if needed.
+      try {
+        for (var i = 0; i < phones.length; i += 30) {
+          final end = (i + 30 < phones.length) ? i + 30 : phones.length;
+          final batch = phones.sublist(i, end);
+          await _storeRepository.createInvitations(
+            storeId: storeId,
+            phones: batch,
+          );
+        }
+        AppLog.d(_tag, 'Invitations submitted count=${phones.length}');
+        ProfileSwitchingLog.d(
+          'PS-41/71',
+          'invitations submitted count=${phones.length} '
+          'toast=Invitations pending',
+        );
+      } catch (inviteError) {
+        AppLog.e(
+          _tag,
+          'createInvitations failed; falling back to contacts',
+          inviteError,
+        );
+        ProfileSwitchingLog.e(
+          'PS-41',
+          'createInvitations failed; fallback contacts',
+          inviteError,
+        );
+        for (var i = 0; i < phones.length; i += 30) {
+          final end = (i + 30 < phones.length) ? i + 30 : phones.length;
+          final batch = phones.sublist(i, end);
+          await _storeRepository.addContacts(storeId: storeId, phones: batch);
+        }
+        AppLog.d(_tag, 'Contacts submitted count=${phones.length}');
       }
-      AppLog.d(_tag, 'Contacts submitted count=${phones.length}');
       emit(state.copyWith(isSubmitting: false, isCompleted: true));
     } catch (e) {
       // Contact failure must not undo store creation — still allow home.

@@ -24,6 +24,7 @@ class FloatingNavItem {
     required this.icon,
     this.activeIcon,
     this.badgeCount,
+    this.showDot = false,
     this.avatar,
   });
 
@@ -32,6 +33,7 @@ class FloatingNavItem {
   final IconData icon;
   final IconData? activeIcon;
   final int? badgeCount;
+  final bool showDot;
   final Widget? avatar;
 }
 
@@ -42,11 +44,13 @@ class FloatingBottomNavBar extends StatelessWidget {
     required this.items,
     required this.currentIndex,
     required this.onChanged,
+    this.onLongPress,
   });
 
   final List<FloatingNavItem> items;
   final int currentIndex;
   final ValueChanged<int> onChanged;
+  final ValueChanged<int>? onLongPress;
 
   /// Content should leave this much space above the system inset.
   static const double barHeight = 64;
@@ -100,6 +104,8 @@ class FloatingBottomNavBar extends StatelessWidget {
                     selected: i == currentIndex,
                     compact: items.length > 4,
                     onTap: () => onChanged(i),
+                    onLongPress:
+                        onLongPress == null ? null : () => onLongPress!(i),
                   ),
                 ),
             ],
@@ -115,12 +121,14 @@ class _NavItemButton extends StatelessWidget {
     required this.item,
     required this.selected,
     required this.onTap,
+    this.onLongPress,
     this.compact = false,
   });
 
   final FloatingNavItem item;
   final bool selected;
   final VoidCallback onTap;
+  final VoidCallback? onLongPress;
   final bool compact;
 
   @override
@@ -133,6 +141,7 @@ class _NavItemButton extends StatelessWidget {
       label: item.label,
       child: InkWell(
         onTap: onTap,
+        onLongPress: onLongPress,
         borderRadius: BorderRadius.circular(24),
         splashColor: AppColors.primary.withValues(alpha: 0.12),
         highlightColor: Colors.transparent,
@@ -165,6 +174,23 @@ class _NavItemButton extends StatelessWidget {
                       right: -10,
                       top: -6,
                       child: _Badge(count: item.badgeCount!),
+                    )
+                  else if (item.showDot)
+                    Positioned(
+                      right: -2,
+                      top: -2,
+                      child: Container(
+                        width: 8,
+                        height: 8,
+                        decoration: BoxDecoration(
+                          color: AppColors.error,
+                          shape: BoxShape.circle,
+                          border: Border.all(
+                            color: AppColors.navBar,
+                            width: 1.5,
+                          ),
+                        ),
+                      ),
                     ),
                 ],
               ),

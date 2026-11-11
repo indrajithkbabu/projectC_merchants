@@ -216,21 +216,23 @@ This file defines what to follow for UI and logic inside `lib/presentation/store
   carousel bottomsheet pattern as group photo preview (`ProductImageCarousel` +
   Camera/Gallery picker). Append via `POST .../images`, delete via
   `DELETE .../images/:imageId` (max 5).
-- Group collage (`ProductImageCollage`): 1–9 keep Telegram layouts; **10+** uses
-  horizontal pages of up to 9 images so the outer product list keeps vertical
-  scroll. **Each page** (including a short last page with 1–8 images) uses the
-  same 1–9 Telegram collage fit as a single-page card — no empty 3×3 cells /
-  wasted space on partial pages. Each tile gets a subtle corner radius
-  (`tileBorderRadius` ~3px group / ~3.5px single) on all four corners; ~1.5px
-  gap between tiles.
+- Group / Single collage (`ProductImageCollage`): **classic Telegram layouts**
+  (1 / 2 / large-left 3–4 / row albums 5–9 / horizontal pages of 9 for 10+).
+  **Landscape-aware (no reorder):** ThumbHash aspect picks variants — dual
+  landscape stacks (including leftover pair under a top landscape); landscape
+  first or all-landscape 3–9 uses full-width top + remaining below; all-
+  landscape 4 uses 2×2; mixed portrait-first stays LargeLeft / row album. Tap
+  indexes unchanged. Settings → **Image arrangement** (N×N) is **disabled** but
+  kept for rollback (`kEnableCollageImageArrangement` + commented Settings UI).
+  Each tile gets a subtle corner radius (`tileBorderRadius` ~3px group /
+  ~3.5px single); ~1.5px gap between tiles.
   Product card outer radius unchanged; cards use a soft outline — Day
   `divider` / Night `border` at low alpha (~1px) so edges stay quiet, with
   thicker primary border when selected/focused.
   Product cards show a dark glass image-count chip immediately beside the
   title for any displayable album size (including 1). For **10+** albums the
-  card shows carousel page dots above the title — exactly one dot per
-  horizontal page (9 images/page; e.g. 4 pages → 4 dots), with the active
-  page elongated/highlighted via `onAlbumPageChanged`. Count chip uses
+  card shows carousel page dots above the title — one dot per horizontal page
+  (9 images/page; active via `onAlbumPageChanged`). Count chip uses
   `AppTextStyles.caption` / `textOnPrimary`, same chrome as view / import
   chips — glued beside the title. No `{page}/{pageCount}` text counter.
   Gallery mosaic separate. Cell taps still report absolute `imagePaths` indexes.

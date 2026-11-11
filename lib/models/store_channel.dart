@@ -1,5 +1,6 @@
 import 'package:equatable/equatable.dart';
-import 'package:project_c/helper/device_contact_names.dart';
+import 'package:project_c/models/catalog/catalog_store.dart';
+import 'package:project_c/models/store_privacy_mode.dart';
 import 'package:project_c/models/store_product.dart';
 
 class StoreChannel extends Equatable {
@@ -10,6 +11,8 @@ class StoreChannel extends Equatable {
     required this.avatarColor,
     required this.products,
     this.isOwn = false,
+    this.relationship,
+    this.followStatus = StoreFollowStatus.none,
     this.coverImageUrl = '',
     this.imageUrls = const [],
     this.phone = '',
@@ -21,7 +24,25 @@ class StoreChannel extends Equatable {
   final String handle;
   final int avatarColor;
   final List<StoreProduct> products;
+
+  /// True when [relationship] is owner (`GET /home` / store detail).
   final bool isOwn;
+
+  /// Person-level membership on this store (independent of active profile).
+  final StoreRelationship? relationship;
+
+  /// From home/detail `followStatus` (owner/member → `self`).
+  final StoreFollowStatus followStatus;
+
+  /// Accepted staff membership (not owner).
+  bool get isMember => relationship == StoreRelationship.member;
+
+  /// Suppress visitor Follow (owner or staff of this store).
+  bool get isSelfOrMember =>
+      isOwn ||
+      isMember ||
+      followStatus == StoreFollowStatus.self ||
+      followStatus == StoreFollowStatus.member;
 
   /// Store logo / cover from catalog (may be empty).
   final String coverImageUrl;
@@ -39,12 +60,12 @@ class StoreChannel extends Equatable {
 
   /// Subtitle under the store name: contact name → phone (no store link).
   ///
-  /// While device contacts are still indexing, omit the phone fallback so the
-  /// UI does not flash number → name on cold start.
+  /// Callers must set [contactName] before first paint (listing awaits device
+  /// contacts + cache sidecar). Do not gate on live [DeviceContactNames.isReady]
+  /// — that left an empty subtitle until a later rebuild.
   String get listingSubtitle {
     final contact = contactName.trim();
     if (contact.isNotEmpty) return contact;
-    if (!DeviceContactNames.isReady) return '';
     return phone.trim();
   }
 
@@ -64,6 +85,8 @@ class StoreChannel extends Equatable {
     int? avatarColor,
     List<StoreProduct>? products,
     bool? isOwn,
+    StoreRelationship? relationship,
+    StoreFollowStatus? followStatus,
     String? coverImageUrl,
     List<String>? imageUrls,
     String? phone,
@@ -76,6 +99,8 @@ class StoreChannel extends Equatable {
       avatarColor: avatarColor ?? this.avatarColor,
       products: products ?? this.products,
       isOwn: isOwn ?? this.isOwn,
+      relationship: relationship ?? this.relationship,
+      followStatus: followStatus ?? this.followStatus,
       coverImageUrl: coverImageUrl ?? this.coverImageUrl,
       imageUrls: imageUrls ?? this.imageUrls,
       phone: phone ?? this.phone,
@@ -226,6 +251,8 @@ class StoreChannel extends Equatable {
     avatarColor,
     products,
     isOwn,
+    relationship,
+    followStatus,
     coverImageUrl,
     imageUrls,
     phone,

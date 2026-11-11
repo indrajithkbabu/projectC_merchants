@@ -1,6 +1,7 @@
 import 'package:equatable/equatable.dart';
 import 'package:project_c/models/catalog/catalog_profile.dart';
 import 'package:project_c/models/catalog/catalog_tokens.dart';
+import 'package:project_c/models/catalog/profile_context.dart';
 
 class OtpChallenge extends Equatable {
   const OtpChallenge({
@@ -30,12 +31,29 @@ class OtpChallenge extends Equatable {
 }
 
 class AuthSessionResult extends Equatable {
-  const AuthSessionResult({required this.user, required this.tokens});
+  const AuthSessionResult({
+    required this.user,
+    required this.tokens,
+    this.bootstrap,
+  });
 
   final CatalogProfile user;
   final CatalogTokens tokens;
+  final ProfileBootstrap? bootstrap;
 
   factory AuthSessionResult.fromJson(Map<String, dynamic> json) {
+    ProfileBootstrap? bootstrap;
+    try {
+      if (json['activeProfile'] is Map<String, dynamic> ||
+          json['profiles'] is List ||
+          (json['user'] is Map &&
+              ((json['user'] as Map)['activeProfile'] != null ||
+                  (json['user'] as Map)['profiles'] != null))) {
+        bootstrap = ProfileBootstrap.fromAuthOrMe(json);
+      }
+    } catch (_) {
+      bootstrap = null;
+    }
     return AuthSessionResult(
       user: CatalogProfile.fromJson(
         json['user'] as Map<String, dynamic>? ?? const {},
@@ -43,9 +61,10 @@ class AuthSessionResult extends Equatable {
       tokens: CatalogTokens.fromJson(
         json['tokens'] as Map<String, dynamic>? ?? const {},
       ),
+      bootstrap: bootstrap,
     );
   }
 
   @override
-  List<Object?> get props => [user, tokens];
+  List<Object?> get props => [user, tokens, bootstrap];
 }

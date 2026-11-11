@@ -53,6 +53,12 @@ class SearchResultCard extends StatelessWidget {
                     ProductImageCollage(
                       imagePaths: paths,
                       imageThumbhashes: product.imageThumbhashes,
+                      imageAspectRatios: [
+                        for (final hash in product.imageThumbhashes)
+                          ProductImagePaths.thumbhashAspectRatio(
+                            hash.isEmpty ? null : hash,
+                          ),
+                      ],
                     )
                   else
                     Center(

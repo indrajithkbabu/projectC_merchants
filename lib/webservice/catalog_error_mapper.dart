@@ -93,6 +93,12 @@ class CatalogErrorMapper {
       case 'OTP_NOT_CONFIGURED':
       case 'OTP_DELIVERY_FAILED':
         return 'SMS verification is temporarily unavailable.';
+      case 'DEVICE_ID_REQUIRED':
+        return 'This install could not be identified. Please try signing in again.';
+      case 'INVALID_DEVICE_ID':
+        return 'This install identity is invalid. Reinstall or clear app data, then sign in again.';
+      case 'DEVICE_ID_MISMATCH':
+        return 'Install identity does not match this session. Please sign in again.';
 
       // ── Session / authz ─────────────────────────────────────────
       case 'AUTH_REQUIRED':
@@ -103,6 +109,15 @@ class CatalogErrorMapper {
         return 'Your session expired. Please sign in again.';
       case 'PROFILE_REQUIRED':
         return 'Please finish setting up your profile.';
+      case 'PROFILE_ACCESS_REMOVED':
+        return 'You no longer have access to that store.';
+      case 'PROFILE_CONTEXT_REQUIRED':
+      case 'STORE_PROFILE_REQUIRED':
+      case 'PERSONAL_PROFILE_REQUIRED':
+      case 'PROFILE_STORE_MISMATCH':
+        return 'Switch to the correct profile and try again.';
+      case 'OWNED_STORE_LIMIT_REACHED':
+        return 'You already own the maximum number of stores.';
       case 'OWNER_REQUIRED':
         return 'Only the store owner can do this.';
       case 'MEMBERSHIP_REQUIRED':
@@ -116,6 +131,12 @@ class CatalogErrorMapper {
         return 'Store owners cannot leave their store.';
       case 'IMPORTED_COLLECTION_READ_ONLY':
         return 'Imported collections cannot be edited.';
+      case 'INVITATION_NOT_FOUND':
+        return 'This invitation is no longer available.';
+      case 'INVITATION_NOT_PENDING':
+        return 'This invitation was already decided. Pull to refresh.';
+      case 'ALREADY_MEMBER':
+        return 'That person is already on the staff list.';
 
       // ── Shared / validation ─────────────────────────────────────
       case 'VALIDATION_ERROR':

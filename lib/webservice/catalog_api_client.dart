@@ -7,6 +7,7 @@ import 'package:project_c/flavor/flavor_variables.dart';
 import 'package:project_c/helper/app_log.dart';
 import 'package:project_c/helper/catalog_media_debug.dart';
 import 'package:project_c/helper/catalog_upload_story.dart';
+import 'package:project_c/helper/profile_switching_log.dart';
 import 'package:project_c/models/catalog/catalog_tokens.dart';
 import 'package:project_c/models/catalog/collection_models.dart';
 import 'package:project_c/resources/endpoints.dart';
@@ -37,13 +38,17 @@ class CatalogMultipartFile {
 class CatalogApiClient {
   CatalogApiClient({
     required SessionStorage sessionStorage,
+    Future<String> Function()? deviceIdProvider,
     http.Client? httpClient,
     Duration timeout = const Duration(seconds: 30),
   }) : _sessionStorage = sessionStorage,
+       _deviceIdProvider = deviceIdProvider,
        _http = httpClient ?? http.Client(),
        _timeout = timeout;
 
   static const _tag = 'CatalogApi';
+  static const profileHeader = 'X-Catalog-Profile';
+  static const deviceHeader = 'X-Catalog-Device-Id';
 
   /// Keys whose values are replaced in debug logs.
   static const _redactKeys = <String>{
@@ -55,6 +60,7 @@ class CatalogApiClient {
   };
 
   final SessionStorage _sessionStorage;
+  final Future<String> Function()? _deviceIdProvider;
   final http.Client _http;
   final Duration _timeout;
 
@@ -77,6 +83,10 @@ class CatalogApiClient {
     bool requiresAuth = true,
     bool allowAnonymousBearer = false,
     bool skipAuthRetry = false,
+    /// When true, do not attach [profileHeader] (bootstrap recovery / switch).
+    bool omitProfileHeader = false,
+    /// Override active profile id for this request only.
+    String? profileIdOverride,
     Duration? timeout,
   }) async {
     final response = await _execute(
@@ -87,6 +97,8 @@ class CatalogApiClient {
       extraHeaders: extraHeaders,
       requiresAuth: requiresAuth,
       allowAnonymousBearer: allowAnonymousBearer,
+      omitProfileHeader: omitProfileHeader,
+      profileIdOverride: profileIdOverride,
       timeout: timeout,
     );
 
@@ -101,6 +113,8 @@ class CatalogApiClient {
         extraHeaders: extraHeaders,
         requiresAuth: true,
         allowAnonymousBearer: false,
+        omitProfileHeader: omitProfileHeader,
+        profileIdOverride: profileIdOverride,
         timeout: timeout,
       );
       return _decodeOrThrow(retry, path);
@@ -117,6 +131,8 @@ class CatalogApiClient {
     HttpMethod method = HttpMethod.post,
     bool requiresAuth = true,
     bool skipAuthRetry = false,
+    bool omitProfileHeader = false,
+    String? profileIdOverride,
     Duration timeout = const Duration(minutes: 5),
   }) async {
     final httpMethod = switch (method) {
@@ -130,6 +146,8 @@ class CatalogApiClient {
       fields: fields,
       files: files,
       requiresAuth: requiresAuth,
+      omitProfileHeader: omitProfileHeader,
+      profileIdOverride: profileIdOverride,
       timeout: timeout,
     );
 
@@ -142,6 +160,8 @@ class CatalogApiClient {
         fields: fields,
         files: files,
         requiresAuth: true,
+        omitProfileHeader: omitProfileHeader,
+        profileIdOverride: profileIdOverride,
         timeout: timeout,
       );
       return _decodeOrThrow(retry, path);
@@ -211,6 +231,8 @@ class CatalogApiClient {
     Map<String, String>? extraHeaders,
     required bool requiresAuth,
     required bool allowAnonymousBearer,
+    bool omitProfileHeader = false,
+    String? profileIdOverride,
     Duration? timeout,
   }) async {
     String? access;
@@ -228,12 +250,19 @@ class CatalogApiClient {
       }
     }
 
+    final headers = await _contextHeaders(
+      requiresAuth: requiresAuth,
+      omitProfileHeader: omitProfileHeader,
+      profileIdOverride: profileIdOverride,
+      extraHeaders: extraHeaders,
+    );
+
     return _rawRequest(
       method: method,
       path: path,
       body: body,
       query: query,
-      extraHeaders: extraHeaders,
+      extraHeaders: headers,
       accessToken: access,
       timeout: timeout,
     );
@@ -245,6 +274,8 @@ class CatalogApiClient {
     required Map<String, String> fields,
     required List<CatalogMultipartFile> files,
     required bool requiresAuth,
+    bool omitProfileHeader = false,
+    String? profileIdOverride,
     required Duration timeout,
   }) async {
     final access = (await _sessionStorage.readTokens())?.accessToken;
@@ -267,6 +298,12 @@ class CatalogApiClient {
     if (access != null && access.isNotEmpty) {
       request.headers['Authorization'] = 'Bearer $access';
     }
+    final context = await _contextHeaders(
+      requiresAuth: requiresAuth,
+      omitProfileHeader: omitProfileHeader,
+      profileIdOverride: profileIdOverride,
+    );
+    request.headers.addAll(context);
     request.fields.addAll(fields);
 
     for (final part in files) {
@@ -325,6 +362,43 @@ class CatalogApiClient {
         message: e.message,
       );
     }
+  }
+
+  /// Device + optional active profile headers for account-scoped calls.
+  Future<Map<String, String>> _contextHeaders({
+    required bool requiresAuth,
+    bool omitProfileHeader = false,
+    String? profileIdOverride,
+    Map<String, String>? extraHeaders,
+  }) async {
+    final headers = <String, String>{};
+    final provider = _deviceIdProvider;
+    if (provider != null) {
+      try {
+        final deviceId = (await provider()).trim();
+        if (deviceId.isNotEmpty) {
+          headers[deviceHeader] = deviceId;
+        }
+      } catch (e) {
+        AppLog.e(_tag, 'Failed to resolve device id', e);
+      }
+    }
+
+    if (requiresAuth && !omitProfileHeader) {
+      final override = profileIdOverride?.trim() ?? '';
+      final stored =
+          override.isNotEmpty
+              ? override
+              : ((await _sessionStorage.readActiveProfileId())?.trim() ?? '');
+      if (stored.isNotEmpty) {
+        headers[profileHeader] = stored;
+      }
+    }
+
+    if (extraHeaders != null && extraHeaders.isNotEmpty) {
+      headers.addAll(extraHeaders);
+    }
+    return headers;
   }
 
   Future<http.Response> _rawRequest({
@@ -572,6 +646,7 @@ class CatalogApiClient {
     }
 
     AppLog.e(_tag, 'API error $code (${response.statusCode})');
+    _logProfileSwitchingApiError(code, response.statusCode);
     return CatalogApiException(
       statusCode: response.statusCode,
       code: code,
@@ -580,6 +655,45 @@ class CatalogApiClient {
       failedPhotos: failedPhotos,
       retryAfterSeconds: retryAfter,
     );
+  }
+
+  void _logProfileSwitchingApiError(String code, int statusCode) {
+    switch (code) {
+      case 'DEVICE_ID_REQUIRED':
+      case 'INVALID_DEVICE_ID':
+      case 'DEVICE_ID_MISMATCH':
+        ProfileSwitchingLog.e(
+          'PS-05',
+          'API $code status=$statusCode',
+        );
+      case 'PROFILE_ACCESS_REMOVED':
+        ProfileSwitchingLog.d(
+          'PS-53/54/72',
+          'API PROFILE_ACCESS_REMOVED status=$statusCode',
+        );
+      case 'OWNED_STORE_LIMIT_REACHED':
+        ProfileSwitchingLog.d(
+          'PS-33',
+          'API OWNED_STORE_LIMIT_REACHED status=$statusCode',
+        );
+      case 'OWNER_CANNOT_LEAVE':
+        ProfileSwitchingLog.d(
+          'PS-51',
+          'API OWNER_CANNOT_LEAVE status=$statusCode',
+        );
+      case 'INVITATION_NOT_PENDING':
+        ProfileSwitchingLog.d(
+          'PS-75',
+          'API INVITATION_NOT_PENDING status=$statusCode',
+        );
+      case 'PROFILE_REQUIRED':
+        ProfileSwitchingLog.d(
+          'PS-06',
+          'API PROFILE_REQUIRED status=$statusCode (name onboarding)',
+        );
+      default:
+        break;
+    }
   }
 
   Map<String, dynamic> _decodeMap(String body) {

@@ -320,12 +320,21 @@ class _PendingUploadCard extends StatelessWidget {
   Widget build(BuildContext context) {
     AppearanceScope.maybeOf(context);
     final photos = _visiblePhotos(pending);
-    final paths = <String>[
+    final visibleSlots = <PendingPhotoSlot>[
       for (final slot in photos)
-        if (slot.paintPath.isNotEmpty) slot.paintPath,
+        if (slot.paintPath.isNotEmpty) slot,
+    ];
+    final paths = <String>[
+      for (final slot in visibleSlots) slot.paintPath,
     ];
     final hashes = <String>[
-      for (final slot in photos) slot.thumbhash.trim(),
+      for (final slot in visibleSlots) slot.thumbhash.trim(),
+    ];
+    final aspectRatios = <double?>[
+      for (final hash in hashes)
+        ProductImagePaths.thumbhashAspectRatio(
+          hash.isEmpty ? null : hash,
+        ),
     ];
 
     return _PendingInteractionShell(
@@ -348,13 +357,14 @@ class _PendingUploadCard extends StatelessWidget {
                     ProductImageCollage(
                       imagePaths: paths,
                       imageThumbhashes: hashes,
+                      imageAspectRatios: aspectRatios,
                       layoutIdentity: 'pending_${pending.id}_${paths.length}',
                       cellOverlayBuilder: (index) {
-                        if (index < 0 || index >= photos.length) {
+                        if (index < 0 || index >= visibleSlots.length) {
                           return const SizedBox.shrink();
                         }
                         return _UploadStatusOverlay(
-                          status: photos[index].status,
+                          status: visibleSlots[index].status,
                           showCheck: revealed.contains(index),
                           revealing: pending.isRevealing,
                           forceFailed: pending.hasFailed,
