@@ -759,8 +759,19 @@ class _StoreProfileRouteState extends State<StoreProfileRoute> {
     }
   }
 
+  /// Add only while acting as this store with upload|manageProducts.
+  /// Personal (even if owner/staff of the store) must not see Add.
+  bool _canAddProducts(StoreProfileState state) {
+    if (!state.isOwnStore) return false;
+    final session = ServiceLocator.get<CatalogSession>();
+    final active = session.activeStoreId?.trim() ?? '';
+    final storeId = state.storeId.trim();
+    if (active.isEmpty || active != storeId) return false;
+    return session.permissions.canUploadCatalogue;
+  }
+
   Future<void> _addProducts(BuildContext context) async {
-    // Relationship=owner shows Add; uploads still need X-Catalog-Profile store.
+    // Owner/staff Add; uploads still need X-Catalog-Profile store.
     final ready = await _ensureActingAsStoreProfile(context);
     if (!ready || !context.mounted) return;
 
@@ -1680,6 +1691,7 @@ class _StoreProfileRouteState extends State<StoreProfileRoute> {
                 onOpenStoreInfo: () => _openStoreChannel(context, state),
                 onBack: () => _goHome(context),
                 onAddProducts: () => _addProducts(context),
+                canAddProducts: _canAddProducts(state),
                 // Selection-mode forward only (no visitor browse toolbar Import).
                 onImport: () => _onVisitorSelectionImport(state),
                 onSearch: () => _openStoreSearch(context, state),

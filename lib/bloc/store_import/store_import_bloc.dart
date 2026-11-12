@@ -216,14 +216,15 @@ class StoreImportBloc extends Bloc<StoreImportEvent, StoreImportState> {
   }
 
   Future<void> _probeListings(Emitter<StoreImportState> emit) async {
-    final ownId = _session.ownStoreId;
-    if (ownId == null || ownId.isEmpty) {
+    final destId = _session.importDestinationStoreId;
+    if (destId == null || destId.isEmpty) {
       emit(
         state.copyWith(
           isLoadingTargets: false,
           selectedIds: const {},
           clearDestination: true,
-          errorMessage: 'Join or create a store before importing catalogues.',
+          errorMessage:
+              'Select a store profile before importing catalogues.',
         ),
       );
       return;
@@ -363,12 +364,12 @@ class StoreImportBloc extends Bloc<StoreImportEvent, StoreImportState> {
         if (targetById[id] != null) targetById[id]!,
     ];
 
-    final ownId = _session.ownStoreId;
+    final preferredId = _session.importDestinationStoreId;
     String? destinationId;
     if (pickerTargets.length == 1) {
       destinationId = pickerTargets.first.id;
-    } else if (ownId != null && shared.contains(ownId)) {
-      destinationId = ownId;
+    } else if (preferredId != null && shared.contains(preferredId)) {
+      destinationId = preferredId;
     } else {
       destinationId = pickerTargets.first.id;
     }

@@ -360,9 +360,9 @@ class _MyStoreToolbar extends StatelessWidget {
           AppBackButton(onPressed: onBack)
         else if (onOpenSwitcher != null)
           Expanded(
-            child: InkWell(
+            child: GestureDetector(
+              behavior: HitTestBehavior.opaque,
               onTap: onOpenSwitcher,
-              borderRadius: BorderRadius.circular(8),
               child: Padding(
                 padding: const EdgeInsets.symmetric(vertical: 6),
                 child: Row(

@@ -35,6 +35,7 @@ class StoreProfileTelegramHeader extends StatelessWidget {
     this.chatUnread = 0,
     this.selectedPhotoCount,
     this.showSelectionImport = true,
+    this.canAddProducts,
   });
 
   final StoreProfileState state;
@@ -60,6 +61,10 @@ class StoreProfileTelegramHeader extends StatelessWidget {
   /// False for accounts with no store of their own (Wishlist only).
   final bool showSelectionImport;
 
+  /// Catalogue Add (owner/staff with upload|manageProducts). Defaults to
+  /// [StoreProfileState.isOwnStore] when null.
+  final bool? canAddProducts;
+
   static const double _pillHeight = 42;
   static const double _rowPad = 6;
   static const double toolbarHeight = _pillHeight + _rowPad * 2;
@@ -69,8 +74,9 @@ class StoreProfileTelegramHeader extends StatelessWidget {
 
   bool get _photoSelecting => selectedPhotoCount != null;
 
-  /// Own store → add. Visitor browse has no toolbar Import (use long-press).
-  bool get _showPrimaryAction => !_photoSelecting && state.isOwnStore;
+  /// Own/staff catalogue → add. Visitor browse has no toolbar Import (long-press).
+  bool get _showPrimaryAction =>
+      !_photoSelecting && (canAddProducts ?? state.isOwnStore);
 
   bool get _showSearch => !_photoSelecting && !state.isContentLocked;
 

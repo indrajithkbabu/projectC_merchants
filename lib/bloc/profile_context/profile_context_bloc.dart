@@ -154,11 +154,52 @@ class ProfileContextBloc
     }
 
     final fromId = state.activeProfile?.id ?? '(none)';
+    final quiet = event.quiet;
     ProfileSwitchingLog.d(
       'PS-22/23/70/74',
       'select start from=$fromId to=$profileId '
-      'targetRole=${target?.role.name ?? "(unknown)"}',
+      'targetRole=${target?.role.name ?? "(unknown)"} quiet=$quiet',
     );
+
+    // Quiet select (Create-store → Personal): update session, no switch moment.
+    if (quiet) {
+      emit(state.copyWith(clearError: true, clearToast: true));
+      try {
+        final bootstrap = await _profileRepository.selectActiveProfile(
+          profileId,
+        );
+        _warmCachesFor(bootstrap.activeProfile);
+        ProfileSwitchingLog.d(
+          'PS-22/23/31',
+          'quiet select ok active=${bootstrap.activeProfile.id} '
+          'role=${bootstrap.activeProfile.role.name} '
+          '(no switch moment)',
+        );
+        emit(
+          state.copyWith(
+            bootstrap: bootstrap,
+            isSwitching: false,
+            clearSwitchAnimation: true,
+            clearError: true,
+          ),
+        );
+      } catch (e) {
+        AppLog.e(_tag, 'quiet selectActiveProfile failed', e);
+        ProfileSwitchingLog.e('PS-22/31', 'quiet select failed to=$profileId', e);
+        if (_isAccessRemoved(e)) {
+          add(const ProfileContextAccessRemovedRecover());
+          return;
+        }
+        emit(
+          state.copyWith(
+            isSwitching: false,
+            clearSwitchAnimation: true,
+            errorMessage: CatalogErrorMapper.toUserMessage(e),
+          ),
+        );
+      }
+      return;
+    }
 
     emit(
       state.copyWith(
@@ -228,7 +269,7 @@ class ProfileContextBloc
         state.copyWith(
           bootstrap: bootstrap,
           isLoading: false,
-          toastMessage: name.isEmpty ? 'Joined store' : 'You joined $name',
+          clearToast: true,
           clearError: true,
         ),
       );
@@ -263,7 +304,7 @@ class ProfileContextBloc
         state.copyWith(
           bootstrap: bootstrap,
           isLoading: false,
-          toastMessage: 'Invite declined',
+          clearToast: true,
           clearError: true,
         ),
       );
@@ -401,7 +442,7 @@ class ProfileContextBloc
           bootstrap: bootstrap,
           isSwitching: false,
           switchTarget: bootstrap.activeProfile,
-          toastMessage: name.isEmpty ? 'Store created' : '$name created',
+          clearToast: true,
           clearError: true,
         ),
       );
@@ -452,10 +493,7 @@ class ProfileContextBloc
         state.copyWith(
           bootstrap: next,
           isLoading: false,
-          toastMessage:
-              storeName.isEmpty
-                  ? 'You left the store'
-                  : 'You left $storeName',
+          clearToast: true,
           clearError: true,
         ),
       );
@@ -499,8 +537,7 @@ class ProfileContextBloc
         state.copyWith(
           bootstrap: bootstrap,
           isLoading: false,
-          toastMessage:
-              storeName.isEmpty ? 'Store deleted' : '$storeName deleted',
+          clearToast: true,
           clearError: true,
         ),
       );

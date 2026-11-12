@@ -79,13 +79,13 @@ class PersonalProfileTab extends StatelessWidget {
                   Row(
                     children: [
                       Expanded(
-                        child: InkWell(
+                        child: GestureDetector(
+                          behavior: HitTestBehavior.opaque,
                           onTap:
                               () => showProfileSwitcherSheet(
                                 context,
                                 source: 'chevron',
                               ),
-                          borderRadius: BorderRadius.circular(8),
                           child: Padding(
                             padding: const EdgeInsets.symmetric(vertical: 6),
                             child: Row(

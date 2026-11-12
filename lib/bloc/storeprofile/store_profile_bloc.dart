@@ -11,6 +11,7 @@ import 'package:project_c/helper/device_contact_names.dart';
 import 'package:project_c/helper/import_qa.dart';
 import 'package:project_c/helper/owner_item_delete.dart';
 import 'package:project_c/helper/product_image.dart';
+import 'package:project_c/models/catalog/catalog_store.dart';
 import 'package:project_c/models/catalog/collection_models.dart';
 import 'package:project_c/models/catalog/follow_api_models.dart';
 import 'package:project_c/models/catalog/import_models.dart';
@@ -282,9 +283,9 @@ class StoreProfileBloc extends Bloc<StoreProfileEvent, StoreProfileState> {
         );
     }
   }
+  /// Viewer can import into active store (owner/staff) or an owned store.
   static bool _hasOwnStoreId(CatalogSession session) {
-    final id = session.ownStoreId;
-    return id != null && id.isNotEmpty;
+    return session.hasImportDestination;
   }
 
   static const _avatarPalette = <int>[
@@ -1028,10 +1029,17 @@ class StoreProfileBloc extends Bloc<StoreProfileEvent, StoreProfileState> {
       );
       final previouslyCouldView = state.canViewContent;
       final snapshot = StoreMetaSnapshot.fromCatalogStore(store);
-      // Person-level ownership from detail: promote to owner chrome (Add
-      // products). Never downgrade an owned open back to visitor.
-      final promoteToOwner = store.isOwn && !state.isOwnStore;
-      if (promoteToOwner) {
+      // Promote to catalogue chrome only while already acting as this store.
+      // Personal + owner/member relationship must not gain Add (STORE_PROFILE_REQUIRED).
+      final actingId = _session.activeStoreId?.trim() ?? '';
+      final actingAsThisStore =
+          actingId.isNotEmpty && actingId == storeId.trim();
+      final promoteToCatalogue =
+          !state.isOwnStore &&
+          actingAsThisStore &&
+          (store.isOwn ||
+              store.relationship == StoreRelationship.member);
+      if (promoteToCatalogue) {
         emit(
           state.copyWith(
             isOwnStore: true,

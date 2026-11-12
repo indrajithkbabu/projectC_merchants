@@ -131,11 +131,12 @@ class StoreProfileState extends Equatable {
   bool get showImportRequestsBadge => isOwnStore;
 
   /// Own store always shows Add/Import; other stores only show Import when
-  /// the viewer already has a store to import into and can see products.
+  /// the viewer has an import destination (active/owned store) and can see products.
   bool get showActionsRow =>
       isOwnStore || (viewerHasOwnStore && canViewContent);
 
-  /// Import is allowed only once the viewer has their own store.
+  /// Import when viewer has a destination store (active staff/owner or owned)
+  /// and can see the source products.
   bool get canImport => viewerHasOwnStore && canViewContent;
 
   bool get isPrivateStore => privacy.isPrivate;

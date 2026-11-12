@@ -9,7 +9,6 @@ import 'package:project_c/helper/text_styles.dart';
 import 'package:project_c/helper/widgets/app_back_button.dart';
 import 'package:project_c/helper/widgets/primary_button.dart';
 import 'package:project_c/helper/widgets/screen_wrapper.dart';
-import 'package:project_c/main/app.dart' show scaffoldMessengerKey;
 import 'package:project_c/navigation/routes.dart';
 import 'package:project_c/presentation/main_shell/shell_nav.dart';
 import 'package:project_c/presentation/store_setup/store_setup_widgets/store_link_card.dart';
@@ -90,8 +89,6 @@ class _StoreSetupRouteState extends State<StoreSetupRoute> {
 
             final storeId = state.createdStoreId?.trim() ?? '';
             final storeName = state.storeName.trim();
-            final toast =
-                storeName.isEmpty ? 'Store created' : '$storeName created';
 
             ProfileSwitchingLog.d(
               'PS-30/31/32',
@@ -126,9 +123,6 @@ class _StoreSetupRouteState extends State<StoreSetupRoute> {
             );
             WidgetsBinding.instance.addPostFrameCallback((_) {
               ShellNav.request(ShellNavTab.profile);
-              scaffoldMessengerKey.currentState?.showSnackBar(
-                SnackBar(content: Text(toast)),
-              );
             });
           },
         ),

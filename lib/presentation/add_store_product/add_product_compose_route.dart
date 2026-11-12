@@ -2239,80 +2239,18 @@ class _ComposePhoto extends StatefulWidget {
 class _ComposePhotoState extends State<_ComposePhoto> {
   bool _announcedFrame = false;
 
-  /// width/height — null until resolved. Landscape heroes use [BoxFit.contain]
-  /// so the full frame is visible; portrait keeps [BoxFit.cover].
-  double? _aspect;
-  ImageStream? _stream;
-  ImageStreamListener? _listener;
-
-  static const double _landscapeThreshold = 1.05;
-
-  @override
-  void initState() {
-    super.initState();
-    if (!widget.thumb) _resolveAspect();
-  }
-
   @override
   void didUpdateWidget(covariant _ComposePhoto oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.path == widget.path && oldWidget.thumb == widget.thumb) {
-      return;
+    if (oldWidget.path != widget.path) {
+      _announcedFrame = false;
     }
-    _announcedFrame = false;
-    _aspect = null;
-    _detachImageStreamListener();
-    if (!widget.thumb) _resolveAspect();
-  }
-
-  @override
-  void dispose() {
-    _detachImageStreamListener();
-    super.dispose();
   }
 
   void _announceIfNeeded() {
     if (_announcedFrame || widget.onFirstFrame == null) return;
     _announcedFrame = true;
     widget.onFirstFrame!();
-  }
-
-  void _resolveAspect() {
-    final provider = ProductImagePaths.provider(widget.path);
-    if (provider == null) return;
-    final stream = provider.resolve(const ImageConfiguration());
-    late final ImageStreamListener listener;
-    listener = ImageStreamListener(
-      (info, _) {
-        final iw = info.image.width;
-        final ih = info.image.height;
-        _detachImageStreamListener();
-        if (iw <= 0 || ih <= 0) return;
-        final next = iw / ih;
-        if (!mounted) return;
-        if (_aspect == next) return;
-        setState(() => _aspect = next);
-      },
-      onError: (_, __) {
-        _detachImageStreamListener();
-      },
-    );
-    _stream = stream;
-    _listener = listener;
-    stream.addListener(listener);
-  }
-
-  void _detachImageStreamListener() {
-    final stream = _stream;
-    final listener = _listener;
-    _stream = null;
-    _listener = null;
-    if (stream == null || listener == null) return;
-    try {
-      stream.removeListener(listener);
-    } on StateError catch (_) {
-      // Stream already disposed after an earlier removeListener.
-    }
   }
 
   @override
@@ -2327,16 +2265,10 @@ class _ComposePhotoState extends State<_ComposePhoto> {
               dpr: dpr,
             );
 
-    // Thumbs stay cover (strip cells). Heroes: landscape → full frame contain
-    // on the black compose canvas; portrait/unknown → cover (unchanged).
-    final isLandscape =
-        _aspect != null &&
-        _aspect!.isFinite &&
-        _aspect! >= _landscapeThreshold;
-    final fit =
-        widget.thumb
-            ? BoxFit.cover
-            : (isLandscape ? BoxFit.contain : BoxFit.cover);
+    // Thumbs: cover in strip cells. Heroes: always contain on the black
+    // canvas — preserves aspect (no stretch) and avoids landscape cover→
+    // contain flicker after aspect resolve.
+    final fit = widget.thumb ? BoxFit.cover : BoxFit.contain;
 
     final image = ProductMediaImage(
       path: widget.path,
@@ -2362,7 +2294,10 @@ class _ComposePhotoState extends State<_ComposePhoto> {
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
       onTap: widget.onTap,
-      child: SizedBox.expand(child: image),
+      child: ColoredBox(
+        color: Colors.black,
+        child: SizedBox.expand(child: image),
+      ),
     );
   }
 }

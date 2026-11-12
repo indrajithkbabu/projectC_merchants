@@ -30,7 +30,9 @@ class StaffListRoute extends StatefulWidget {
 class _StaffListRouteState extends State<StaffListRoute> {
   final _repo = ServiceLocator.get<StoreRepository>();
   List<StaffListRow> _rows = const [];
-  bool _loading = true;
+  /// Thin bar under app bar — never blanks an already-visible list.
+  bool _busy = false;
+  bool _hasLoadedOnce = false;
   String? _error;
 
   @override
@@ -41,7 +43,7 @@ class _StaffListRouteState extends State<StaffListRoute> {
 
   Future<void> _load() async {
     setState(() {
-      _loading = true;
+      _busy = true;
       _error = null;
     });
     try {
@@ -70,13 +72,22 @@ class _StaffListRouteState extends State<StaffListRoute> {
       );
       setState(() {
         _rows = rows;
-        _loading = false;
+        _busy = false;
+        _hasLoadedOnce = true;
       });
     } catch (e) {
       if (!mounted) return;
       setState(() {
-        _loading = false;
-        _error = CatalogErrorMapper.toUserMessage(e);
+        _busy = false;
+        _hasLoadedOnce = true;
+        // Keep prior rows on soft refresh failure; only block empty first load.
+        if (_rows.isEmpty) {
+          _error = CatalogErrorMapper.toUserMessage(e);
+        } else {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text(CatalogErrorMapper.toUserMessage(e))),
+          );
+        }
       });
     }
   }
@@ -96,10 +107,7 @@ class _StaffListRouteState extends State<StaffListRoute> {
     );
     if (!mounted) return;
     if (result == true) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        // Status only — do not claim SMS delivery (deferred on BE).
-        const SnackBar(content: Text('Invitations pending')),
-      );
+      // List refresh shows Invited rows — no success snackbar.
       await _load();
     }
   }
@@ -139,6 +147,7 @@ class _StaffListRouteState extends State<StaffListRoute> {
           'PS-47',
           'revoke invite id=$inviteId store=${widget.storeId}',
         );
+        setState(() => _busy = true);
         await _repo.revokeInvitation(
           storeId: widget.storeId,
           invitationId: inviteId,
@@ -146,6 +155,7 @@ class _StaffListRouteState extends State<StaffListRoute> {
         await _load();
       } catch (e) {
         if (!mounted) return;
+        setState(() => _busy = false);
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text(CatalogErrorMapper.toUserMessage(e))),
         );
@@ -186,10 +196,12 @@ class _StaffListRouteState extends State<StaffListRoute> {
         'remove staff userId=$userId store=${widget.storeId} '
         '(owner should stay on own store)',
       );
+      setState(() => _busy = true);
       await _repo.removeMember(storeId: widget.storeId, userId: userId);
       await _load();
     } catch (e) {
       if (!mounted) return;
+      setState(() => _busy = false);
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text(CatalogErrorMapper.toUserMessage(e))),
       );
@@ -198,6 +210,8 @@ class _StaffListRouteState extends State<StaffListRoute> {
 
   @override
   Widget build(BuildContext context) {
+    final showErrorOnly = _error != null && _rows.isEmpty && _hasLoadedOnce;
+
     return ScreenWrapper(
       backgroundColor: AppColors.background,
       child: Column(
@@ -224,9 +238,15 @@ class _StaffListRouteState extends State<StaffListRoute> {
               ],
             ),
           ),
-          if (_loading)
-            const Expanded(child: Center(child: CircularProgressIndicator()))
-          else if (_error != null)
+          if (_busy)
+            LinearProgressIndicator(
+              minHeight: 2,
+              color: AppColors.primary,
+              backgroundColor: AppColors.surfaceSecondary,
+            )
+          else
+            const SizedBox(height: 2),
+          if (showErrorOnly)
             Expanded(
               child: Center(
                 child: Padding(
@@ -254,7 +274,10 @@ class _StaffListRouteState extends State<StaffListRoute> {
                   padding: AppPadding.screen(bottom: 24),
                   children: [
                     ListTile(
-                      onTap: _openAddStaff,
+                      onTap: _busy ? null : _openAddStaff,
+                      splashColor: Colors.transparent,
+                      hoverColor: Colors.transparent,
+                      focusColor: Colors.transparent,
                       leading: CircleAvatar(
                         radius: 22,
                         backgroundColor: AppColors.surfaceSecondary,
@@ -271,7 +294,10 @@ class _StaffListRouteState extends State<StaffListRoute> {
                     Divider(height: 1, color: AppColors.divider),
                     for (final row in _rows) ...[
                       ListTile(
-                        onTap: () => _onRowTap(row),
+                        onTap: _busy ? null : () => _onRowTap(row),
+                        splashColor: Colors.transparent,
+                        hoverColor: Colors.transparent,
+                        focusColor: Colors.transparent,
                         leading: _StaffAvatar(row: row),
                         title: Text(
                           row.name,

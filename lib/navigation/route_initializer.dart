@@ -17,7 +17,9 @@ import 'package:project_c/bloc/store_setup/store_setup_bloc.dart';
 import 'package:project_c/bloc/storeprofile/store_profile_bloc.dart';
 import 'package:project_c/bloc/team/team_bloc.dart';
 import 'package:project_c/data/merchant_store_session.dart';
+import 'package:project_c/di/service_locator.dart';
 import 'package:project_c/models/bulk_upload.dart';
+import 'package:project_c/session/catalog_session.dart';
 import 'package:project_c/models/catalog/catalog_product_models.dart';
 import 'package:project_c/models/pending_product_upload.dart';
 import 'package:project_c/models/store_channel.dart';
@@ -586,8 +588,17 @@ PageRoute? _storeProfileRoute(RouteSettings settings) {
 
   final bool isOwnStore;
   if (channel != null) {
-    // Management chrome (Add products) only for owned stores.
-    isOwnStore = channel.isOwn;
+    // Catalogue chrome (Add/upload, product select) only while acting as this
+    // store profile. Membership/ownership alone (e.g. Personal + staff of
+    // ikbbb) must not show Add — BE requires store:<id> for catalogue ops.
+    // Owner-only CTAs stay gated via canManageStore elsewhere.
+    final channelId = channel.id.trim();
+    final actingStoreId =
+        ServiceLocator.get<CatalogSession>().activeStoreId?.trim() ?? '';
+    isOwnStore =
+        channelId.isNotEmpty &&
+        actingStoreId.isNotEmpty &&
+        actingStoreId == channelId;
   } else if (args is Map && args['isOwnStore'] is bool) {
     isOwnStore = args['isOwnStore'] as bool;
   } else {
