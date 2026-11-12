@@ -170,8 +170,8 @@ Future<void> showProfileSwitcherSheet(
                                     'Create a store from switcher '
                                     'wasPersonal=${state.activeProfile?.isPersonal == true}',
                                   );
-                                  // API create uses Personal header from session;
-                                  // switch to Personal first when acting as a store.
+                                  // API create uses Personal header; align session
+                                  // quietly (no switch-moment) when acting as a store.
                                   if (state.activeProfile?.isPersonal != true) {
                                     for (final p
                                         in state.bootstrap?.profiles ??
@@ -179,7 +179,10 @@ Future<void> showProfileSwitcherSheet(
                                       if (p.isPersonal &&
                                           p.id.trim().isNotEmpty) {
                                         context.read<ProfileContextBloc>().add(
-                                          ProfileContextSelectProfile(p.id),
+                                          ProfileContextSelectProfile(
+                                            p.id,
+                                            quiet: true,
+                                          ),
                                         );
                                         break;
                                       }
@@ -281,6 +284,9 @@ class _SwitcherProfileRow extends StatelessWidget {
   Widget build(BuildContext context) {
     return ListTile(
       onTap: onTap,
+      splashColor: Colors.transparent,
+      hoverColor: Colors.transparent,
+      focusColor: Colors.transparent,
       leading: _AvatarCircle(
         initials: profile.displayInitials,
         imageUrl: profile.effectiveAvatarUrl,

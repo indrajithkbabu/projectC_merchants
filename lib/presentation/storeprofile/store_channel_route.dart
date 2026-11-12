@@ -206,8 +206,7 @@ class _StoreChannelRouteState extends State<StoreChannelRoute>
     try {
       return context.read<StoreProfileBloc>().state.canImport;
     } catch (_) {
-      final id = ServiceLocator.get<CatalogSession>().ownStoreId?.trim() ?? '';
-      return id.isNotEmpty;
+      return ServiceLocator.get<CatalogSession>().hasImportDestination;
     }
   }
 

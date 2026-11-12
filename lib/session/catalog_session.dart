@@ -71,6 +71,25 @@ class CatalogSession {
     return id.isEmpty ? null : id;
   }
 
+  /// Catalogue import destination: active owner/staff store, else owned store.
+  ///
+  /// Staff importing while selected on a staff store lands in that store —
+  /// not an owned store from another profile. Personal with no active store
+  /// falls back to [ownStoreId] (legacy owner-on-Personal path).
+  String? get importDestinationStoreId {
+    final active = activeStoreId?.trim();
+    if (active != null && active.isNotEmpty) return active;
+    final own = ownStoreId?.trim();
+    if (own != null && own.isNotEmpty) return own;
+    return null;
+  }
+
+  /// True when imports have a destination store (active or owned).
+  bool get hasImportDestination {
+    final id = importDestinationStoreId?.trim();
+    return id != null && id.isNotEmpty;
+  }
+
   /// `personal:<userId>` for create-store / skip-store headers.
   String? get personalProfileId {
     final active = activeProfile;

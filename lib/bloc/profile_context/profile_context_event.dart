@@ -21,12 +21,15 @@ class ProfileContextRefreshed extends ProfileContextEvent {
 }
 
 class ProfileContextSelectProfile extends ProfileContextEvent {
-  const ProfileContextSelectProfile(this.profileId);
+  const ProfileContextSelectProfile(this.profileId, {this.quiet = false});
 
   final String profileId;
 
+  /// When true (e.g. Create store prep → Personal), skip the switch-moment overlay.
+  final bool quiet;
+
   @override
-  List<Object?> get props => [profileId];
+  List<Object?> get props => [profileId, quiet];
 }
 
 class ProfileContextAcceptInvite extends ProfileContextEvent {

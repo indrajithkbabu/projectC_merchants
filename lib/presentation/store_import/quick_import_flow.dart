@@ -390,7 +390,7 @@ class QuickImportFlow {
       Routes.addProductComposeRoute,
       arguments: <String, Object?>{
         'imagePaths': [for (final photo in selected) photo.imageUrl],
-        'storeId': _ownStoreId(),
+        'storeId': _importDestinationStoreId(),
         'initialIndex': 0,
         'initialDrafts': [for (final photo in selected) photo.draft],
         'importMode': true,
@@ -410,11 +410,13 @@ class QuickImportFlow {
     final drafts = _drafts(result['photoDrafts']);
     final locked = _bools(result['sourceLocked']);
     final imagePaths = _strings(result['imagePaths']);
-    final destId = _ownStoreId();
+    final destId = _importDestinationStoreId();
     if (destId.isEmpty || productIds.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('Create your store before importing products.'),
+          content: Text(
+            'Select a store profile before importing products.',
+          ),
         ),
       );
       return false;
@@ -667,11 +669,10 @@ class QuickImportFlow {
     return '';
   }
 
-  static String _ownStoreId() {
+  /// Active owner/staff store, else owned store (see [CatalogSession]).
+  static String _importDestinationStoreId() {
     final session = ServiceLocator.get<CatalogSession>();
-    final own = session.profile?.ownStore?.id.trim() ?? '';
-    if (own.isNotEmpty) return own;
-    return session.ownStoreId?.trim() ?? '';
+    return session.importDestinationStoreId?.trim() ?? '';
   }
 
   static void _showResult(NavigatorState rootNav, QuickImportCommitResult result) {
@@ -712,13 +713,15 @@ class QuickImportFlow {
             label: 'View',
             onPressed: () {
               final session = ServiceLocator.get<CatalogSession>();
+              final storeId = session.importDestinationStoreId?.trim() ?? '';
+              final activeName = session.activeProfile?.name.trim() ?? '';
               final own = session.profile?.ownStore;
-              final storeId = (own?.id.trim().isNotEmpty == true)
-                  ? own!.id.trim()
-                  : (session.ownStoreId?.trim() ?? '');
-              final storeName = (own?.name.trim().isNotEmpty == true)
-                  ? own!.name.trim()
-                  : 'Your Store';
+              final storeName =
+                  activeName.isNotEmpty
+                      ? activeName
+                      : (own?.name.trim().isNotEmpty == true
+                          ? own!.name.trim()
+                          : 'Your Store');
               rootNav.pushNamed(
                 Routes.storeImportRequestsRoute,
                 arguments: <String, Object?>{

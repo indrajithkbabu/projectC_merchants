@@ -26,6 +26,9 @@ class ProfilePermissions extends Equatable {
   final bool manageStore;
   final bool manageMembers;
 
+  /// Catalogue upload / product manage (staff + owner). Not store/team admin.
+  bool get canUploadCatalogue => upload || manageProducts;
+
   static const personalDefaults = ProfilePermissions(
     browse: true,
     follow: true,
