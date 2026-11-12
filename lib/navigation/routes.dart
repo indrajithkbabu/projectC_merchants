@@ -52,6 +52,12 @@ class Routes {
 
   /// Discussion list for a chat that has more than one conversation.
   static const String chatDiscussionsRoute = 'chat_discussions_route';
+
+  /// One profile layout for a store, person, staff member, customer, or group.
+  static const String chatProfileRoute = 'chat_profile_route';
+
+  /// Products, photos, and files sent in a chat.
+  static const String chatSharedRoute = 'chat_shared_route';
   static const String accountPrivacyRoute = 'account_privacy_route';
   static const String followRequestsRoute = 'follow_requests_route';
   static const String followRequesterProfileRoute =

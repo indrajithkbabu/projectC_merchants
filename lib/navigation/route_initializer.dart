@@ -42,6 +42,8 @@ import 'package:project_c/presentation/auth/phone_route.dart';
 import 'package:project_c/presentation/home/home_placeholder_route.dart';
 import 'package:project_c/presentation/bootstrap/bootstrap_route.dart';
 import 'package:project_c/presentation/chat/chat_discussions_route.dart';
+import 'package:project_c/presentation/chat/chat_profile_route.dart';
+import 'package:project_c/presentation/chat/chat_shared_route.dart';
 import 'package:project_c/presentation/chat/chat_thread_route.dart';
 import 'package:project_c/presentation/chat/new_chat_route.dart';
 import 'package:project_c/presentation/main_shell/invite_friends_route.dart';
@@ -148,6 +150,10 @@ PageRoute? onGenerateRoutes(RouteSettings settings) {
       return _chatDiscussionsRoute(settings);
     case Routes.chatNewRoute:
       return _chatNewRoute(settings);
+    case Routes.chatProfileRoute:
+      return _chatProfileRoute(settings);
+    case Routes.chatSharedRoute:
+      return _chatSharedRoute(settings);
     case Routes.accountPrivacyRoute:
       return _accountPrivacyRoute(settings);
     case Routes.followRequestsRoute:
@@ -372,6 +378,33 @@ PageRoute? _chatNewRoute(RouteSettings settings) {
     settings: settings,
     builder:
         (_) => NewChatRoute(contactsBloc: contacts, storeListingBloc: listing),
+  );
+}
+
+PageRoute? _chatProfileRoute(RouteSettings settings) {
+  final args = settings.arguments;
+  final map = args is Map ? args : const <dynamic, dynamic>{};
+  final chatId =
+      map['chatId'] is String ? (map['chatId'] as String).trim() : '';
+  if (chatId.isEmpty) return null;
+  final member = map['memberId'];
+  final memberId =
+      member is String && member.trim().isNotEmpty ? member.trim() : null;
+  return _buildAnimatedRoute(
+    settings: settings,
+    builder: (_) => ChatProfileRoute(chatId: chatId, memberId: memberId),
+  );
+}
+
+PageRoute? _chatSharedRoute(RouteSettings settings) {
+  final args = settings.arguments;
+  final map = args is Map ? args : const <dynamic, dynamic>{};
+  final chatId =
+      map['chatId'] is String ? (map['chatId'] as String).trim() : '';
+  if (chatId.isEmpty) return null;
+  return _buildAnimatedRoute(
+    settings: settings,
+    builder: (_) => ChatSharedRoute(chatId: chatId),
   );
 }
 
