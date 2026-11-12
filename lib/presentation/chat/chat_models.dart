@@ -11,7 +11,7 @@ enum ChatSenderSide { merchant, customer }
 
 enum ChatReceipt { sent, delivered, read }
 
-enum ChatMessageKind { text, productShare, basket, status }
+enum ChatMessageKind { text, productShare, basket, photo, file, status }
 
 enum ChatKind { person, store, group }
 
@@ -24,12 +24,16 @@ class ChatMember {
     required this.name,
     this.storeName = '',
     this.phone = '',
+    this.role = '',
+    this.joined = '',
   });
 
   final String id;
   final String name;
   final String storeName;
   final String phone;
+  final String role;
+  final String joined;
 }
 
 class ChatProductRef {
@@ -118,6 +122,9 @@ class ChatMessage {
     this.teamOnly = false,
     this.mentions = const [],
     this.writerStore = '',
+    this.starred = false,
+    this.mediaPath = '',
+    this.mediaColorValue = 0,
   });
 
   final String id;
@@ -139,6 +146,11 @@ class ChatMessage {
 
   /// Store that can see a team-only note. Empty notes stay with [mine].
   final String writerStore;
+  bool starred;
+
+  /// Local photo path. Empty uses [mediaColorValue] as a stand-in.
+  final String mediaPath;
+  final int mediaColorValue;
 
   bool get isStatus => kind == ChatMessageKind.status;
 
@@ -154,6 +166,12 @@ class ChatMessage {
         if (text.trim().isNotEmpty) return text.trim();
         if (products.isEmpty) return 'Shared a product';
         return products.first.name;
+      case ChatMessageKind.photo:
+        if (text.trim().isNotEmpty) return text.trim();
+        return 'Photo';
+      case ChatMessageKind.file:
+        if (text.trim().isNotEmpty) return text.trim();
+        return 'File';
       case ChatMessageKind.text:
         return text.trim();
     }
@@ -172,7 +190,7 @@ class ProductDiscussion {
   });
 
   final String id;
-  final ChatProductRef? product;
+  ChatProductRef? product;
   DiscussionStatus status;
   String name;
   String closedBy;
@@ -203,10 +221,13 @@ class ChatThread {
     this.outbound = false,
     this.kind = ChatKind.person,
     this.muted = false,
-    this.members = const [],
+    List<ChatMember> members = const [],
     this.phone = '',
     this.createdBy = '',
-  });
+    this.blocked = false,
+    this.customerNote = '',
+    this.customerNoteBy = '',
+  }) : members = List<ChatMember>.of(members);
 
   final String id;
   final ChatActor customer;
@@ -224,6 +245,12 @@ class ChatThread {
   final List<ChatMember> members;
   final String phone;
   final String createdBy;
+  bool blocked;
+
+  /// Short note about a customer. The signed-in store can read and edit it.
+  /// Owner-versus-staff visibility is still open; see [chatShowsCustomerStoreRows].
+  String customerNote;
+  String customerNoteBy;
   final List<ProductDiscussion> discussions;
   final List<ChatMessage> messages;
 
@@ -270,6 +297,27 @@ class ChatThread {
     }
     if (muted) return 'Muted';
     return customer.isStoreAccount ? 'Store account' : 'Customer';
+  }
+
+  /// Discussion to open when the chat is entered with no explicit target.
+  /// Uses the discussion left open last, otherwise the one with the newest message.
+  String? resumeDiscussionId() {
+    if (discussionById(openDiscussionId) != null) return openDiscussionId;
+    ProductDiscussion? best;
+    DateTime bestAt = openedAt;
+    for (final discussion in discussions) {
+      var at = openedAt;
+      for (final message in messages) {
+        if (message.discussionId == discussion.id && message.at.isAfter(at)) {
+          at = message.at;
+        }
+      }
+      if (best == null || at.isAfter(bestAt)) {
+        best = discussion;
+        bestAt = at;
+      }
+    }
+    return best?.id;
   }
 
   ProductDiscussion? discussionById(String? id) {
@@ -429,6 +477,111 @@ bool chatMessageVisible(ChatMessage message, String viewerStore) {
   final writer = message.writerStore.trim();
   if (writer.isEmpty) return message.mine;
   return writer == viewerStore.trim();
+}
+
+/// Asked about and the customer team note stay visible to the signed-in store.
+/// Which staff may see them is undecided, so the check lives in this one place.
+bool chatShowsCustomerStoreRows(ChatThread thread) {
+  return thread.kind == ChatKind.person && !thread.customer.isStoreAccount;
+}
+
+enum ChatSharedKind { product, photo, file }
+
+class ChatSharedEntry {
+  const ChatSharedEntry({
+    required this.kind,
+    required this.discussionId,
+    required this.at,
+    this.product,
+    this.message,
+    this.title = '',
+    this.subtitle = '',
+    this.sender = '',
+  });
+
+  final ChatSharedKind kind;
+  final String discussionId;
+  final DateTime at;
+  final ChatProductRef? product;
+  final ChatMessage? message;
+  final String title;
+  final String subtitle;
+  final String sender;
+}
+
+List<ChatSharedEntry> chatSharedEntries(ChatThread thread, String viewerStore) {
+  final entries = <ChatSharedEntry>[];
+  final seenProducts = <String>{};
+  for (final message in thread.messages) {
+    if (!chatMessageVisible(message, viewerStore)) continue;
+    if (message.kind == ChatMessageKind.productShare ||
+        message.kind == ChatMessageKind.basket) {
+      for (final product in message.products) {
+        if (!seenProducts.add(product.id)) continue;
+        entries.add(
+          ChatSharedEntry(
+            kind: ChatSharedKind.product,
+            discussionId:
+                message.discussionId ??
+                thread.discussionIdForProduct(product.id) ??
+                '',
+            at: message.at,
+            product: product,
+            message: message,
+            title: product.name,
+            subtitle: product.detail,
+            sender: _sharedSender(thread, message),
+          ),
+        );
+      }
+    } else if (message.kind == ChatMessageKind.photo ||
+        message.kind == ChatMessageKind.file) {
+      entries.add(
+        ChatSharedEntry(
+          kind:
+              message.kind == ChatMessageKind.photo
+                  ? ChatSharedKind.photo
+                  : ChatSharedKind.file,
+          discussionId: message.discussionId ?? '',
+          at: message.at,
+          message: message,
+          title: message.previewBody(),
+          sender: _sharedSender(thread, message),
+        ),
+      );
+    }
+  }
+  for (final discussion in thread.discussions) {
+    final product = discussion.product;
+    if (product == null || !seenProducts.add(product.id)) continue;
+    entries.add(
+      ChatSharedEntry(
+        kind: ChatSharedKind.product,
+        discussionId: discussion.id,
+        at: thread.openedAt,
+        product: product,
+        title: product.name,
+        subtitle: product.detail,
+      ),
+    );
+  }
+  entries.sort((a, b) => b.at.compareTo(a.at));
+  return entries;
+}
+
+String _sharedSender(ChatThread thread, ChatMessage message) {
+  if (message.mine) return 'You';
+  final staff = message.staffName?.trim() ?? '';
+  if (staff.isNotEmpty) return staff;
+  return thread.customer.name;
+}
+
+/// Seed members use "My store" until a session name is written onto them.
+bool chatMemberOnViewerStore(ChatMember member, String viewerStore) {
+  final store = member.storeName.trim();
+  if (store.isEmpty) return false;
+  if (store == viewerStore.trim()) return true;
+  return store == 'My store';
 }
 
 bool chatSameDay(DateTime a, DateTime b) {

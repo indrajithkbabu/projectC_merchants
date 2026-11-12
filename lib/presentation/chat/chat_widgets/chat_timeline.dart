@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:project_c/helper/colors.dart';
 import 'package:project_c/helper/text_styles.dart';
 import 'package:project_c/presentation/chat/chat_mock_store.dart';
 import 'package:project_c/presentation/chat/chat_models.dart';
@@ -29,7 +28,7 @@ class ChatTimeline extends StatelessWidget {
     if (selected != null) {
       return ListView(
         controller: scrollController,
-        padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
+        padding: const EdgeInsets.fromLTRB(8, 8, 8, 12),
         children: [
           _OpenDiscussion(
             thread: thread,
@@ -60,13 +59,12 @@ class ChatTimeline extends StatelessWidget {
 
     return ListView(
       controller: scrollController,
-      padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
+      padding: const EdgeInsets.fromLTRB(4, 8, 4, 12),
       children: [
         for (var i = 0; i < items.length; i++) ...[
           if (i == 0 || !chatSameDay(items[i - 1].at, items[i].at))
             ChatDayChip(label: chatDayLabel(items[i].at)),
-          if (items[i].general != null)
-            _general(items[i].general!),
+          if (items[i].general != null) _general(items[i].general!),
         ],
         if (thread.customerTyping && thread.status == ChatStatus.open)
           const ChatTypingDots(),
@@ -79,11 +77,15 @@ class ChatTimeline extends StatelessWidget {
     final onRight = _onRight(message);
     return Align(
       alignment: onRight ? Alignment.centerRight : Alignment.centerLeft,
-        child: ChatBubble(
+      child: ChatBubble(
         message: message,
         alignRight: onRight,
         senderLabel: _groupLabel(message),
         onReply: () => onReply(message),
+        onLongPress:
+            onMessageMenu == null ? null : () => onMessageMenu!(message),
+        onSecondaryTap:
+            onMessageMenu == null ? null : () => onMessageMenu!(message),
         onProductTap: onOpenProduct,
       ),
     );
@@ -108,7 +110,16 @@ class _Slot {
 
 bool _messageOnRight(ChatThread thread, ChatMessage message) {
   if (message.mine) return true;
-  if (thread.outbound) return false;
+  final ours = ChatMockStore.instance.storeName.trim();
+  final writer = message.writerStore.trim();
+  if (writer.isNotEmpty) return writer == ours || writer == 'My store';
+  final staff = message.staffName?.trim() ?? '';
+  if (staff.isNotEmpty) {
+    for (final member in thread.members) {
+      if (member.name == staff) return chatMemberOnViewerStore(member, ours);
+    }
+  }
+  if (thread.outbound || thread.kind == ChatKind.group) return false;
   return message.side == ChatSenderSide.merchant;
 }
 
@@ -152,6 +163,11 @@ class _OpenDiscussion extends StatelessWidget {
           ..sort((a, b) => a.at.compareTo(b.at));
     return Column(
       children: [
+        if (discussion.product != null)
+          _DiscussionProduct(
+            product: discussion.product!,
+            onTap: () => onOpenProduct(discussion.product!),
+          ),
         for (var i = 0; i < messages.length; i++) ...[
           if (i == 0 || !chatSameDay(messages[i - 1].at, messages[i].at))
             ChatDayChip(label: chatDayLabel(messages[i].at)),
@@ -165,10 +181,15 @@ class _OpenDiscussion extends StatelessWidget {
                       : Alignment.centerLeft,
               child: ChatBubble(
                 message: messages[i],
-                alignRight: _messageOnRight(thread, messages[i]),
-                senderLabel: _senderLabel(messages, i),
+                alignRight: _ownStore(messages[i]),
+                senderLabel: _senderName(messages, i),
+                senderStore: _senderStore(messages, i),
                 onReply: () => onReply(messages[i]),
                 onLongPress:
+                    onMessageMenu == null
+                        ? null
+                        : () => onMessageMenu!(messages[i]),
+                onSecondaryTap:
                     onMessageMenu == null
                         ? null
                         : () => onMessageMenu!(messages[i]),
@@ -180,29 +201,55 @@ class _OpenDiscussion extends StatelessWidget {
     );
   }
 
-  String? _senderLabel(List<ChatMessage> messages, int index) {
-    if (thread.kind != ChatKind.group) return null;
+  bool _ownStore(ChatMessage message) => _messageOnRight(thread, message);
+
+  String? _senderName(List<ChatMessage> messages, int index) {
     final message = messages[index];
-    if (message.mine || message.isStatus) return null;
-    final label = _labelFor(message);
-    if (label == null || label.isEmpty) return null;
-    return label;
+    if (message.isStatus) return null;
+    final name = _nameFor(message);
+    if (name == null) return null;
+    if (index > 0 && _sameSender(messages[index - 1], message)) return null;
+    return name;
   }
 
-  String? _labelFor(ChatMessage message) {
-    if (thread.kind != ChatKind.group || message.mine) return null;
-    final staff = message.staffName?.trim() ?? '';
-    final person = staff.isEmpty ? thread.customer.name : staff;
-    final store = _storeFor(person);
+  String? _senderStore(List<ChatMessage> messages, int index) {
+    if (_senderName(messages, index) == null) return null;
+    final message = messages[index];
+    final store = _storeFor(message);
     final ours = ChatMockStore.instance.storeName.trim();
-    if (store.isNotEmpty && store != ours) return '$person · $store';
-    if (person.trim().isEmpty) return null;
-    return person;
+    if (store.isEmpty) return null;
+    if (store == ours || store == 'My store') return null;
+    return store;
   }
 
-  String _storeFor(String name) {
+  String? _nameFor(ChatMessage message) {
+    final self = ChatMockStore.instance.staffName.trim();
+    final staff = message.staffName?.trim() ?? '';
+    if (message.mine && (staff.isEmpty || staff == self)) return null;
+    if (message.mine) return staff;
+    if (staff.isNotEmpty) return staff;
+    if (thread.kind == ChatKind.person) return null;
+    final name = thread.customer.name.trim();
+    return name.isEmpty ? null : name;
+  }
+
+  bool _sameSender(ChatMessage previous, ChatMessage message) {
+    if (previous.isStatus || message.isStatus) return false;
+    if (previous.mine != message.mine) return false;
+    return (previous.staffName?.trim() ?? '') ==
+        (message.staffName?.trim() ?? '');
+  }
+
+  String _storeFor(ChatMessage message) {
+    final staff = message.staffName?.trim() ?? '';
+    if (staff.isEmpty) {
+      if (thread.kind == ChatKind.store || thread.customer.isStoreAccount) {
+        return thread.customer.name.trim();
+      }
+      return '';
+    }
     for (final member in thread.members) {
-      if (member.name == name && member.storeName.trim().isNotEmpty) {
+      if (member.name == staff && member.storeName.trim().isNotEmpty) {
         return member.storeName.trim();
       }
     }
@@ -210,88 +257,208 @@ class _OpenDiscussion extends StatelessWidget {
   }
 }
 
-class ChatProductChips extends StatelessWidget {
-  const ChatProductChips({
-    super.key,
-    required this.thread,
-    required this.onOpen,
-  });
+class _DiscussionProduct extends StatelessWidget {
+  const _DiscussionProduct({required this.product, required this.onTap});
 
-  final ChatThread thread;
-  final ValueChanged<String> onOpen;
+  final ChatProductRef product;
+  final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
-    if (thread.discussions.length < 2) return const SizedBox.shrink();
-    return SizedBox(
-      height: 52,
-      child: ListView.separated(
-        scrollDirection: Axis.horizontal,
-        padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
-        itemCount: thread.discussions.length,
-        separatorBuilder: (_, _) => const SizedBox(width: 8),
-        itemBuilder: (context, index) {
-          final discussion = thread.discussions[index];
-          final selected = thread.openDiscussionId == discussion.id;
-          final closed = discussion.status == DiscussionStatus.closed;
-          final unread = thread.unreadInDiscussion(discussion.id);
-          return Opacity(
-            opacity: closed ? 0.5 : 1,
-            child: Material(
-              color: selected ? AppColors.surface : AppColors.surfaceSecondary,
-              borderRadius: BorderRadius.circular(12),
-              child: InkWell(
-                onTap: () => onOpen(discussion.id),
-                borderRadius: BorderRadius.circular(12),
-                child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 8),
-                  decoration: BoxDecoration(
-                    borderRadius: BorderRadius.circular(12),
-                    border: Border.all(
-                      color:
-                          selected ? AppColors.textPrimary : AppColors.border,
-                    ),
-                  ),
-                  child: Row(
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(4, 4, 4, 10),
+      child: Material(
+        color: chatField,
+        borderRadius: BorderRadius.circular(12),
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(12),
+          child: Padding(
+            padding: const EdgeInsets.all(8),
+            child: Row(
+              children: [
+                ChatProductThumb(product: product, size: 52, radius: 8),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      if (discussion.product != null)
-                        ChatProductThumb(
-                          product: discussion.product!,
-                          size: 28,
-                          radius: 6,
-                        )
-                      else
-                        Icon(
-                          Icons.sticky_note_2_outlined,
-                          size: 22,
-                          color: AppColors.textSecondary,
+                      Text(
+                        product.name,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: AppTextStyles.label(
+                          fontSize: 15,
+                          fontWeight: FontWeight.w600,
+                          color: chatInk,
                         ),
-                      const SizedBox(width: 6),
-                      ConstrainedBox(
-                        constraints: const BoxConstraints(maxWidth: 140),
-                        child: Text(
-                          discussion.title,
+                      ),
+                      if (product.detail.trim().isNotEmpty)
+                        Text(
+                          product.detail,
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                           style: AppTextStyles.caption(
                             fontSize: 12,
-                            fontWeight: FontWeight.w600,
-                            color: AppColors.textPrimary,
+                            color: chatMuted,
                           ),
                         ),
-                      ),
-                      if (unread > 0) ...[
-                        const SizedBox(width: 6),
-                        ChatUnreadBadge(count: unread),
-                      ],
                     ],
                   ),
                 ),
-              ),
+              ],
             ),
-          );
-        },
+          ),
+        ),
       ),
     );
+  }
+}
+
+class ChatDiscussionBar extends StatefulWidget {
+  const ChatDiscussionBar({
+    super.key,
+    required this.thread,
+    required this.onOpen,
+    required this.onAll,
+  });
+
+  final ChatThread thread;
+  final ValueChanged<String> onOpen;
+  final VoidCallback onAll;
+
+  @override
+  State<ChatDiscussionBar> createState() => _ChatDiscussionBarState();
+}
+
+class _ChatDiscussionBarState extends State<ChatDiscussionBar> {
+  final ScrollController _scroll = ScrollController();
+  final Map<String, GlobalKey> _keys = {};
+  String? _revealed;
+
+  @override
+  void dispose() {
+    _scroll.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final open = widget.thread.discussionsByOrder(open: true);
+    if (open.length < 2) return const SizedBox.shrink();
+    final selected = widget.thread.openDiscussionId;
+    if (_revealed != selected) {
+      _revealed = selected;
+      _reveal(selected);
+    }
+    return SizedBox(
+      height: 48,
+      child: Row(
+        children: [
+          Expanded(
+            child: ListView.separated(
+              controller: _scroll,
+              scrollDirection: Axis.horizontal,
+              padding: const EdgeInsets.fromLTRB(8, 0, 4, 8),
+              itemCount: open.length,
+              separatorBuilder: (_, _) => const SizedBox(width: 6),
+              itemBuilder: (context, index) {
+                final discussion = open[index];
+                final on = selected == discussion.id;
+                final unread = widget.thread.unreadInDiscussion(discussion.id);
+                final key = _keys.putIfAbsent(discussion.id, GlobalKey.new);
+                return KeyedSubtree(
+                  key: key,
+                  child: Material(
+                    color: on ? chatField : chatMuted.withValues(alpha: 0.16),
+                    borderRadius: BorderRadius.circular(20),
+                    child: InkWell(
+                      onTap: () => widget.onOpen(discussion.id),
+                      borderRadius: BorderRadius.circular(20),
+                      child: Container(
+                        padding: const EdgeInsets.fromLTRB(4, 3, 10, 3),
+                        decoration: BoxDecoration(
+                          borderRadius: BorderRadius.circular(20),
+                          border: Border.all(
+                            color:
+                                on
+                                    ? chatField
+                                    : chatMuted.withValues(alpha: 0.35),
+                          ),
+                        ),
+                        child: Row(
+                          children: [
+                            if (discussion.product != null)
+                              ChatProductThumb(
+                                product: discussion.product!,
+                                size: 26,
+                                radius: 13,
+                              )
+                            else
+                              Icon(
+                                Icons.sticky_note_2_outlined,
+                                size: 18,
+                                color: chatMuted,
+                              ),
+                            const SizedBox(width: 6),
+                            ConstrainedBox(
+                              constraints: const BoxConstraints(maxWidth: 120),
+                              child: Text(
+                                discussion.title,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: AppTextStyles.caption(
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w600,
+                                  color: chatInk,
+                                ),
+                              ),
+                            ),
+                            if (discussion.mentionUnread && unread == 0) ...[
+                              const SizedBox(width: 6),
+                              Text(
+                                '@',
+                                style: AppTextStyles.caption(
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w800,
+                                  color: chatReadTick,
+                                ),
+                              ),
+                            ] else if (unread > 0) ...[
+                              const SizedBox(width: 6),
+                              ChatUnreadBadge(count: unread),
+                            ],
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                );
+              },
+            ),
+          ),
+          IconButton(
+            tooltip: 'All discussions',
+            onPressed: widget.onAll,
+            visualDensity: VisualDensity.compact,
+            icon: Icon(Icons.chevron_right_rounded, size: 22, color: chatMuted),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _reveal(String? id) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final context = id == null ? null : _keys[id]?.currentContext;
+      if (context == null) return;
+      Scrollable.ensureVisible(
+        context,
+        alignment: 0.5,
+        duration: const Duration(milliseconds: 220),
+        curve: Curves.easeOutCubic,
+      );
+    });
   }
 }

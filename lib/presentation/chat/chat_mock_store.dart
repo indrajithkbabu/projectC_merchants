@@ -112,13 +112,21 @@ class ChatMockStore extends ChangeNotifier {
     return list;
   }
 
+  /// The signed-in person is the store owner in this mock.
+  /// Remove-from-store uses this single flag.
+  bool isOwner = true;
+
   void focusThread(String id, {String? discussionId}) {
     final thread = threadById(id);
     if (thread == null) return;
-    if (discussionId != null &&
-        thread.discussions.any((item) => item.id == discussionId)) {
-      thread.openDiscussionId = discussionId;
-      thread.discussionById(discussionId)?.mentionUnread = false;
+    final chosen =
+        discussionId != null &&
+                thread.discussions.any((item) => item.id == discussionId)
+            ? discussionId
+            : thread.resumeDiscussionId();
+    if (chosen != null) {
+      thread.openDiscussionId = chosen;
+      thread.discussionById(chosen)?.mentionUnread = false;
     }
     for (final message in thread.messages) {
       final inGeneral = message.discussionId == null;
@@ -219,6 +227,150 @@ class ChatMockStore extends ChangeNotifier {
     );
     if (target != null) {
       thread.openDiscussionId = target;
+      final discussion = thread.discussionById(target);
+      if (discussion != null && discussion.product == null) {
+        discussion.product = product;
+      }
+    }
+    notifyListeners();
+  }
+
+  void sendPhoto(
+    String threadId, {
+    String? discussionId,
+    String mediaPath = '',
+    int mediaColorValue = 0xFFC4A265,
+    String caption = '',
+  }) {
+    _sendMedia(
+      threadId,
+      kind: ChatMessageKind.photo,
+      discussionId: discussionId,
+      text: caption,
+      mediaPath: mediaPath,
+      mediaColorValue: mediaColorValue,
+    );
+  }
+
+  void sendFile(
+    String threadId, {
+    String? discussionId,
+    required String name,
+  }) {
+    final label = name.trim().isEmpty ? 'File' : name.trim();
+    _sendMedia(
+      threadId,
+      kind: ChatMessageKind.file,
+      discussionId: discussionId,
+      text: label,
+    );
+  }
+
+  void _sendMedia(
+    String threadId, {
+    required ChatMessageKind kind,
+    String? discussionId,
+    String text = '',
+    String mediaPath = '',
+    int mediaColorValue = 0,
+  }) {
+    final thread = threadById(threadId);
+    if (thread == null || thread.status == ChatStatus.closed) return;
+    final target = _sendableDiscussion(thread, discussionId);
+    thread.listed = true;
+    thread.customerTyping = false;
+    thread.messages.add(
+      ChatMessage(
+        id: _id('msg'),
+        kind: kind,
+        side: ChatSenderSide.merchant,
+        at: DateTime.now(),
+        text: text,
+        mine: true,
+        discussionId: target,
+        receipt: ChatReceipt.sent,
+        mediaPath: mediaPath,
+        mediaColorValue: mediaColorValue,
+      ),
+    );
+    if (target != null) thread.openDiscussionId = target;
+    notifyListeners();
+  }
+
+  void toggleStar(String threadId, String messageId) {
+    final thread = threadById(threadId);
+    if (thread == null) return;
+    for (final message in thread.messages) {
+      if (message.id != messageId) continue;
+      message.starred = !message.starred;
+      notifyListeners();
+      return;
+    }
+  }
+
+  void setBlocked(String threadId, bool blocked) {
+    final thread = threadById(threadId);
+    if (thread == null || thread.blocked == blocked) return;
+    thread.blocked = blocked;
+    notifyListeners();
+  }
+
+  void setCustomerNote(String threadId, String raw) {
+    final thread = threadById(threadId);
+    if (thread == null) return;
+    thread.customerNote = raw.trim();
+    thread.customerNoteBy = staffName;
+    notifyListeners();
+  }
+
+  void removeMember(String threadId, String memberId) {
+    final thread = threadById(threadId);
+    if (thread == null || !isOwner) return;
+    final self = staffName.trim();
+    thread.members.removeWhere((member) {
+      if (member.id == 'self' || member.name.trim() == self) return false;
+      return member.id == memberId;
+    });
+    notifyListeners();
+  }
+
+  void leaveGroup(String threadId) {
+    final thread = threadById(threadId);
+    if (thread == null || thread.kind != ChatKind.group) return;
+    thread.listed = false;
+    notifyListeners();
+  }
+
+  void addMembers(String threadId, List<ChatActor> picked) {
+    final thread = threadById(threadId);
+    if (thread == null) return;
+    for (final actor in picked) {
+      final exists = thread.members.any(
+        (member) => member.id == actor.id || member.name == actor.name,
+      );
+      if (exists) continue;
+      if (actor.isStoreAccount) {
+        thread.members.add(
+          ChatMember(
+            id: actor.id,
+            name: actor.name,
+            storeName: actor.name,
+            phone: actor.phone,
+          ),
+        );
+        for (final person in actor.team) {
+          final already = thread.members.any((member) => member.id == person.id);
+          if (!already) thread.members.add(person);
+        }
+      } else {
+        thread.members.add(
+          ChatMember(
+            id: actor.id,
+            name: actor.name,
+            phone: actor.phone,
+          ),
+        );
+      }
     }
     notifyListeners();
   }
@@ -623,6 +775,16 @@ class ChatMockStore extends ChangeNotifier {
     final id = _addDiscussion(thread, name: name, product: product);
     thread.listed = true;
     thread.openDiscussionId = id;
+    thread.messages.add(
+      ChatMessage(
+        id: _id('status'),
+        kind: ChatMessageKind.status,
+        side: ChatSenderSide.merchant,
+        at: DateTime.now(),
+        discussionId: id,
+        text: 'Discussion started',
+      ),
+    );
     notifyListeners();
     return id;
   }
@@ -871,13 +1033,29 @@ class ChatMockStore extends ChangeNotifier {
         listed: true,
         openDiscussionId: 'disc-bangle',
         phone: '9840099001',
+        customerNote: 'Prefers 22 kt. Visits on Saturdays.',
+        customerNoteBy: 'Suresh',
         members: const [
-          ChatMember(id: 'self', name: 'Suresh', storeName: 'My store'),
-          ChatMember(id: 'staff-priya', name: 'Priya', storeName: 'My store'),
+          ChatMember(
+            id: 'self',
+            name: 'Suresh',
+            storeName: 'My store',
+            role: 'Owner',
+            joined: 'Jan 2022',
+          ),
+          ChatMember(
+            id: 'staff-priya',
+            name: 'Priya',
+            storeName: 'My store',
+            role: 'Staff',
+            joined: 'Mar 2024',
+          ),
           ChatMember(
             id: 'staff-karthik',
             name: 'Karthik',
             storeName: 'My store',
+            role: 'Staff',
+            joined: 'Aug 2024',
           ),
           ChatMember(id: 'cust-ajith', name: 'Ajith', phone: '9840099001'),
         ],
@@ -1018,6 +1196,25 @@ class ChatMockStore extends ChangeNotifier {
             text: 'This note belongs to the other store.',
           ),
           ChatMessage(
+            id: 'm-photo',
+            kind: ChatMessageKind.photo,
+            side: ChatSenderSide.customer,
+            at: _at(0, 11, 50),
+            discussionId: 'disc-bangle',
+            text: 'Hallmark photo',
+            mediaColorValue: 0xFFC4A265,
+          ),
+          ChatMessage(
+            id: 'm-file',
+            kind: ChatMessageKind.file,
+            side: ChatSenderSide.merchant,
+            at: _at(0, 14, 20),
+            discussionId: 'disc-note',
+            mine: true,
+            receipt: ChatReceipt.read,
+            text: 'Rate card.pdf',
+          ),
+          ChatMessage(
             id: 'm-date',
             kind: ChatMessageKind.text,
             side: ChatSenderSide.customer,
@@ -1040,8 +1237,29 @@ class ChatMockStore extends ChangeNotifier {
         kind: ChatKind.store,
         muted: true,
         phone: '9840011122',
+        openDiscussionId: 'disc-chain',
         members: const [
-          ChatMember(id: 'self', name: 'Suresh', storeName: 'My store'),
+          ChatMember(
+            id: 'self',
+            name: 'Suresh',
+            storeName: 'My store',
+            role: 'Owner',
+            joined: 'Jan 2022',
+          ),
+          ChatMember(
+            id: 'staff-priya',
+            name: 'Priya',
+            storeName: 'My store',
+            role: 'Staff',
+            joined: 'Mar 2024',
+          ),
+          ChatMember(
+            id: 'staff-karthik',
+            name: 'Karthik',
+            storeName: 'My store',
+            role: 'Staff',
+            joined: 'Aug 2024',
+          ),
           ChatMember(
             id: 'cust-mehta',
             name: 'Mehta Jewellers',
@@ -1052,11 +1270,13 @@ class ChatMockStore extends ChangeNotifier {
             id: 'mehta-arun',
             name: 'Arun',
             storeName: 'Mehta Jewellers',
+            role: 'Staff',
           ),
           ChatMember(
             id: 'mehta-divya',
             name: 'Divya',
             storeName: 'Mehta Jewellers',
+            role: 'Staff',
           ),
         ],
         discussions: [
@@ -1064,6 +1284,13 @@ class ChatMockStore extends ChangeNotifier {
             id: 'disc-chain',
             product: chain,
             status: DiscussionStatus.open,
+            sortOrder: 0,
+          ),
+          ProductDiscussion(
+            id: 'disc-hallmark',
+            status: DiscussionStatus.open,
+            name: 'Hallmark rates',
+            sortOrder: 1,
           ),
         ],
         messages: [
@@ -1072,7 +1299,7 @@ class ChatMockStore extends ChangeNotifier {
             kind: ChatMessageKind.text,
             side: ChatSenderSide.customer,
             at: _at(0, 10, 5),
-            unread: true,
+            discussionId: 'disc-chain',
             text: 'Do you have the rope chain in 22 kt?',
           ),
           ChatMessage(
@@ -1082,8 +1309,16 @@ class ChatMockStore extends ChangeNotifier {
             at: _at(0, 10, 22),
             discussionId: 'disc-chain',
             staffName: 'Karthik',
-            unread: true,
             text: 'Yes, Available',
+          ),
+          ChatMessage(
+            id: 'm-hallmark',
+            kind: ChatMessageKind.text,
+            side: ChatSenderSide.customer,
+            at: _at(0, 10, 40),
+            discussionId: 'disc-hallmark',
+            unread: true,
+            text: 'What is today’s hallmark rate?',
           ),
         ],
       ),
@@ -1137,8 +1372,20 @@ class ChatMockStore extends ChangeNotifier {
         kind: ChatKind.group,
         createdBy: 'Suresh',
         members: const [
-          ChatMember(id: 'self', name: 'Suresh', storeName: 'My store'),
-          ChatMember(id: 'staff-priya', name: 'Priya', storeName: 'My store'),
+          ChatMember(
+            id: 'self',
+            name: 'Suresh',
+            storeName: 'My store',
+            role: 'Owner',
+            joined: 'Jan 2022',
+          ),
+          ChatMember(
+            id: 'staff-priya',
+            name: 'Priya',
+            storeName: 'My store',
+            role: 'Staff',
+            joined: 'Mar 2024',
+          ),
           ChatMember(
             id: 'cust-mehta',
             name: 'Mehta Jewellers',

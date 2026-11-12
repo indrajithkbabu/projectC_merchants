@@ -337,21 +337,12 @@ class _MessageBodyState extends State<_MessageBody> {
   }
 
   void _open(ChatThread thread) {
-    if (thread.discussions.length <= 1) {
-      final discussionId =
-          thread.discussions.isEmpty ? null : thread.discussions.first.id;
-      Navigator.of(context).pushNamed(
-        Routes.chatThreadRoute,
-        arguments: <String, String?>{
-          'chatId': thread.id,
-          'openDiscussionId': discussionId,
-        },
-      );
-      return;
-    }
     Navigator.of(context).pushNamed(
-      Routes.chatDiscussionsRoute,
-      arguments: <String, String>{'chatId': thread.id},
+      Routes.chatThreadRoute,
+      arguments: <String, String?>{
+        'chatId': thread.id,
+        'openDiscussionId': thread.resumeDiscussionId(),
+      },
     );
   }
 }

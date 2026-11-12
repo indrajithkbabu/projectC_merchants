@@ -7,8 +7,8 @@ import 'package:project_c/helper/widgets/screen_wrapper.dart';
 import 'package:project_c/navigation/routes.dart';
 import 'package:project_c/presentation/chat/chat_mock_store.dart';
 import 'package:project_c/presentation/chat/chat_models.dart';
+import 'package:project_c/presentation/chat/chat_profile_route.dart';
 import 'package:project_c/presentation/chat/chat_widgets/chat_pieces.dart';
-import 'package:project_c/presentation/chat/chat_widgets/chat_sheets.dart';
 
 /// Discussions inside one chat. One discussion never reaches this screen.
 class ChatDiscussionsRoute extends StatefulWidget {
@@ -66,7 +66,7 @@ class _ChatDiscussionsRouteState extends State<ChatDiscussionsRoute> {
                   }
                   Navigator.of(context).maybePop();
                 },
-                onProfile: () => showChatProfileSheet(context, thread),
+                onProfile: () => openChatProfile(context, thread),
                 onNew: () => _newDiscussion(thread),
                 onSelectAll: () => _selectAll(thread),
               ),
@@ -326,18 +326,10 @@ class _ChatDiscussionsRouteState extends State<ChatDiscussionsRoute> {
     );
   }
 
-  Future<void> _newDiscussion(ChatThread thread) async {
-    final started = await showModalBottomSheet<bool>(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: AppColors.surface,
-      builder: (context) => _NewDiscussionSheet(chatId: thread.id),
-    );
-    if (started != true || !mounted) return;
-    final current = ChatMockStore.instance.threadById(thread.id);
-    final id = current?.openDiscussionId;
-    if (id == null) return;
-    _openThread(current!, id);
+  void _newDiscussion(ChatThread thread) {
+    final id = ChatMockStore.instance.startDiscussion(thread.id);
+    if (!mounted || id.isEmpty) return;
+    _openThread(thread, id);
   }
 
   void _toast(String text) {
@@ -445,7 +437,7 @@ class _Header extends StatelessWidget {
             IconButton(
               tooltip: 'New discussion',
               onPressed: onNew,
-              icon: Icon(Icons.add_rounded, color: AppColors.textPrimary),
+              icon: Icon(Icons.add_rounded, size: 22, color: AppColors.textPrimary),
             ),
         ],
       ),
@@ -644,138 +636,6 @@ class _SelectBar extends StatelessWidget {
             child: const Text('Close'),
           ),
         ],
-      ),
-    );
-  }
-}
-
-class _NewDiscussionSheet extends StatefulWidget {
-  const _NewDiscussionSheet({required this.chatId});
-
-  final String chatId;
-
-  @override
-  State<_NewDiscussionSheet> createState() => _NewDiscussionSheetState();
-}
-
-class _NewDiscussionSheetState extends State<_NewDiscussionSheet> {
-  late final TextEditingController _name;
-  ChatProductRef? _product;
-
-  @override
-  void initState() {
-    super.initState();
-    final date = chatDateName(DateTime.now());
-    _name = TextEditingController(text: date);
-    _name.selection = TextSelection(baseOffset: 0, extentOffset: date.length);
-  }
-
-  @override
-  void dispose() {
-    _name.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final bottom = MediaQuery.viewInsetsOf(context).bottom;
-    final catalog = ChatMockStore.instance.shareCatalog;
-    return Padding(
-      padding: EdgeInsets.fromLTRB(16, 16, 16, 16 + bottom),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Text('New discussion', style: AppTextStyles.headline(fontSize: 20)),
-          const SizedBox(height: 12),
-          TextField(
-            controller: _name,
-            autofocus: true,
-            style: AppTextStyles.body(fontSize: 16),
-            decoration: const InputDecoration(labelText: 'Name'),
-          ),
-          const SizedBox(height: 8),
-          Text('Product', style: AppTextStyles.caption()),
-          const SizedBox(height: 6),
-          SizedBox(
-            height: 72,
-            child: ListView.separated(
-              scrollDirection: Axis.horizontal,
-              itemCount: catalog.length + 1,
-              separatorBuilder: (_, _) => const SizedBox(width: 8),
-              itemBuilder: (context, index) {
-                if (index == 0) {
-                  final on = _product == null;
-                  return _ProductPick(
-                    label: 'None',
-                    selected: on,
-                    onTap: () => setState(() => _product = null),
-                  );
-                }
-                final product = catalog[index - 1];
-                return _ProductPick(
-                  label: product.name,
-                  selected: _product?.id == product.id,
-                  onTap: () => setState(() => _product = product),
-                );
-              },
-            ),
-          ),
-          const SizedBox(height: 12),
-          FilledButton(
-            onPressed: () {
-              ChatMockStore.instance.startDiscussion(
-                widget.chatId,
-                name: _name.text,
-                product: _product,
-              );
-              Navigator.of(context).pop(true);
-            },
-            child: const Text('Start'),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _ProductPick extends StatelessWidget {
-  const _ProductPick({
-    required this.label,
-    required this.selected,
-    required this.onTap,
-  });
-
-  final String label;
-  final bool selected;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    return Material(
-      color: selected ? AppColors.surfaceSecondary : AppColors.scaffold,
-      borderRadius: BorderRadius.circular(12),
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(12),
-        child: Container(
-          width: 88,
-          alignment: Alignment.center,
-          padding: const EdgeInsets.all(8),
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(12),
-            border: Border.all(
-              color: selected ? AppColors.textPrimary : AppColors.border,
-            ),
-          ),
-          child: Text(
-            label,
-            maxLines: 2,
-            overflow: TextOverflow.ellipsis,
-            textAlign: TextAlign.center,
-            style: AppTextStyles.caption(fontSize: 12),
-          ),
-        ),
       ),
     );
   }

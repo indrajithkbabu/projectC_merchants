@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:project_c/helper/colors.dart';
@@ -7,8 +9,8 @@ import 'package:project_c/presentation/chat/chat_models.dart';
 const chatReadTick = Color(0xFF53BDEB);
 const chatSwitchOn = Color(0xFF16A34A);
 
-/// WhatsApp thread colors. Night follows WhatsApp dark; day follows the
-/// light chat wallpaper, white incoming bubbles, and green outgoing bubbles.
+/// WhatsApp thread colors. Right side is green, left side is white, text is black.
+/// Night keeps the dark WhatsApp pair so the text stays readable.
 Color get chatWallpaper =>
     AppColors.isNight ? const Color(0xFF0B141A) : const Color(0xFFECE5DD);
 
@@ -344,16 +346,20 @@ class ChatBubble extends StatelessWidget {
     required this.message,
     required this.onReply,
     this.onLongPress,
+    this.onSecondaryTap,
     this.onProductTap,
     this.senderLabel,
+    this.senderStore,
     this.alignRight,
   });
 
   final ChatMessage message;
   final VoidCallback onReply;
   final VoidCallback? onLongPress;
+  final VoidCallback? onSecondaryTap;
   final ValueChanged<ChatProductRef>? onProductTap;
   final String? senderLabel;
+  final String? senderStore;
 
   /// Right side is your own bubble. Defaults to store-side messages.
   final bool? alignRight;
@@ -366,11 +372,13 @@ class ChatBubble extends StatelessWidget {
     final timeColor = chatMuted;
     final maxWidth = MediaQuery.sizeOf(context).width * 0.78;
     final label = senderLabel?.trim() ?? '';
+    final store = senderStore?.trim() ?? '';
+    final fill = outgoing ? chatOutgoing : chatIncoming;
     final bubble = ConstrainedBox(
       constraints: BoxConstraints(maxWidth: maxWidth),
       child: DecoratedBox(
         decoration: BoxDecoration(
-          color: outgoing ? chatOutgoing : _otherBubble(),
+          color: fill,
           borderRadius: BorderRadius.only(
             topLeft: Radius.circular(outgoing ? 8 : 0),
             topRight: Radius.circular(outgoing ? 0 : 8),
@@ -389,20 +397,30 @@ class ChatBubble extends StatelessWidget {
           padding: const EdgeInsets.fromLTRB(8, 4, 6, 3),
           child: DefaultTextStyle.merge(
             style: TextStyle(color: textColor),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
+            child: IntrinsicWidth(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                if (message.starred)
+                  const Padding(
+                    padding: EdgeInsets.only(bottom: 2),
+                    child: Icon(
+                      Icons.star_rounded,
+                      size: 14,
+                      color: chatTeamNote,
+                    ),
+                  ),
                 if (message.teamOnly)
                   Padding(
                     padding: const EdgeInsets.only(bottom: 2),
                     child: Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        Icon(
+                        const Icon(
                           Icons.lock_rounded,
                           size: 12,
-                          color: textColor.withValues(alpha: 0.85),
+                          color: chatTeamNote,
                         ),
                         const SizedBox(width: 4),
                         Text(
@@ -410,7 +428,7 @@ class ChatBubble extends StatelessWidget {
                           style: AppTextStyles.caption(
                             fontSize: 12,
                             fontWeight: FontWeight.w600,
-                            color: textColor.withValues(alpha: 0.85),
+                            color: chatTeamNote,
                           ),
                         ),
                       ],
@@ -419,17 +437,36 @@ class ChatBubble extends StatelessWidget {
                 if (label.isNotEmpty)
                   Padding(
                     padding: const EdgeInsets.only(bottom: 2),
-                    child: Text(
-                      label,
-                      style: AppTextStyles.caption(
-                        fontSize: 13,
-                        fontWeight: FontWeight.w700,
-                        color: chatSenderName,
+                    child: Text.rich(
+                      TextSpan(
+                        children: [
+                          TextSpan(
+                            text: label,
+                            style: AppTextStyles.caption(
+                              fontSize: 13,
+                              fontWeight: FontWeight.w700,
+                              color: chatSenderName,
+                            ),
+                          ),
+                          if (store.isNotEmpty)
+                            TextSpan(
+                              text: '  $store',
+                              style: AppTextStyles.caption(
+                                fontSize: 12,
+                                fontWeight: FontWeight.w500,
+                                color: chatMuted,
+                              ),
+                            ),
+                        ],
                       ),
                     ),
                   ),
                 if (message.quote != null) _QuoteBlock(quote: message.quote!),
-                if (message.kind == ChatMessageKind.basket)
+                if (message.kind == ChatMessageKind.photo)
+                  ChatPhotoView(message: message, height: 160)
+                else if (message.kind == ChatMessageKind.file)
+                  _FileRow(name: message.previewBody())
+                else if (message.kind == ChatMessageKind.basket)
                   _BasketGrid(message: message, onProductTap: onProductTap)
                 else if (message.products.isNotEmpty)
                   _ProductCard(
@@ -453,6 +490,7 @@ class ChatBubble extends StatelessWidget {
                 ),
               ],
             ),
+            ),
           ),
         ),
       ),
@@ -461,12 +499,13 @@ class ChatBubble extends StatelessWidget {
       onReply: onReply,
       child: GestureDetector(
         onLongPress: onLongPress,
+        onSecondaryTap: onSecondaryTap,
         child: Padding(
           padding: EdgeInsets.fromLTRB(
-            mineSide ? 48 : 8,
-            4,
-            mineSide ? 8 : 48,
-            4,
+            mineSide ? 20 : 2,
+            2,
+            mineSide ? 2 : 20,
+            2,
           ),
           child: bubble,
         ),
@@ -476,6 +515,7 @@ class ChatBubble extends StatelessWidget {
 }
 
 String _bubbleBody(ChatMessage message) {
+  if (message.kind == ChatMessageKind.file) return '';
   final text = message.text.trim();
   if (text.isEmpty) return '';
   if (message.kind == ChatMessageKind.productShare &&
@@ -486,8 +526,8 @@ String _bubbleBody(ChatMessage message) {
   return message.text;
 }
 
-/// Message text starts at the left. The time stays at the right edge of the
-/// bubble, on the same line when it fits and on the last line when it wraps.
+/// The message stays on the left of the bubble. The time sits under it,
+/// at the right edge.
 class _TextWithTime extends StatelessWidget {
   const _TextWithTime({
     required this.text,
@@ -521,20 +561,14 @@ class _TextWithTime extends StatelessWidget {
       ],
     );
     if (text.trim().isEmpty) {
-      return Align(
-        alignment: Alignment.centerRight,
-        widthFactor: 1,
-        child: clock,
-      );
+      return Align(alignment: Alignment.centerRight, child: clock);
     }
-    return Wrap(
-      alignment: WrapAlignment.end,
-      crossAxisAlignment: WrapCrossAlignment.end,
-      spacing: 8,
-      runSpacing: 1,
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         _MentionText(text: text, mentions: mentions, style: textStyle),
-        clock,
+        const SizedBox(height: 2),
+        Align(alignment: Alignment.centerRight, child: clock),
       ],
     );
   }
@@ -766,6 +800,80 @@ class ChatDayChip extends StatelessWidget {
             ),
           ),
         ),
+      ),
+    );
+  }
+}
+
+class ChatPhotoView extends StatelessWidget {
+  const ChatPhotoView({
+    super.key,
+    required this.message,
+    this.width = 220,
+    this.height = 160,
+    this.radius = 12,
+  });
+
+  final ChatMessage message;
+  final double width;
+  final double height;
+  final double radius;
+
+  @override
+  Widget build(BuildContext context) {
+    final path = message.mediaPath.trim();
+    final color =
+        message.mediaColorValue == 0
+            ? const Color(0xFFC4A265)
+            : Color(message.mediaColorValue);
+    final Widget image;
+    if (path.isNotEmpty && File(path).existsSync()) {
+      image = Image.file(
+        File(path),
+        width: width,
+        height: height,
+        fit: BoxFit.cover,
+      );
+    } else {
+      image = Container(
+        width: width,
+        height: height,
+        color: color,
+        alignment: Alignment.center,
+        child: Icon(
+          Icons.image_outlined,
+          color: Colors.white.withValues(alpha: 0.9),
+          size: height > 80 ? 36 : 22,
+        ),
+      );
+    }
+    return ClipRRect(borderRadius: BorderRadius.circular(radius), child: image);
+  }
+}
+
+class _FileRow extends StatelessWidget {
+  const _FileRow({required this.name});
+
+  final String name;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 4),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(Icons.insert_drive_file_outlined, size: 22, color: chatInk),
+          const SizedBox(width: 8),
+          Flexible(
+            child: Text(
+              name,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: AppTextStyles.label(fontSize: 14, color: chatInk),
+            ),
+          ),
+        ],
       ),
     );
   }
