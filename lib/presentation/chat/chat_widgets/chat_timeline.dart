@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:project_c/helper/colors.dart';
 import 'package:project_c/helper/text_styles.dart';
 import 'package:project_c/presentation/chat/chat_mock_store.dart';
 import 'package:project_c/presentation/chat/chat_models.dart';
@@ -12,6 +13,8 @@ class ChatTimeline extends StatelessWidget {
     required this.onOpenProduct,
     this.onMessageMenu,
     this.scrollController,
+    this.selectedMessageId,
+    this.onClearSelection,
   });
 
   final ChatThread thread;
@@ -19,6 +22,8 @@ class ChatTimeline extends StatelessWidget {
   final ValueChanged<ChatMessage> onReply;
   final ValueChanged<ChatMessage>? onMessageMenu;
   final ValueChanged<ChatProductRef> onOpenProduct;
+  final String? selectedMessageId;
+  final VoidCallback? onClearSelection;
 
   @override
   Widget build(BuildContext context) {
@@ -36,6 +41,8 @@ class ChatTimeline extends StatelessWidget {
             onReply: onReply,
             onMessageMenu: onMessageMenu,
             onOpenProduct: onOpenProduct,
+            selectedMessageId: selectedMessageId,
+            onClearSelection: onClearSelection,
           ),
           if (thread.customerTyping && thread.status == ChatStatus.open)
             const ChatTypingDots(),
@@ -64,7 +71,12 @@ class ChatTimeline extends StatelessWidget {
         for (var i = 0; i < items.length; i++) ...[
           if (i == 0 || !chatSameDay(items[i - 1].at, items[i].at))
             ChatDayChip(label: chatDayLabel(items[i].at)),
-          if (items[i].general != null) _general(items[i].general!),
+          if (items[i].general != null)
+            _selectableRow(
+              selected: items[i].general!.id == selectedMessageId,
+              onClear: onClearSelection,
+              child: _general(items[i].general!),
+            ),
         ],
         if (thread.customerTyping && thread.status == ChatStatus.open)
           const ChatTypingDots(),
@@ -82,6 +94,7 @@ class ChatTimeline extends StatelessWidget {
         alignRight: onRight,
         senderLabel: _groupLabel(message),
         onReply: () => onReply(message),
+        onTap: message.id == selectedMessageId ? onClearSelection : null,
         onLongPress:
             onMessageMenu == null ? null : () => onMessageMenu!(message),
         onSecondaryTap:
@@ -106,6 +119,25 @@ class _Slot {
 
   final ChatMessage? general;
   final DateTime at;
+}
+
+Widget _selectableRow({
+  required bool selected,
+  required Widget child,
+  VoidCallback? onClear,
+}) {
+  return GestureDetector(
+    onTap: selected ? onClear : null,
+    behavior: HitTestBehavior.translucent,
+    child: ColoredBox(
+      color: selected
+          ? (AppColors.isNight
+              ? const Color(0x33FFFFFF)
+              : const Color(0x14000000))
+          : Colors.transparent,
+      child: child,
+    ),
+  );
 }
 
 bool _messageOnRight(ChatThread thread, ChatMessage message) {
@@ -141,6 +173,8 @@ class _OpenDiscussion extends StatelessWidget {
     required this.onReply,
     required this.onOpenProduct,
     this.onMessageMenu,
+    this.selectedMessageId,
+    this.onClearSelection,
   });
 
   final ChatThread thread;
@@ -148,6 +182,8 @@ class _OpenDiscussion extends StatelessWidget {
   final ValueChanged<ChatMessage> onReply;
   final ValueChanged<ChatMessage>? onMessageMenu;
   final ValueChanged<ChatProductRef> onOpenProduct;
+  final String? selectedMessageId;
+  final VoidCallback? onClearSelection;
 
   @override
   Widget build(BuildContext context) {
@@ -174,7 +210,10 @@ class _OpenDiscussion extends StatelessWidget {
           if (messages[i].isStatus)
             ChatStatusLine(text: messages[i].text)
           else
-            Align(
+            _selectableRow(
+              selected: messages[i].id == selectedMessageId,
+              onClear: onClearSelection,
+              child: Align(
               alignment:
                   _messageOnRight(thread, messages[i])
                       ? Alignment.centerRight
@@ -185,6 +224,9 @@ class _OpenDiscussion extends StatelessWidget {
                 senderLabel: _senderName(messages, i),
                 senderStore: _senderStore(messages, i),
                 onReply: () => onReply(messages[i]),
+                onTap: messages[i].id == selectedMessageId
+                    ? onClearSelection
+                    : null,
                 onLongPress:
                     onMessageMenu == null
                         ? null
@@ -195,6 +237,7 @@ class _OpenDiscussion extends StatelessWidget {
                         : () => onMessageMenu!(messages[i]),
                 onProductTap: onOpenProduct,
               ),
+            ),
             ),
         ],
       ],

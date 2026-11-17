@@ -1,10 +1,14 @@
 import 'dart:io';
+import 'dart:math' as math;
+import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:project_c/di/service_locator.dart';
 import 'package:project_c/helper/colors.dart';
 import 'package:project_c/helper/text_styles.dart';
 import 'package:project_c/presentation/chat/chat_models.dart';
+import 'package:project_c/webservice/chat/chat_repository.dart';
 
 const chatReadTick = Color(0xFF53BDEB);
 const chatSwitchOn = Color(0xFF16A34A);
@@ -36,6 +40,10 @@ Color get chatMuted =>
     AppColors.isNight ? const Color(0xFF8696A0) : const Color(0xFF667781);
 
 Color get chatSend => const Color(0xFF00A884);
+
+/// Reply name and the bar beside a quoted message.
+Color get chatQuoteAccent =>
+    AppColors.isNight ? const Color(0xFF06CF9C) : const Color(0xFF008069);
 
 const _avatarPalette = <Color>[
   Color(0xFF2AABEE),
@@ -180,16 +188,24 @@ class ChatUnreadBadge extends StatelessWidget {
 }
 
 class ChatReceiptTicks extends StatelessWidget {
-  const ChatReceiptTicks({super.key, required this.receipt, this.size = 14});
+  const ChatReceiptTicks({
+    super.key,
+    required this.receipt,
+    this.size = 14,
+    this.idleColor,
+  });
 
   final ChatReceipt? receipt;
   final double size;
+
+  /// Tick color before the message is read. Read stays blue.
+  final Color? idleColor;
 
   @override
   Widget build(BuildContext context) {
     if (receipt == null) return const SizedBox.shrink();
     final read = receipt == ChatReceipt.read;
-    final color = read ? chatReadTick : chatMuted;
+    final color = read ? chatReadTick : (idleColor ?? chatMuted);
     return Icon(
       receipt == ChatReceipt.sent ? Icons.done_rounded : Icons.done_all_rounded,
       size: size,
@@ -347,6 +363,7 @@ class ChatBubble extends StatelessWidget {
     required this.onReply,
     this.onLongPress,
     this.onSecondaryTap,
+    this.onTap,
     this.onProductTap,
     this.senderLabel,
     this.senderStore,
@@ -357,6 +374,7 @@ class ChatBubble extends StatelessWidget {
   final VoidCallback onReply;
   final VoidCallback? onLongPress;
   final VoidCallback? onSecondaryTap;
+  final VoidCallback? onTap;
   final ValueChanged<ChatProductRef>? onProductTap;
   final String? senderLabel;
   final String? senderStore;
@@ -374,17 +392,22 @@ class ChatBubble extends StatelessWidget {
     final label = senderLabel?.trim() ?? '';
     final store = senderStore?.trim() ?? '';
     final fill = outgoing ? chatOutgoing : chatIncoming;
+    final radius = BorderRadius.only(
+      topLeft: Radius.circular(outgoing ? 8 : 0),
+      topRight: Radius.circular(outgoing ? 0 : 8),
+      bottomLeft: const Radius.circular(8),
+      bottomRight: const Radius.circular(8),
+    );
+    final caption = _bubbleBody(message);
+    final isPhoto = message.kind == ChatMessageKind.photo;
+    final receipt =
+        message.mine ? (message.receipt ?? ChatReceipt.sent) : null;
+    final photoWidth = math.min(maxWidth, 300.0);
     final bubble = ConstrainedBox(
-      constraints: BoxConstraints(maxWidth: maxWidth),
+      constraints: BoxConstraints(maxWidth: isPhoto ? photoWidth : maxWidth),
       child: DecoratedBox(
         decoration: BoxDecoration(
-          color: fill,
-          borderRadius: BorderRadius.only(
-            topLeft: Radius.circular(outgoing ? 8 : 0),
-            topRight: Radius.circular(outgoing ? 0 : 8),
-            bottomLeft: const Radius.circular(8),
-            bottomRight: const Radius.circular(8),
-          ),
+          borderRadius: isPhoto ? BorderRadius.circular(10) : radius,
           boxShadow: [
             BoxShadow(
               color: Colors.black.withValues(alpha: 0.06),
@@ -393,103 +416,72 @@ class ChatBubble extends StatelessWidget {
             ),
           ],
         ),
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(8, 4, 6, 3),
-          child: DefaultTextStyle.merge(
-            style: TextStyle(color: textColor),
-            child: IntrinsicWidth(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                if (message.starred)
-                  const Padding(
-                    padding: EdgeInsets.only(bottom: 2),
-                    child: Icon(
-                      Icons.star_rounded,
-                      size: 14,
-                      color: chatTeamNote,
-                    ),
-                  ),
-                if (message.teamOnly)
-                  Padding(
-                    padding: const EdgeInsets.only(bottom: 2),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        const Icon(
-                          Icons.lock_rounded,
-                          size: 12,
-                          color: chatTeamNote,
-                        ),
-                        const SizedBox(width: 4),
-                        Text(
-                          'Only your team',
-                          style: AppTextStyles.caption(
-                            fontSize: 12,
-                            fontWeight: FontWeight.w600,
-                            color: chatTeamNote,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                if (label.isNotEmpty)
-                  Padding(
-                    padding: const EdgeInsets.only(bottom: 2),
-                    child: Text.rich(
-                      TextSpan(
-                        children: [
-                          TextSpan(
-                            text: label,
-                            style: AppTextStyles.caption(
-                              fontSize: 13,
-                              fontWeight: FontWeight.w700,
-                              color: chatSenderName,
-                            ),
-                          ),
-                          if (store.isNotEmpty)
-                            TextSpan(
-                              text: '  $store',
-                              style: AppTextStyles.caption(
-                                fontSize: 12,
-                                fontWeight: FontWeight.w500,
-                                color: chatMuted,
+        child: ClipRRect(
+          borderRadius: isPhoto ? BorderRadius.circular(10) : radius,
+          child: ColoredBox(
+            color: fill,
+            child: DefaultTextStyle.merge(
+              style: TextStyle(color: textColor),
+              child: isPhoto
+                  ? _PhotoBubbleBody(
+                      message: message,
+                      maxWidth: photoWidth,
+                      caption: caption,
+                      textColor: textColor,
+                      timeColor: timeColor,
+                      receipt: receipt,
+                      label: label,
+                      store: store,
+                    )
+                  : Padding(
+                      padding: const EdgeInsets.fromLTRB(8, 4, 6, 3),
+                      child: IntrinsicWidth(
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            if (message.starred)
+                              const Padding(
+                                padding: EdgeInsets.only(bottom: 2),
+                                child: Icon(
+                                  Icons.star_rounded,
+                                  size: 14,
+                                  color: chatTeamNote,
+                                ),
                               ),
+                            if (message.teamOnly) const _TeamOnlyLabel(),
+                            if (label.isNotEmpty)
+                              _SenderLabel(label: label, store: store),
+                            if (message.quote != null)
+                              _QuoteBlock(quote: message.quote!),
+                            if (message.kind == ChatMessageKind.file)
+                              _FileRow(name: message.previewBody())
+                            else if (message.kind == ChatMessageKind.basket)
+                              _BasketGrid(
+                                message: message,
+                                onProductTap: onProductTap,
+                              )
+                            else if (message.products.isNotEmpty)
+                              _ProductCard(
+                                product: message.products.first,
+                                suggested: message.suggestedAlternative,
+                              ),
+                            _TextWithTime(
+                              text: caption,
+                              mentions: message.mentions,
+                              textStyle: AppTextStyles.body(
+                                fontSize: 15.5,
+                                height: 1.25,
+                                color: textColor,
+                              ),
+                              time: chatClock(message.at),
+                              timeColor: timeColor,
+                              receipt: receipt,
                             ),
-                        ],
+                          ],
+                        ),
                       ),
                     ),
-                  ),
-                if (message.quote != null) _QuoteBlock(quote: message.quote!),
-                if (message.kind == ChatMessageKind.photo)
-                  ChatPhotoView(message: message, height: 160)
-                else if (message.kind == ChatMessageKind.file)
-                  _FileRow(name: message.previewBody())
-                else if (message.kind == ChatMessageKind.basket)
-                  _BasketGrid(message: message, onProductTap: onProductTap)
-                else if (message.products.isNotEmpty)
-                  _ProductCard(
-                    product: message.products.first,
-                    suggested: message.suggestedAlternative,
-                  ),
-                _TextWithTime(
-                  text: _bubbleBody(message),
-                  mentions: message.mentions,
-                  textStyle: AppTextStyles.body(
-                    fontSize: 15.5,
-                    height: 1.25,
-                    color: textColor,
-                  ),
-                  time: chatClock(message.at),
-                  timeColor: timeColor,
-                  receipt:
-                      message.mine
-                          ? (message.receipt ?? ChatReceipt.sent)
-                          : null,
-                ),
-              ],
-            ),
             ),
           ),
         ),
@@ -498,6 +490,7 @@ class ChatBubble extends StatelessWidget {
     return ChatSwipeToReply(
       onReply: onReply,
       child: GestureDetector(
+        onTap: onTap ?? (isPhoto ? () => openChatPhoto(context, message) : null),
         onLongPress: onLongPress,
         onSecondaryTap: onSecondaryTap,
         child: Padding(
@@ -508,6 +501,155 @@ class ChatBubble extends StatelessWidget {
             2,
           ),
           child: bubble,
+        ),
+      ),
+    );
+  }
+}
+
+class _PhotoBubbleBody extends StatelessWidget {
+  const _PhotoBubbleBody({
+    required this.message,
+    required this.maxWidth,
+    required this.caption,
+    required this.textColor,
+    required this.timeColor,
+    required this.receipt,
+    required this.label,
+    required this.store,
+  });
+
+  final ChatMessage message;
+  final double maxWidth;
+  final String caption;
+  final Color textColor;
+  final Color timeColor;
+  final ChatReceipt? receipt;
+  final String label;
+  final String store;
+
+  @override
+  Widget build(BuildContext context) {
+    final bare =
+        caption.trim().isEmpty && label.isEmpty && message.quote == null;
+    final photo = _SizedChatPhoto(
+      message: message,
+      maxWidth: maxWidth,
+      showTime: caption.trim().isEmpty,
+      time: chatClock(message.at),
+      receipt: receipt,
+      showBadges: bare,
+    );
+    if (bare) return photo;
+    final hasHeader =
+        message.starred ||
+        message.teamOnly ||
+        label.isNotEmpty ||
+        message.quote != null;
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        if (hasHeader)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(8, 4, 6, 4),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                if (message.starred)
+                  const Padding(
+                    padding: EdgeInsets.only(bottom: 2),
+                    child: Icon(
+                      Icons.star_rounded,
+                      size: 14,
+                      color: chatTeamNote,
+                    ),
+                  ),
+                if (message.teamOnly) const _TeamOnlyLabel(),
+                if (label.isNotEmpty) _SenderLabel(label: label, store: store),
+                if (message.quote != null) _QuoteBlock(quote: message.quote!),
+              ],
+            ),
+          ),
+        photo,
+        if (caption.trim().isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(8, 4, 6, 3),
+            child: _TextWithTime(
+              text: caption,
+              mentions: message.mentions,
+              textStyle: AppTextStyles.body(
+                fontSize: 15.5,
+                height: 1.25,
+                color: textColor,
+              ),
+              time: chatClock(message.at),
+              timeColor: timeColor,
+              receipt: receipt,
+            ),
+          ),
+      ],
+    );
+  }
+}
+
+class _TeamOnlyLabel extends StatelessWidget {
+  const _TeamOnlyLabel();
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 2),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Icon(Icons.lock_rounded, size: 12, color: chatTeamNote),
+          const SizedBox(width: 4),
+          Text(
+            'Only your team',
+            style: AppTextStyles.caption(
+              fontSize: 12,
+              fontWeight: FontWeight.w600,
+              color: chatTeamNote,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _SenderLabel extends StatelessWidget {
+  const _SenderLabel({required this.label, required this.store});
+
+  final String label;
+  final String store;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 2),
+      child: Text.rich(
+        TextSpan(
+          children: [
+            TextSpan(
+              text: label,
+              style: AppTextStyles.caption(
+                fontSize: 13,
+                fontWeight: FontWeight.w700,
+                color: chatSenderName,
+              ),
+            ),
+            if (store.isNotEmpty)
+              TextSpan(
+                text: '  $store',
+                style: AppTextStyles.caption(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w500,
+                  color: chatMuted,
+                ),
+              ),
+          ],
         ),
       ),
     );
@@ -640,44 +782,84 @@ class _QuoteBlock extends StatelessWidget {
       decoration: BoxDecoration(
         color: Colors.black.withValues(alpha: 0.12),
         borderRadius: BorderRadius.circular(8),
-        border: Border(left: BorderSide(color: AppColors.primary, width: 2)),
+        border: Border(left: BorderSide(color: chatQuoteAccent, width: 3)),
       ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+      child: Row(
         children: [
-          Text(
-            quote.senderLabel,
-            style: AppTextStyles.caption(
-              fontSize: 11,
-              fontWeight: FontWeight.w700,
-              color: AppColors.primary,
-            ),
-          ),
-          if (quote.product != null) ...[
-            const SizedBox(height: 4),
-            Row(
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                ChatProductThumb(product: quote.product!, size: 28, radius: 6),
-                const SizedBox(width: 6),
-                Expanded(
-                  child: Text(
-                    quote.text,
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                    style: AppTextStyles.caption(fontSize: 12),
+                Text(
+                  quote.senderLabel,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: AppTextStyles.caption(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w700,
+                    color: chatQuoteAccent,
                   ),
                 ),
+                if (quote.product != null) ...[
+                  const SizedBox(height: 4),
+                  Row(
+                    children: [
+                      ChatProductThumb(
+                        product: quote.product!,
+                        size: 28,
+                        radius: 6,
+                      ),
+                      const SizedBox(width: 6),
+                      Expanded(child: _quoteCaption(quote.previewText)),
+                    ],
+                  ),
+                ] else if (quote.previewText.isNotEmpty)
+                  _quoteCaption(quote.previewText),
               ],
             ),
-          ] else
-            Text(
-              quote.text,
-              maxLines: 2,
-              overflow: TextOverflow.ellipsis,
-              style: AppTextStyles.caption(fontSize: 12),
-            ),
+          ),
+          if (quote.hasPhoto) ...[
+            const SizedBox(width: 8),
+            ChatQuoteThumb(quote: quote),
+          ],
         ],
       ),
+    );
+  }
+}
+
+Widget _quoteCaption(String text) {
+  return Text(
+    text,
+    maxLines: 2,
+    overflow: TextOverflow.ellipsis,
+    style: AppTextStyles.caption(fontSize: 12, color: chatMuted),
+  );
+}
+
+class ChatQuoteThumb extends StatelessWidget {
+  const ChatQuoteThumb({super.key, required this.quote, this.size = 42});
+
+  final ChatQuote quote;
+  final double size;
+
+  @override
+  Widget build(BuildContext context) {
+    if (!quote.hasPhoto) return const SizedBox.shrink();
+    return ChatPhotoView(
+      message: ChatMessage(
+        id: quote.remotePhotoId.trim().isEmpty
+            ? quote.mediaPath
+            : quote.remotePhotoId,
+        kind: ChatMessageKind.photo,
+        side: ChatSenderSide.merchant,
+        at: DateTime.fromMillisecondsSinceEpoch(0),
+        mediaPath: quote.mediaPath,
+        remotePhotoId: quote.remotePhotoId,
+      ),
+      width: size,
+      height: size,
+      radius: 6,
     );
   }
 }
@@ -805,6 +987,288 @@ class ChatDayChip extends StatelessWidget {
   }
 }
 
+class _SizedChatPhoto extends StatefulWidget {
+  const _SizedChatPhoto({
+    required this.message,
+    required this.maxWidth,
+    required this.showTime,
+    required this.time,
+    this.receipt,
+    this.showBadges = false,
+  });
+
+  final ChatMessage message;
+  final double maxWidth;
+  final bool showTime;
+  final String time;
+  final ChatReceipt? receipt;
+  final bool showBadges;
+
+  @override
+  State<_SizedChatPhoto> createState() => _SizedChatPhotoState();
+}
+
+class _SizedChatPhotoState extends State<_SizedChatPhoto> {
+  Uint8List? _bytes;
+  Size? _pixels;
+  bool _failed = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    try {
+      final bytes = await _chatPhotoBytesOf(widget.message);
+      if (!mounted) return;
+      if (bytes == null) {
+        setState(() => _failed = true);
+        return;
+      }
+      final key = _chatPhotoKey(widget.message);
+      var size = key.isEmpty ? null : _chatPhotoPixelSize[key];
+      if (size == null) {
+        final codec = await ui.instantiateImageCodec(bytes);
+        final frame = await codec.getNextFrame();
+        size = Size(
+          frame.image.width.toDouble(),
+          frame.image.height.toDouble(),
+        );
+        frame.image.dispose();
+        codec.dispose();
+        if (key.isNotEmpty) _chatPhotoPixelSize[key] = size;
+      }
+      if (!mounted) return;
+      setState(() {
+        _bytes = bytes;
+        _pixels = size;
+      });
+    } catch (_) {
+      if (mounted) setState(() => _failed = true);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final fitted = _pixels == null
+        ? Size(widget.maxWidth, widget.maxWidth * 0.72)
+        : _fitPhoto(_pixels!, widget.maxWidth);
+    final bytes = _bytes;
+    return SizedBox(
+      width: fitted.width,
+      height: fitted.height,
+      child: Stack(
+        fit: StackFit.expand,
+        children: [
+          if (bytes == null)
+            _photoStandIn(
+              widget.message,
+              width: fitted.width,
+              height: fitted.height,
+              waiting: !_failed,
+            )
+          else
+            Image.memory(
+              bytes,
+              fit: BoxFit.cover,
+              gaplessPlayback: true,
+            ),
+          if (widget.showBadges && widget.message.starred)
+            const Positioned(
+              top: 6,
+              left: 6,
+              child: Icon(Icons.star_rounded, size: 18, color: chatTeamNote),
+            ),
+          if (widget.showBadges && widget.message.teamOnly)
+            Positioned(
+              top: 6,
+              left: widget.message.starred ? 28 : 6,
+              child: const DecoratedBox(
+                decoration: BoxDecoration(
+                  color: Color(0x99000000),
+                  borderRadius: BorderRadius.all(Radius.circular(10)),
+                ),
+                child: Padding(
+                  padding: EdgeInsets.all(4),
+                  child: Icon(Icons.lock_rounded, size: 12, color: chatTeamNote),
+                ),
+              ),
+            ),
+          if (widget.showTime) ...[
+            const Positioned(
+              left: 0,
+              right: 0,
+              bottom: 0,
+              height: 56,
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.topCenter,
+                    end: Alignment.bottomCenter,
+                    colors: [Color(0x00000000), Color(0xB3000000)],
+                  ),
+                ),
+              ),
+            ),
+            Positioned(
+              right: 8,
+              bottom: 5,
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    widget.time,
+                    style: const TextStyle(
+                      fontSize: 11,
+                      color: Colors.white,
+                      shadows: [Shadow(color: Color(0x66000000), blurRadius: 2)],
+                    ),
+                  ),
+                  if (widget.receipt != null) ...[
+                    const SizedBox(width: 3),
+                    ChatReceiptTicks(
+                      receipt: widget.receipt,
+                      size: 16,
+                      idleColor: Colors.white,
+                    ),
+                  ],
+                ],
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+Size _fitPhoto(Size pixels, double maxWidth) {
+  const maxHeight = 360.0;
+  final width = math.max(pixels.width, 1.0);
+  final height = math.max(pixels.height, 1.0);
+  final scale = math.min(maxWidth / width, maxHeight / height);
+  return Size(width * scale, height * scale);
+}
+
+void openChatPhoto(BuildContext context, ChatMessage message) {
+  Navigator.of(context).push(
+    PageRouteBuilder<void>(
+      opaque: true,
+      barrierColor: Colors.black,
+      transitionDuration: const Duration(milliseconds: 180),
+      reverseTransitionDuration: const Duration(milliseconds: 140),
+      pageBuilder: (context, animation, _) {
+        return FadeTransition(
+          opacity: animation,
+          child: _ChatPhotoPage(message: message),
+        );
+      },
+    ),
+  );
+}
+
+class _ChatPhotoPage extends StatefulWidget {
+  const _ChatPhotoPage({required this.message});
+
+  final ChatMessage message;
+
+  @override
+  State<_ChatPhotoPage> createState() => _ChatPhotoPageState();
+}
+
+class _ChatPhotoPageState extends State<_ChatPhotoPage> {
+  final TransformationController _zoom = TransformationController();
+  Uint8List? _bytes;
+  bool _failed = false;
+  Offset _doubleTap = Offset.zero;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  @override
+  void dispose() {
+    _zoom.dispose();
+    super.dispose();
+  }
+
+  Future<void> _load() async {
+    try {
+      final bytes = await _chatPhotoBytesOf(widget.message);
+      if (!mounted) return;
+      setState(() {
+        _bytes = bytes;
+        _failed = bytes == null;
+      });
+    } catch (_) {
+      if (mounted) setState(() => _failed = true);
+    }
+  }
+
+  void _toggleZoom() {
+    if (_zoom.value.getMaxScaleOnAxis() > 1.05) {
+      _zoom.value = Matrix4.identity();
+      return;
+    }
+    const scale = 2.5;
+    final x = -_doubleTap.dx * (scale - 1);
+    final y = -_doubleTap.dy * (scale - 1);
+    _zoom.value = Matrix4.identity()
+      ..translate(x, y)
+      ..scale(scale);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final bytes = _bytes;
+    return Scaffold(
+      backgroundColor: Colors.black,
+      body: Stack(
+        children: [
+          Positioned.fill(
+            child: bytes == null
+                ? Center(
+                    child: _failed
+                        ? const Icon(
+                            Icons.broken_image_outlined,
+                            color: Colors.white54,
+                            size: 48,
+                          )
+                        : const CircularProgressIndicator(color: Colors.white),
+                  )
+                : GestureDetector(
+                    onDoubleTapDown: (details) {
+                      _doubleTap = details.localPosition;
+                    },
+                    onDoubleTap: _toggleZoom,
+                    child: InteractiveViewer(
+                      transformationController: _zoom,
+                      minScale: 1,
+                      maxScale: 5,
+                      child: SizedBox.expand(
+                        child: Image.memory(bytes, fit: BoxFit.contain),
+                      ),
+                    ),
+                  ),
+          ),
+          Positioned(
+            top: MediaQuery.paddingOf(context).top + 4,
+            left: 4,
+            child: IconButton(
+              onPressed: () => Navigator.of(context).pop(),
+              icon: const Icon(Icons.close, color: Colors.white),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class ChatPhotoView extends StatelessWidget {
   const ChatPhotoView({
     super.key,
@@ -822,10 +1286,6 @@ class ChatPhotoView extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final path = message.mediaPath.trim();
-    final color =
-        message.mediaColorValue == 0
-            ? const Color(0xFFC4A265)
-            : Color(message.mediaColorValue);
     final Widget image;
     if (path.isNotEmpty && File(path).existsSync()) {
       image = Image.file(
@@ -834,21 +1294,139 @@ class ChatPhotoView extends StatelessWidget {
         height: height,
         fit: BoxFit.cover,
       );
-    } else {
-      image = Container(
+    } else if (message.remotePhotoId.trim().isNotEmpty) {
+      image = _RemoteChatPhoto(
+        photoId: message.remotePhotoId.trim(),
         width: width,
         height: height,
-        color: color,
-        alignment: Alignment.center,
-        child: Icon(
-          Icons.image_outlined,
-          color: Colors.white.withValues(alpha: 0.9),
-          size: height > 80 ? 36 : 22,
-        ),
       );
+    } else {
+      image = _photoStandIn(message, width: width, height: height);
     }
     return ClipRRect(borderRadius: BorderRadius.circular(radius), child: image);
   }
+}
+
+final _chatPhotoBytes = <String, Uint8List>{};
+final _chatPhotoPixelSize = <String, Size>{};
+
+String _chatPhotoKey(ChatMessage message) {
+  final id = message.remotePhotoId.trim();
+  if (id.isNotEmpty) return id;
+  return message.mediaPath.trim();
+}
+
+Future<Uint8List?> _chatPhotoBytesOf(ChatMessage message) async {
+  final key = _chatPhotoKey(message);
+  if (key.isNotEmpty) {
+    final cached = _chatPhotoBytes[key];
+    if (cached != null) return cached;
+  }
+  final path = message.mediaPath.trim();
+  if (path.isNotEmpty && File(path).existsSync()) {
+    final data = await File(path).readAsBytes();
+    if (key.isNotEmpty) _chatPhotoBytes[key] = data;
+    return data;
+  }
+  final id = message.remotePhotoId.trim();
+  if (id.isEmpty) return null;
+  final bytes = await ServiceLocator.get<ChatRepository>().downloadPhoto(id);
+  final data = Uint8List.fromList(bytes);
+  _chatPhotoBytes[id] = data;
+  return data;
+}
+
+class _RemoteChatPhoto extends StatefulWidget {
+  const _RemoteChatPhoto({
+    required this.photoId,
+    required this.width,
+    required this.height,
+  });
+
+  final String photoId;
+  final double width;
+  final double height;
+
+  @override
+  State<_RemoteChatPhoto> createState() => _RemoteChatPhotoState();
+}
+
+class _RemoteChatPhotoState extends State<_RemoteChatPhoto> {
+  Uint8List? _bytes;
+  bool _failed = false;
+
+  @override
+  void initState() {
+    super.initState();
+    final cached = _chatPhotoBytes[widget.photoId];
+    if (cached != null) {
+      _bytes = cached;
+      return;
+    }
+    _load();
+  }
+
+  Future<void> _load() async {
+    try {
+      final bytes = await ServiceLocator.get<ChatRepository>().downloadPhoto(
+        widget.photoId,
+      );
+      if (!mounted) return;
+      final data = Uint8List.fromList(bytes);
+      _chatPhotoBytes[widget.photoId] = data;
+      setState(() => _bytes = data);
+    } catch (_) {
+      if (mounted) setState(() => _failed = true);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final bytes = _bytes;
+    if (bytes == null) {
+      return _photoStandIn(
+        null,
+        width: widget.width,
+        height: widget.height,
+        waiting: !_failed,
+      );
+    }
+    return Image.memory(
+      bytes,
+      width: widget.width,
+      height: widget.height,
+      fit: BoxFit.cover,
+      gaplessPlayback: true,
+    );
+  }
+}
+
+Widget _photoStandIn(
+  ChatMessage? message, {
+  required double width,
+  required double height,
+  bool waiting = false,
+}) {
+  final color = message == null || message.mediaColorValue == 0
+      ? const Color(0xFFC4A265)
+      : Color(message.mediaColorValue);
+  return Container(
+    width: width,
+    height: height,
+    color: color,
+    alignment: Alignment.center,
+    child: waiting
+        ? const SizedBox(
+            width: 22,
+            height: 22,
+            child: CircularProgressIndicator(strokeWidth: 2),
+          )
+        : Icon(
+            Icons.image_outlined,
+            color: Colors.white.withValues(alpha: 0.9),
+            size: height > 80 ? 36 : 22,
+          ),
+  );
 }
 
 class _FileRow extends StatelessWidget {

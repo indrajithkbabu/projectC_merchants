@@ -96,11 +96,25 @@ class ChatQuote {
     required this.senderLabel,
     required this.text,
     this.product,
+    this.mediaPath = '',
+    this.remotePhotoId = '',
   });
 
   final String senderLabel;
   final String text;
   final ChatProductRef? product;
+  final String mediaPath;
+  final String remotePhotoId;
+
+  bool get hasPhoto =>
+      mediaPath.trim().isNotEmpty || remotePhotoId.trim().isNotEmpty;
+
+  /// Caption under the name. A photo with no caption stays a thumbnail only.
+  String get previewText {
+    final body = text.trim();
+    if (hasPhoto && (body.isEmpty || body.toLowerCase() == 'photo')) return '';
+    return body;
+  }
 }
 
 class ChatMessage {
@@ -125,6 +139,7 @@ class ChatMessage {
     this.starred = false,
     this.mediaPath = '',
     this.mediaColorValue = 0,
+    this.remotePhotoId = '',
   });
 
   final String id;
@@ -151,6 +166,9 @@ class ChatMessage {
   /// Local photo path. Empty uses [mediaColorValue] as a stand-in.
   final String mediaPath;
   final int mediaColorValue;
+
+  /// Catalog chat photo id. The bytes are loaded with the signed-in profile.
+  final String remotePhotoId;
 
   bool get isStatus => kind == ChatMessageKind.status;
 
@@ -227,6 +245,7 @@ class ChatThread {
     this.blocked = false,
     this.customerNote = '',
     this.customerNoteBy = '',
+    this.remote = false,
   }) : members = List<ChatMember>.of(members);
 
   final String id;
@@ -246,6 +265,9 @@ class ChatThread {
   final String phone;
   final String createdBy;
   bool blocked;
+
+  /// Server relationship. The thread screen still uses this model.
+  final bool remote;
 
   /// Short note about a customer. The signed-in store can read and edit it.
   /// Owner-versus-staff visibility is still open; see [chatShowsCustomerStoreRows].

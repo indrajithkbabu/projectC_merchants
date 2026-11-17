@@ -116,6 +116,123 @@ class ChatMockStore extends ChangeNotifier {
   /// Remove-from-store uses this single flag.
   bool isOwner = true;
 
+  /// Shell for an API chat so the existing thread screen can render it.
+  ChatThread ensureRemoteThread({
+    required String id,
+    required String title,
+    required bool isStore,
+  }) {
+    final existing = threadById(id);
+    if (existing != null) return existing;
+    final thread = ChatThread(
+      id: id,
+      customer: ChatActor(
+        id: id,
+        name: title.trim().isEmpty ? 'Chat' : title.trim(),
+        isStoreAccount: isStore,
+      ),
+      status: ChatStatus.open,
+      ticket: 0,
+      openedAt: DateTime.now(),
+      listed: false,
+      discussions: <ProductDiscussion>[],
+      messages: <ChatMessage>[],
+      remote: true,
+      outbound: true,
+      kind: isStore ? ChatKind.store : ChatKind.person,
+    );
+    _threads.add(thread);
+    return thread;
+  }
+
+  void setRemoteContent({
+    required String id,
+    required List<ProductDiscussion> discussions,
+    required List<ChatMessage> messages,
+    String? openDiscussionId,
+  }) {
+    final thread = threadById(id);
+    if (thread == null) return;
+    final notes = [
+      for (final message in thread.messages)
+        if (message.teamOnly) message,
+    ];
+    thread.discussions
+      ..clear()
+      ..addAll(discussions);
+    thread.messages
+      ..clear()
+      ..addAll(messages)
+      ..addAll(notes);
+    thread.openDiscussionId =
+        openDiscussionId ??
+        (discussions.isEmpty ? null : discussions.first.id);
+    notifyListeners();
+  }
+
+  /// Adds messages that are not already on the thread and refreshes ticks.
+  void mergeRemoteMessages(String threadId, List<ChatMessage> incoming) {
+    final thread = threadById(threadId);
+    if (thread == null || incoming.isEmpty) return;
+    var changed = false;
+    for (final message in incoming) {
+      ChatMessage? existing;
+      for (final current in thread.messages) {
+        if (current.id == message.id) {
+          existing = current;
+          break;
+        }
+      }
+      if (existing == null) {
+        thread.messages.add(message);
+        changed = true;
+        continue;
+      }
+      if (message.receipt != null && existing.receipt != message.receipt) {
+        existing.receipt = message.receipt;
+        changed = true;
+      }
+    }
+    if (changed) notifyListeners();
+  }
+
+  void dropDiscussion(String threadId, String discussionId) {
+    final thread = threadById(threadId);
+    if (thread == null) return;
+    thread.discussions.removeWhere((item) => item.id == discussionId);
+    thread.messages.removeWhere((item) => item.discussionId == discussionId);
+    if (thread.openDiscussionId == discussionId) {
+      thread.openDiscussionId = null;
+    }
+  }
+
+  void addRemoteDiscussion({
+    required String threadId,
+    required ProductDiscussion discussion,
+    ChatMessage? message,
+  }) {
+    final thread = threadById(threadId);
+    if (thread == null) return;
+    final exists = thread.discussions.any((item) => item.id == discussion.id);
+    if (!exists) thread.discussions.insert(0, discussion);
+    thread.openDiscussionId = discussion.id;
+    if (message != null &&
+        !thread.messages.any((item) => item.id == message.id)) {
+      thread.messages.add(message);
+    }
+    notifyListeners();
+  }
+
+  void addRemoteMessage(String threadId, ChatMessage message) {
+    final thread = threadById(threadId);
+    if (thread == null) return;
+    thread.messages.add(message);
+    if (message.discussionId != null) {
+      thread.openDiscussionId = message.discussionId;
+    }
+    notifyListeners();
+  }
+
   void focusThread(String id, {String? discussionId}) {
     final thread = threadById(id);
     if (thread == null) return;
@@ -176,7 +293,7 @@ class ChatMockStore extends ChangeNotifier {
     if (target == null && teamOnly) {
       target = _addDiscussion(thread, name: '', product: null);
     }
-    thread.listed = true;
+    if (!thread.remote) thread.listed = true;
     thread.customerTyping = false;
     final mentions = _mentionsIn(thread, text);
     thread.messages.add(
@@ -241,6 +358,7 @@ class ChatMockStore extends ChangeNotifier {
     String mediaPath = '',
     int mediaColorValue = 0xFFC4A265,
     String caption = '',
+    bool teamOnly = false,
   }) {
     _sendMedia(
       threadId,
@@ -249,6 +367,7 @@ class ChatMockStore extends ChangeNotifier {
       text: caption,
       mediaPath: mediaPath,
       mediaColorValue: mediaColorValue,
+      teamOnly: teamOnly,
     );
   }
 
@@ -273,11 +392,12 @@ class ChatMockStore extends ChangeNotifier {
     String text = '',
     String mediaPath = '',
     int mediaColorValue = 0,
+    bool teamOnly = false,
   }) {
     final thread = threadById(threadId);
     if (thread == null || thread.status == ChatStatus.closed) return;
     final target = _sendableDiscussion(thread, discussionId);
-    thread.listed = true;
+    if (!thread.remote) thread.listed = true;
     thread.customerTyping = false;
     thread.messages.add(
       ChatMessage(
@@ -291,6 +411,8 @@ class ChatMockStore extends ChangeNotifier {
         receipt: ChatReceipt.sent,
         mediaPath: mediaPath,
         mediaColorValue: mediaColorValue,
+        teamOnly: teamOnly,
+        writerStore: teamOnly ? storeName : '',
       ),
     );
     if (target != null) thread.openDiscussionId = target;
