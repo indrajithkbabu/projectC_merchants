@@ -4,6 +4,7 @@ import 'dart:ui';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:project_c/bloc/chat_inbox/chat_inbox_bloc.dart';
 import 'package:project_c/bloc/store_gallery/store_gallery_bloc.dart';
 import 'package:project_c/bloc/storeprofile/store_profile_bloc.dart';
 import 'package:project_c/di/service_locator.dart';
@@ -47,6 +48,7 @@ import 'package:project_c/services/product_view_preferences.dart';
 import 'package:project_c/storage/store_profile_scroll_cache.dart';
 import 'package:project_c/webservice/cart/cart_repository.dart';
 import 'package:project_c/webservice/catalog_error_mapper.dart';
+import 'package:project_c/webservice/chat/chat_repository.dart';
 import 'package:project_c/webservice/wishlist/wishlist_repository.dart';
 
 class StoreProfileRoute extends StatefulWidget {
@@ -68,6 +70,7 @@ class _StoreProfileRouteState extends State<StoreProfileRoute> {
   /// Photo multi-select: `"productId|imageIndex"` (owner delete / visitor import).
   final Set<String> _selectedPhotoKeys = {};
   bool _selectionMode = false;
+  bool _openingChat = false;
   /// True while selecting collage/gallery photos (owner or visitor).
   bool _visitorPhotoSelecting = false;
   bool _visitorWishlistBusy = false;
@@ -635,15 +638,37 @@ class _StoreProfileRouteState extends State<StoreProfileRoute> {
       !state.isContentLocked &&
       state.storeId.trim().isNotEmpty;
 
-  void _openStoreChat(StoreProfileState state) {
-    final chatId = ChatMockStore.instance.ensureStoreChat(
-      storeId: state.storeId,
-      storeName: state.storeName,
-    );
-    Navigator.of(context).pushNamed(
-      Routes.chatThreadRoute,
-      arguments: <String, String?>{'chatId': chatId},
-    );
+  Future<void> _openStoreChat(StoreProfileState state) async {
+    if (_openingChat) return;
+    final storeId = state.storeId.trim();
+    if (storeId.isEmpty) return;
+    setState(() => _openingChat = true);
+    try {
+      final relationship = await ServiceLocator.get<ChatRepository>()
+          .openStoreChat(storeId);
+      if (!mounted) return;
+      context.read<ChatInboxBloc>().add(const ChatInboxRefreshed());
+      final other = relationship.otherSide;
+      final title = (other?.name.trim().isNotEmpty == true)
+          ? other!.name.trim()
+          : state.storeName.trim();
+      await Navigator.of(context).pushNamed(
+        Routes.chatThreadRoute,
+        arguments: <String, Object?>{
+          'chatId': relationship.id,
+          'api': true,
+          'title': title.isEmpty ? 'Store' : title,
+          'isStore': other?.isStore != false,
+        },
+      );
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(CatalogErrorMapper.toUserMessage(error))),
+      );
+    } finally {
+      if (mounted) setState(() => _openingChat = false);
+    }
   }
 
   void _toggleSelected(StoreProduct product) {

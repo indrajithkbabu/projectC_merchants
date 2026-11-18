@@ -17,6 +17,8 @@ import 'package:project_c/services/cart_store.dart';
 import 'package:project_c/webservice/auth/auth_repository.dart';
 import 'package:project_c/webservice/cart/cart_repository.dart';
 import 'package:project_c/webservice/cart/cart_request.dart';
+import 'package:project_c/webservice/chat/chat_repository.dart';
+import 'package:project_c/webservice/chat/chat_request.dart';
 import 'package:project_c/webservice/auth/auth_request.dart';
 import 'package:project_c/webservice/catalog_api_client.dart';
 import 'package:project_c/webservice/collection/collection_repository.dart';
@@ -241,6 +243,15 @@ class ServiceLocator {
     );
     injector.map<ViewsRepository>(
       (i) => ViewsRepositoryImpl(request: i.get<ViewsRequest>()),
+      isSingleton: true,
+    );
+
+    injector.map<ChatRequest>(
+      (i) => ChatRequest(apiClient: i.get<CatalogApiClient>()),
+      isSingleton: true,
+    );
+    injector.map<ChatRepository>(
+      (i) => ChatRepositoryImpl(request: i.get<ChatRequest>()),
       isSingleton: true,
     );
   }

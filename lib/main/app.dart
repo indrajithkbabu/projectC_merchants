@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:project_c/bloc/auth/auth_bloc.dart';
+import 'package:project_c/bloc/chat_inbox/chat_inbox_bloc.dart';
 import 'package:project_c/bloc/network_status/network_status_cubit.dart';
 import 'package:project_c/di/service_locator.dart';
 import 'package:project_c/helper/app_log.dart';
@@ -98,6 +99,7 @@ class _AppState extends State<App> with WidgetsBindingObserver {
         BlocProvider(
           create: (_) => AuthBloc()..add(const AuthSessionRestoreRequested()),
         ),
+        BlocProvider(create: (_) => ChatInboxBloc()),
         BlocProvider(create: (_) => NetworkStatusCubit()..start()),
       ],
       child: BlocListener<AuthBloc, AuthState>(

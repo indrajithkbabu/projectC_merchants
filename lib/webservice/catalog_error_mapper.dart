@@ -11,8 +11,7 @@ class CatalogErrorMapper {
   CatalogErrorMapper._();
 
   /// Last-resort copy when no status/code mapping applies.
-  static const String _fallback =
-      'Something went wrong. Please try again.';
+  static const String _fallback = 'Something went wrong. Please try again.';
 
   static String toUserMessage(Object error) {
     if (error is CatalogApiException) {
@@ -160,6 +159,7 @@ class CatalogErrorMapper {
 
       // ── Infra / availability ────────────────────────────────────
       case 'CATALOG_UNAVAILABLE':
+      case 'CATALOG_NOT_READY':
       case 'DATABASE_UNAVAILABLE':
         return 'Service is temporarily unavailable. Try again soon.';
       case 'REQUEST_TIMEOUT':
@@ -281,7 +281,7 @@ class CatalogErrorMapper {
         return 'Uploads are busy. Please try again in a moment.';
       case 'PAYLOAD_TOO_LARGE':
       case 'REQUEST_ENTITY_TOO_LARGE':
-        return 'These photos are too large. Try smaller images or fewer photos.';
+        return 'Image must be smaller than 8 MB. Please choose smaller image and try again.';
 
       // ── Image / processing (top-level or failedPhotos[].code) ───
       case 'HEIC_NOT_SUPPORTED':
@@ -336,6 +336,37 @@ class CatalogErrorMapper {
       case 'DESTINATION_STORE_REQUIRED':
         return 'Choose which store to import into.';
 
+      // ── Chat ────────────────────────────────────────────────────
+      case 'CHAT_DISABLED':
+        return 'Chat is unavailable right now.';
+      case 'CHAT_READ_ONLY':
+        return 'Chat is read-only right now. You can still view messages.';
+      case 'CHAT_BLOCKED':
+        return 'This chat is blocked.';
+      case 'CHAT_REQUEST_PENDING':
+        return 'This chat is waiting to be accepted.';
+      case 'DISCUSSION_CLOSED':
+        return 'This discussion is closed.';
+      case 'CUSTOMER_NOT_REGISTERED':
+        return 'That phone number is not registered on Catly.';
+      case 'CHAT_NOT_FOUND':
+        return 'This chat is no longer available.';
+      case 'CHAT_SELF_RELATIONSHIP':
+        return 'Choose a different store.';
+      case 'DISCUSSION_NOT_FOUND':
+        return 'This discussion is no longer available.';
+      case 'PHOTO_UNAVAILABLE':
+        return 'That photo expired. Choose it again.';
+      case 'INVALID_CHAT_PHOTO':
+        return 'Use one JPEG, PNG, or WebP within the size limit.';
+      case 'CHAT_MEDIA_BUSY':
+        return 'Photo processing is busy. Try again in a moment.';
+      case 'CHAT_MEDIA_UNAVAILABLE':
+      case 'CHAT_MEDIA_NOT_CONFIGURED':
+        return 'Photos are unavailable right now.';
+      case 'MESSAGE_NOT_FOUND':
+        return 'That message is no longer in this chat.';
+
       default:
         return null;
     }
@@ -359,7 +390,7 @@ class CatalogErrorMapper {
       case 409:
         return 'Something changed. Refresh and try again.';
       case 413:
-        return 'These photos are too large to upload. Try smaller images or fewer photos.';
+        return 'Image must be smaller than 8 MB. Please choose smaller image and try again.';
       case 415:
         return 'This file type is not supported.';
       case 422:
