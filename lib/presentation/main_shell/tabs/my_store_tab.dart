@@ -318,7 +318,9 @@ class MyStoreTabState extends State<MyStoreTab> {
       },
     );
     if (!context.mounted) return;
-    context.read<StoreProfileBloc>().add(const StoreProfileLoadStoreMeta());
+    context.read<StoreProfileBloc>().add(
+      const StoreProfileLoadStoreMeta(force: true),
+    );
   }
 
   Future<void> _openFollowRequests(
@@ -336,7 +338,9 @@ class MyStoreTabState extends State<MyStoreTab> {
     context.read<StoreProfileBloc>().add(
       const StoreProfileLoadFollowRequestPreviews(),
     );
-    context.read<StoreProfileBloc>().add(const StoreProfileLoadStoreMeta());
+    context.read<StoreProfileBloc>().add(
+      const StoreProfileLoadStoreMeta(force: true),
+    );
   }
 
   Future<void> _openImportRequests(

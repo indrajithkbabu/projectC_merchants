@@ -1413,6 +1413,42 @@ class _ProductDetailsRouteState extends State<ProductDetailsRoute> {
             _popDetails();
           },
           child: BlocBuilder<ProductDetailsBloc, ProductDetailsState>(
+            buildWhen: (prev, curr) {
+              // Rebuild chrome/media only when painted fields change (ST-2).
+              return prev.product != curr.product ||
+                  prev.isContentLocked != curr.isContentLocked ||
+                  prev.isLoadingPhotos != curr.isLoadingPhotos ||
+                  prev.galleryFeed != curr.galleryFeed ||
+                  prev.galleryFeedIndex != curr.galleryFeedIndex ||
+                  prev.initialImageIndex != curr.initialImageIndex ||
+                  prev.revision != curr.revision ||
+                  prev.specifications != curr.specifications ||
+                  prev.productSpecsById != curr.productSpecsById ||
+                  prev.precisionTag != curr.precisionTag ||
+                  prev.subGroups != curr.subGroups ||
+                  prev.seedCategory != curr.seedCategory ||
+                  prev.showStoreGroupLink != curr.showStoreGroupLink ||
+                  prev.canEdit != curr.canEdit ||
+                  prev.canDelete != curr.canDelete ||
+                  prev.shouldOpenEdit != curr.shouldOpenEdit ||
+                  prev.isDeleting != curr.isDeleting ||
+                  prev.isDeleted != curr.isDeleted ||
+                  prev.infoMessage != curr.infoMessage ||
+                  prev.likedPhotoIds != curr.likedPhotoIds ||
+                  prev.photoLikeCounts != curr.photoLikeCounts ||
+                  prev.photoViewCounts != curr.photoViewCounts ||
+                  prev.isLikeBusy != curr.isLikeBusy ||
+                  prev.showWishlistSnack != curr.showWishlistSnack ||
+                  prev.usesProductLike != curr.usesProductLike ||
+                  prev.isWishlisted != curr.isWishlisted ||
+                  prev.wishlistedProductIds != curr.wishlistedProductIds ||
+                  prev.isWishlistBusy != curr.isWishlistBusy ||
+                  prev.storeName != curr.storeName ||
+                  prev.storeLink != curr.storeLink ||
+                  prev.storeId != curr.storeId ||
+                  prev.isOwnStore != curr.isOwnStore ||
+                  prev.apiTag != curr.apiTag;
+            },
             builder: (context, state) {
               if (state.isContentLocked) {
                 return ScreenWrapper(

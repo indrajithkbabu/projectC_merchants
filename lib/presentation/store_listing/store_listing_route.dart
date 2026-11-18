@@ -7,6 +7,7 @@ import 'package:project_c/di/service_locator.dart';
 import 'package:project_c/helper/app_padding.dart';
 import 'package:project_c/helper/app_log.dart';
 import 'package:project_c/helper/colors.dart';
+import 'package:project_c/helper/store_warm_qa.dart';
 import 'package:project_c/helper/text_styles.dart';
 import 'package:project_c/helper/widgets/floating_bottom_nav_bar.dart';
 import 'package:project_c/helper/widgets/screen_wrapper.dart';
@@ -14,10 +15,12 @@ import 'package:project_c/helper/widgets/shell_tab_title_bar.dart';
 import 'package:project_c/models/store_channel.dart';
 import 'package:project_c/navigation/routes.dart';
 import 'package:project_c/services/store_products_prefetcher.dart';
+import 'package:project_c/storage/store_products_cache.dart';
 import 'package:project_c/presentation/store_listing/store_listing_widgets/store_listing_empty.dart';
 import 'package:project_c/presentation/store_listing/store_listing_widgets/store_listing_shimmer.dart';
 import 'package:project_c/presentation/store_listing/store_listing_widgets/store_listing_tile.dart';
 import 'package:project_c/webservice/notification/activity_repository.dart';
+import 'package:visibility_detector/visibility_detector.dart';
 
 /// Stores list (GET /home). When [embeddedInShell] is true, omits its own
 /// [ScreenWrapper] so [MainShellRoute] can host the floating nav.
@@ -43,7 +46,6 @@ class _StoreListingRouteState extends State<StoreListingRoute> {
 
   late final TextEditingController _searchController;
   late final ScrollController _scrollController;
-  int _activityUnread = 0;
 
   @override
   void initState() {
@@ -57,6 +59,7 @@ class _StoreListingRouteState extends State<StoreListingRoute> {
 
   @override
   void dispose() {
+    StoreProductsPrefetcher.instance.pauseListingViewportPrefetch();
     _scrollController
       ..removeListener(_onScroll)
       ..dispose();
@@ -78,21 +81,41 @@ class _StoreListingRouteState extends State<StoreListingRoute> {
 
   void _openStore(StoreChannel store) {
     _dismissKeyboard();
-    // Warm products + collage images during the route transition.
+    // Push first — never run prefetch/disk/image work on the tap stack before
+    // Navigator (Batch 1). Prefetch schedules after push returns.
+    final session = StoreWarmQa.beginOpenSession(store.id);
+    final memHit = StoreProductsCache.instance.readMemory(store.id) != null;
+    final preEnriched = StoreProductsPrefetcher.instance.isFresh(store.id);
+    StoreWarmQa.event('LISTING_TAP', {
+      'session': session,
+      'store': store.id,
+      'pre_enriched': preEnriched,
+      'mem_hit': memHit,
+    });
+    StoreWarmQa.step(
+      'LISTING_TAP',
+      detail: 'store=${store.id} name=${store.name} push=store_profile_route',
+    );
+    StoreWarmQa.event('PROFILE_NAVIGATION_START', {
+      'session': session,
+      'store': store.id,
+    });
+    // Stop starting new Home enrich work while Profile is open; in-flight
+    // ensure for this tap still joins via [prefetch] / _inFlight dedupe.
+    StoreProductsPrefetcher.instance.pauseListingViewportPrefetch();
+    Navigator.of(context)
+        .pushNamed(
+          Routes.storeProfileRoute,
+          arguments: <String, Object?>{'store': store, 'members': []},
+        )
+        .whenComplete(() {
+          if (!mounted) return;
+          StoreProductsPrefetcher.instance.resumeListingViewportPrefetch();
+        });
     StoreProductsPrefetcher.instance.prefetch(
       store.id,
       coverImageUrl: store.coverImageUrl,
     );
-    Navigator.of(context).pushNamed(
-      Routes.storeProfileRoute,
-      arguments: <String, Object?>{
-        'store': store,
-        'members': [],
-      },
-    ).then((_) {
-      if (!mounted) return;
-      context.read<StoreListingBloc>().add(const StoreListingRefreshed());
-    });
   }
 
   Future<void> _pullToRefresh() async {
@@ -109,23 +132,19 @@ class _StoreListingRouteState extends State<StoreListingRoute> {
   }
 
   Future<void> _refreshActivityUnread() async {
+    final listing = context.read<StoreListingBloc>();
     final ownId =
-        context.read<AccountProfileBloc>().state.profile?.ownStore?.id
-            .trim() ??
+        context.read<AccountProfileBloc>().state.profile?.ownStore?.id.trim() ??
         '';
     if (ownId.isEmpty) {
-      if (mounted && _activityUnread != 0) {
-        setState(() => _activityUnread = 0);
-      }
+      listing.add(const StoreListingActivityUnreadCleared());
       return;
     }
     try {
       final count =
           await ServiceLocator.get<ActivityRepository>().fetchUnreadCount();
       if (!mounted) return;
-      if (count != _activityUnread) {
-        setState(() => _activityUnread = count < 0 ? 0 : count);
-      }
+      listing.add(StoreListingActivityUnreadUpdated(count));
     } catch (e) {
       AppLog.d(_tag, 'activity unread skipped | $e');
     }
@@ -133,8 +152,7 @@ class _StoreListingRouteState extends State<StoreListingRoute> {
 
   void _openActivity() {
     _dismissKeyboard();
-    final ownStore =
-        context.read<AccountProfileBloc>().state.profile?.ownStore;
+    final ownStore = context.read<AccountProfileBloc>().state.profile?.ownStore;
     final storeId = ownStore?.id.trim() ?? '';
     if (storeId.isEmpty) return;
     final storeName =
@@ -163,8 +181,10 @@ class _StoreListingRouteState extends State<StoreListingRoute> {
         )
         .then((_) {
           if (!mounted) return;
-          // Feed marks all read on open — clear local badge.
-          setState(() => _activityUnread = 0);
+          // Feed marks all read on open — clear badge via listing bloc.
+          context.read<StoreListingBloc>().add(
+            const StoreListingActivityUnreadCleared(),
+          );
           // ignore: unawaited_futures
           _refreshActivityUnread();
         });
@@ -233,28 +253,40 @@ class _StoreListingRouteState extends State<StoreListingRoute> {
                                         '')
                                     .isNotEmpty;
                             if (!hasStore) return const SizedBox.shrink();
-                            return SizedBox(
-                              width: 40,
-                              height: ShellTabTitleBar.rowHeight,
-                              child: IconButton(
-                                tooltip: 'Activity',
-                                padding: EdgeInsets.zero,
-                                constraints: const BoxConstraints(
-                                  minWidth: 40,
-                                  minHeight: ShellTabTitleBar.rowHeight,
-                                ),
-                                onPressed: _openActivity,
-                                icon: Badge(
-                                  isLabelVisible: _activityUnread > 0,
-                                  smallSize: 8,
-                                  backgroundColor: AppColors.error,
-                                  child: Icon(
-                                    Icons.notifications_none_rounded,
-                                    size: 24,
-                                    color: AppColors.textPrimary,
+                            return BlocBuilder<
+                              StoreListingBloc,
+                              StoreListingState
+                            >(
+                              buildWhen:
+                                  (prev, curr) =>
+                                      prev.activityUnread !=
+                                      curr.activityUnread,
+                              builder: (context, listingState) {
+                                return SizedBox(
+                                  width: 40,
+                                  height: ShellTabTitleBar.rowHeight,
+                                  child: IconButton(
+                                    tooltip: 'Activity',
+                                    padding: EdgeInsets.zero,
+                                    constraints: const BoxConstraints(
+                                      minWidth: 40,
+                                      minHeight: ShellTabTitleBar.rowHeight,
+                                    ),
+                                    onPressed: _openActivity,
+                                    icon: Badge(
+                                      isLabelVisible:
+                                          listingState.activityUnread > 0,
+                                      smallSize: 8,
+                                      backgroundColor: AppColors.error,
+                                      child: Icon(
+                                        Icons.notifications_none_rounded,
+                                        size: 24,
+                                        color: AppColors.textPrimary,
+                                      ),
+                                    ),
                                   ),
-                                ),
-                              ),
+                                );
+                              },
                             );
                           },
                         ),
@@ -268,9 +300,9 @@ class _StoreListingRouteState extends State<StoreListingRoute> {
                           showCursor: false,
                           onTap: () {
                             _dismissKeyboard();
-                            Navigator.of(context).pushNamed(
-                              Routes.globalSearchRoute,
-                            );
+                            Navigator.of(
+                              context,
+                            ).pushNamed(Routes.globalSearchRoute);
                           },
                           style: AppTextStyles.body(fontSize: 15),
                           decoration: InputDecoration(
@@ -349,9 +381,19 @@ class _StoreListingRouteState extends State<StoreListingRoute> {
                               itemCount: stores.length,
                               itemBuilder: (context, index) {
                                 final store = stores[index];
-                                return StoreListingTile(
-                                  store: store,
-                                  onTap: () => _openStore(store),
+                                return VisibilityDetector(
+                                  key: Key('listing_vis_${store.id}'),
+                                  onVisibilityChanged: (info) {
+                                    StoreProductsPrefetcher.instance
+                                        .noteListingVisibility(
+                                      store.id,
+                                      visibleFraction: info.visibleFraction,
+                                    );
+                                  },
+                                  child: StoreListingTile(
+                                    store: store,
+                                    onTap: () => _openStore(store),
+                                  ),
                                 );
                               },
                             ),
@@ -366,9 +408,6 @@ class _StoreListingRouteState extends State<StoreListingRoute> {
 
     if (widget.embeddedInShell) return body;
 
-    return ScreenWrapper(
-      backgroundColor: AppColors.background,
-      child: body,
-    );
+    return ScreenWrapper(backgroundColor: AppColors.background, child: body);
   }
 }

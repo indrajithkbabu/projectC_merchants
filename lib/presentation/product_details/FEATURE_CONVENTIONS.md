@@ -109,8 +109,13 @@ This file defines what to follow for UI and logic inside `lib/presentation/produ
   (`POST /views`). Chrome shows **photo `viewCount`** (eye chip) when the
   detail API includes it. Collection-level counts are shown on store profile
   tiles, not here.
-- When `storeId` is provided, try `GET /products/:id` first (lock/stock +
-  gallery). On miss, load collection photos via
+- When `storeId` is provided and the feed item has a **rich** `seedCatalog`
+  (browse jewel tiles with at least one image; sub_collection needs ≥2),
+  hydrate specs / liked / wishlisted / like·view count chrome from that seed and
+  **skip** `GET /products/:id` (including swipe). Thin collage stubs and
+  incomplete multi-image seeds still GET. Same skip when this session already
+  hydrated that product id. Gallery / Single / search feeds without seed are
+  unchanged (still GET). On miss, load collection photos via
   `GET /stores/:storeId/collections/:id` (list API only supplies cover).
 - Capture `revision`, `apiTag`, permission flags, specs, and `subGroups` from
   the collection detail response when that path is used.

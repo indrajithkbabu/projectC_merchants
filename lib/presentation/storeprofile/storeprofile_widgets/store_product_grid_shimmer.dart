@@ -3,9 +3,11 @@ import 'package:project_c/helper/app_shimmer.dart';
 import 'package:project_c/models/product_view_mode.dart';
 import 'package:project_c/presentation/storeprofile/storeprofile_widgets/store_product_grid.dart';
 
-/// Skeleton grid shown only on cold (uncached) store profile loads.
+/// Skeleton grid shown on cold (uncached) Store Profile loads.
 ///
-/// Matches the active [viewMode] layout (group / single / gallery).
+/// Batch I5 — layout must match the active [viewMode] (group 2-col cards,
+/// single rows, gallery mosaic). Cells are pulse fill only — no titles,
+/// badges, or ThumbHash art — so they read as loading, not fake products.
 class StoreProductGridShimmer extends StatefulWidget {
   const StoreProductGridShimmer({
     super.key,
@@ -89,6 +91,8 @@ class _StoreProductGridShimmerState extends State<StoreProductGridShimmer>
 }
 
 /// Single shimmer card matching group/single product card proportions.
+///
+/// Pulse fill only — used by cold grid loading and pending-upload rows.
 class ProductUploadShimmerCard extends StatelessWidget {
   const ProductUploadShimmerCard({super.key, required this.t});
 
@@ -118,6 +122,7 @@ class ProductUploadShimmerTile extends StatelessWidget {
       color: AppShimmer.base,
       child: DecoratedBox(
         decoration: BoxDecoration(gradient: AppShimmer.gradient(t)),
+        child: const SizedBox.expand(),
       ),
     );
   }

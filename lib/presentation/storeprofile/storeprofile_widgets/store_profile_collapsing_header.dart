@@ -1,5 +1,3 @@
-import 'dart:ui';
-
 import 'package:flutter/material.dart';
 import 'package:project_c/bloc/storeprofile/store_profile_bloc.dart';
 import 'package:project_c/models/store_privacy_mode.dart';
@@ -101,12 +99,13 @@ class StoreProfileTelegramHeader extends StatelessWidget {
     // Rebuild on Day/Night flip (AppColors is static otherwise).
     AppearanceScope.maybeOf(context);
 
-    // Glassy capsules: translucent fill + backdrop blur; Day keeps a soft border.
+    // Glassy capsules: translucent fill only (no BackdropFilter over grid).
+    // Slightly higher alpha than the old frost+blur combo so pills stay readable.
     final night = AppColors.isNight;
     final pillColor =
         night
-            ? AppColors.appBar.withValues(alpha: 0.42)
-            : AppColors.surface.withValues(alpha: 0.55);
+            ? AppColors.appBar.withValues(alpha: 0.72)
+            : AppColors.surface.withValues(alpha: 0.88);
     final pillBorder =
         night
             ? AppColors.border.withValues(alpha: 0.45)
@@ -362,25 +361,21 @@ class _FrostedPill extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // Fill-only glass (no BackdropFilter) — blur over scrolling collages
+    // was a top jank source on Discover open + fling (UI-2).
     final radius = BorderRadius.circular(height / 2);
-    return ClipRRect(
-      borderRadius: radius,
-      child: BackdropFilter(
-        filter: ImageFilter.blur(sigmaX: 18, sigmaY: 18),
-        child: DecoratedBox(
-          decoration: BoxDecoration(
-            color: color,
-            borderRadius: radius,
-            border:
-                borderColor == null
-                    ? null
-                    : Border.all(color: borderColor!, width: 0.8),
-          ),
-          child: Material(
-            type: MaterialType.transparency,
-            child: SizedBox(height: height, child: child),
-          ),
-        ),
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: color,
+        borderRadius: radius,
+        border:
+            borderColor == null
+                ? null
+                : Border.all(color: borderColor!, width: 0.8),
+      ),
+      child: Material(
+        type: MaterialType.transparency,
+        child: SizedBox(height: height, child: child),
       ),
     );
   }

@@ -24,7 +24,6 @@ import 'package:project_c/presentation/main_shell/tabs/personal_profile_tab.dart
 import 'package:project_c/presentation/main_shell/tabs/wishlist_tab.dart';
 import 'package:project_c/presentation/store_listing/store_listing_route.dart';
 import 'package:project_c/services/store_products_prefetcher.dart';
-import 'package:project_c/services/wishlist_prefetcher.dart';
 
 /// Post-onboarding root: Stores · Message · Wishlist · Profile.
 ///
@@ -83,12 +82,19 @@ class _MainShellRouteState extends State<MainShellRoute> {
     final sameTab = value == _index;
     if (sameTab && value != 2) return;
     _lastExitBackAt = null;
+    final leavingStores = _index == 0 && value != 0;
+    final enteringStores = value == 0 && _index != 0;
     setState(() {
       _index = value;
       if (value == 2) {
         _wishlistRefreshSignal++;
       }
     });
+    if (leavingStores) {
+      StoreProductsPrefetcher.instance.pauseListingViewportPrefetch();
+    } else if (enteringStores) {
+      StoreProductsPrefetcher.instance.resumeListingViewportPrefetch();
+    }
     if (value == 0) {
       context.read<StoreListingBloc>().add(const StoreListingRefreshed());
     } else if (value == 3) {
@@ -98,6 +104,16 @@ class _MainShellRouteState extends State<MainShellRoute> {
       );
       final profileCtx = context.read<ProfileContextBloc>().state;
       final storeId = profileCtx.activeStoreId?.trim() ?? '';
+      // Own-store catalog was deferred on shell mount — start on Profile tab.
+      if (storeId.isNotEmpty) {
+        try {
+          context.read<StoreProfileBloc>().add(
+            const StoreProfileEnsureInitialCatalogLoads(),
+          );
+        } catch (_) {
+          // Store bloc may not exist while Personal is active.
+        }
+      }
       // Follow-request inbox is owner-only; staff must not hit that API.
       if (storeId.isNotEmpty && profileCtx.isOwner) {
         try {
@@ -451,20 +467,23 @@ class _MainShellRouteState extends State<MainShellRoute> {
           return BlocProvider(
             key: ValueKey('shell-active-store:$storeId'),
             create: (_) {
-              StoreProductsPrefetcher.instance.prefetch(
-                storeId,
-                coverImageUrl: storeCover,
-              );
-              WishlistPrefetcher.instance.prefetch();
+              // Defer meta/collections/members until Profile tab — home only
+              // needs /home (+ session). Wishlist still warms via Auth hydrate.
               // Always host as "own" shell profile; gate CTAs via permissions.
-              return StoreProfileBloc(
+              final bloc = StoreProfileBloc(
                 storeName: storeName.isEmpty ? 'My store' : storeName,
                 members: const [],
                 isOwnStore: true,
                 storeId: storeId,
                 storeLink: active?.slug,
                 coverImageUrl: storeCover.isEmpty ? null : storeCover,
+                deferInitialCatalogLoads: true,
               );
+              // Profile-switch remount while already on Profile tab.
+              if (_index == 3) {
+                bloc.add(const StoreProfileEnsureInitialCatalogLoads());
+              }
+              return bloc;
             },
             child: body,
           );

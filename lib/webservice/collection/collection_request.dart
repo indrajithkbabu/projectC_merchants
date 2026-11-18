@@ -21,9 +21,18 @@ class CollectionRequest {
     required String storeId,
     int limit = 20,
     String? cursor,
+    /// BE-2 opt-in: e.g. `products` or `cover,products`.
+    String? include,
+    /// Cap embedded products per collection when [include] has `products`.
+    int? productsLimit,
   }) async {
     final query = <String, String>{'limit': '$limit'};
     if (cursor != null && cursor.isNotEmpty) query['cursor'] = cursor;
+    final includeTrim = include?.trim() ?? '';
+    if (includeTrim.isNotEmpty) query['include'] = includeTrim;
+    if (productsLimit != null && productsLimit > 0) {
+      query['productsLimit'] = '$productsLimit';
+    }
     final json = await _api.sendJson(
       method: HttpMethod.get,
       path: Endpoints.storeCollections(storeId),

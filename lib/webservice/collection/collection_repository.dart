@@ -13,6 +13,8 @@ abstract class CollectionRepository {
     required String storeId,
     int limit = 20,
     String? cursor,
+    String? include,
+    int? productsLimit,
   });
 
   Future<CollectionDetail> fetchCollection({
@@ -170,12 +172,21 @@ class CollectionRepositoryImpl implements CollectionRepository {
     required String storeId,
     int limit = 20,
     String? cursor,
+    String? include,
+    int? productsLimit,
   }) {
-    AppLog.d(_tag, 'listCollections store=$storeId');
+    AppLog.d(
+      _tag,
+      'listCollections store=$storeId'
+      '${include != null && include.trim().isNotEmpty ? ' include=$include' : ''}'
+      '${productsLimit != null ? ' productsLimit=$productsLimit' : ''}',
+    );
     return _request.listCollections(
       storeId: storeId,
       limit: limit,
       cursor: cursor,
+      include: include,
+      productsLimit: productsLimit,
     );
   }
 

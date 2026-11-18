@@ -1,11 +1,11 @@
 import 'dart:async';
 import 'dart:io';
-import 'dart:ui';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:project_c/bloc/store_gallery/store_gallery_bloc.dart';
 import 'package:project_c/bloc/storeprofile/store_profile_bloc.dart';
+import 'package:project_c/bloc/storeprofile/store_profile_chrome_cubit.dart';
 import 'package:project_c/di/service_locator.dart';
 import 'package:project_c/helper/app_padding.dart';
 import 'package:project_c/helper/catalog_media_debug.dart';
@@ -16,6 +16,7 @@ import 'package:project_c/helper/import_qa.dart';
 import 'package:project_c/helper/product_gallery_picker.dart';
 import 'package:project_c/helper/product_image.dart';
 import 'package:project_c/helper/profile_switching_log.dart';
+import 'package:project_c/helper/store_warm_qa.dart';
 import 'package:project_c/helper/text_styles.dart';
 import 'package:project_c/helper/cart_qa.dart';
 import 'package:project_c/helper/visitor_cart_batch.dart';
@@ -40,6 +41,8 @@ import 'package:project_c/presentation/storeprofile/storeprofile_widgets/pending
 import 'package:project_c/presentation/storeprofile/storeprofile_widgets/store_private_content_gate.dart';
 import 'package:project_c/presentation/storeprofile/storeprofile_widgets/store_product_gallery_sliver.dart';
 import 'package:project_c/presentation/storeprofile/storeprofile_widgets/store_product_grid.dart';
+import 'package:project_c/presentation/storeprofile/storeprofile_widgets/store_product_grid_shimmer.dart';
+import 'package:project_c/presentation/storeprofile/store_profile_rebuild_when.dart';
 import 'package:project_c/presentation/storeprofile/storeprofile_widgets/store_profile_collapsing_header.dart';
 import 'package:project_c/presentation/storeprofile/storeprofile_widgets/visitor_photo_selection_chrome.dart';
 import 'package:project_c/services/cart_store.dart';
@@ -50,10 +53,7 @@ import 'package:project_c/webservice/catalog_error_mapper.dart';
 import 'package:project_c/webservice/wishlist/wishlist_repository.dart';
 
 class StoreProfileRoute extends StatefulWidget {
-  const StoreProfileRoute({
-    super.key,
-    this.focusProductId,
-  });
+  const StoreProfileRoute({super.key, this.focusProductId});
 
   /// When set (e.g. from search product-details store chevron), scroll to and
   /// highlight this listing’s group card with a primary border.
@@ -64,44 +64,52 @@ class StoreProfileRoute extends StatefulWidget {
 }
 
 class _StoreProfileRouteState extends State<StoreProfileRoute> {
-  final Set<String> _selectedIds = {};
-  /// Photo multi-select: `"productId|imageIndex"` (owner delete / visitor import).
-  final Set<String> _selectedPhotoKeys = {};
-  bool _selectionMode = false;
-  /// True while selecting collage/gallery photos (owner or visitor).
-  bool _visitorPhotoSelecting = false;
-  bool _visitorWishlistBusy = false;
-  bool _visitorCartBusy = false;
   final GlobalKey _focusProductKey = GlobalKey();
   bool _didScrollToFocus = false;
 
+  /// Route-scoped chrome (selection / busy) — not the catalog [StoreProfileBloc].
+  late final StoreProfileChromeCubit _chrome = StoreProfileChromeCubit();
+  StoreProfileChromeState get _chromeState => _chrome.state;
+
   late final ScrollController _scrollController;
   ProductViewMode? _activeViewMode;
+
   /// Gallery view pinch columns (2…9); same ladder as channel Media/Gallery.
   double _galleryColumns = 4;
   String _scrollStoreId = '';
+
   /// True once resume is applied (or there was nothing to resume).
   bool _didRestoreScroll = false;
   bool _restorePending = false;
   int _restoreAttempts = 0;
+
+  /// Last offset written during fling — throttle persist (UI scroll jank).
+  double? _lastPersistedScrollOffset;
+  static const double _persistScrollMinDelta = 80;
+
   /// Product count last seen while restoring — extent grows as grid lays out.
   int _restoreProductCount = -1;
+
   /// Last maxScrollExtent while waiting for layout to grow.
   double _lastRestoreMax = -1;
   int _extentStableFrames = 0;
+
   /// Jump FAB visibility — ValueNotifier so toggles do not rebuild the
   /// CustomScrollView / change sliver padding mid-fling (was the main jank).
   final ValueNotifier<bool> _showJumpToBottom = ValueNotifier<bool>(false);
 
   /// Last offset while the position was attached (dispose often has no clients).
   double _lastKnownOffset = 0;
+
   /// Target from cache for this visit; kept until applied at full extent or
   /// the user clears it by scrolling to the top.
   double? _resumeTarget;
   bool _leaving = false;
+
   /// Hide the product list until resume jump finishes so open does not flash
-  /// the top item then scroll down.
-  bool _awaitingReveal = false;
+  /// the top item then scroll down. ValueNotifier — mutated from build-time
+  /// restore helpers without Cubit emit-during-build.
+  final ValueNotifier<bool> _awaitingReveal = ValueNotifier<bool>(false);
   bool _revealScheduled = false;
 
   /// Frames to wait for extent growth before accepting a shorter list bottom.
@@ -112,6 +120,33 @@ class _StoreProfileRouteState extends State<StoreProfileRoute> {
   void initState() {
     super.initState();
     _scrollController = ScrollController()..addListener(_onScroll);
+    // Kick deferred catalog loads after the push transition has started so
+    // tap→first frame is not competing with meta/collections (Batch 1).
+    // Warm grid: wait ~transition length. Cold: still defer past first paint.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      StoreWarmQa.markFirstFrame();
+      final bloc = context.read<StoreProfileBloc>();
+      // Batch I5 — header paints from listing/meta seed, independent of API.
+      StoreWarmQa.markHeaderReady(storeName: bloc.state.storeName);
+      // Batch I3 — start async disk hydrate immediately after first frame.
+      // Does not wait for the Ensure delay (~280–320 ms). Memory hits skip
+      // inside the bloc; empty disk does not mark products resolved.
+      if (bloc.state.products.isEmpty) {
+        bloc.add(const StoreProfileHydrateDiskCache());
+      }
+      final hasPaintedGrid = bloc.state.products.isNotEmpty;
+      final delay =
+          hasPaintedGrid
+              ? const Duration(milliseconds: 320)
+              : const Duration(milliseconds: 280);
+      Future<void>.delayed(delay, () {
+        if (!mounted) return;
+        context.read<StoreProfileBloc>().add(
+          const StoreProfileEnsureInitialCatalogLoads(),
+        );
+      });
+    });
   }
 
   @override
@@ -131,9 +166,13 @@ class _StoreProfileRouteState extends State<StoreProfileRoute> {
   @override
   void dispose() {
     _persistScrollBeforeLeave(reason: 'dispose');
+    // Batch 7A: image warm cancel lives on StoreProfileBloc.close only —
+    // avoids double-cancel and cross-screen invalidation from route dispose.
     _scrollController.removeListener(_onScroll);
     _scrollController.dispose();
     _showJumpToBottom.dispose();
+    _awaitingReveal.dispose();
+    _chrome.close();
     super.dispose();
   }
 
@@ -152,20 +191,24 @@ class _StoreProfileRouteState extends State<StoreProfileRoute> {
     _lastKnownOffset = pixels;
     final distanceFromBottom = pos.maxScrollExtent - pixels;
     final show =
-        pixels > 160 &&
-        distanceFromBottom > 120 &&
-        pos.maxScrollExtent > 240;
+        pixels > 160 && distanceFromBottom > 120 && pos.maxScrollExtent > 240;
     if (show != _showJumpToBottom.value) {
       _showJumpToBottom.value = show;
     }
     // Persist only after restore attempt settled, and only real positions.
+    // Throttle mid-fling writes — every-tick persist was a scroll jank source.
     if (_didRestoreScroll && pixels > 0) {
       _resumeTarget = pixels;
-      _persistScroll(offset: pixels, reason: 'scroll');
+      final last = _lastPersistedScrollOffset;
+      if (last == null || (pixels - last).abs() >= _persistScrollMinDelta) {
+        _lastPersistedScrollOffset = pixels;
+        _persistScroll(offset: pixels, reason: 'scroll');
+      }
     } else if (_didRestoreScroll && pixels <= 8 && pos.maxScrollExtent > 240) {
       // User intentionally scrolled back to the top — clear resume.
       _resumeTarget = null;
       _lastKnownOffset = 0;
+      _lastPersistedScrollOffset = null;
       StoreProfileScrollCache.instance.clearMode(
         _scrollStoreId,
         _activeViewMode,
@@ -192,6 +235,7 @@ class _StoreProfileRouteState extends State<StoreProfileRoute> {
     );
     if (best > 0) {
       _lastKnownOffset = best;
+      _lastPersistedScrollOffset = best;
       _persistScroll(offset: best, reason: reason);
     }
   }
@@ -212,9 +256,7 @@ class _StoreProfileRouteState extends State<StoreProfileRoute> {
             : _lastKnownOffset);
     if (value <= 0) {
       if (reason != 'scroll') {
-        StoreProfileScrollCache.log(
-          'persist SKIP reason=$reason value<=0',
-        );
+        StoreProfileScrollCache.log('persist SKIP reason=$reason value<=0');
       }
       return;
     }
@@ -260,9 +302,7 @@ class _StoreProfileRouteState extends State<StoreProfileRoute> {
     if (storeId.isEmpty) return;
 
     if (_scrollStoreId != storeId) {
-      StoreProfileScrollCache.log(
-        'storeChanged $_scrollStoreId → $storeId',
-      );
+      StoreProfileScrollCache.log('storeChanged $_scrollStoreId → $storeId');
       _scrollStoreId = storeId;
       _didRestoreScroll = false;
       _restorePending = false;
@@ -273,7 +313,7 @@ class _StoreProfileRouteState extends State<StoreProfileRoute> {
       _resumeTarget = null;
       _lastKnownOffset = 0;
       _leaving = false;
-      _awaitingReveal = false;
+      _awaitingReveal.value = false;
       _revealScheduled = false;
     }
     if (_activeViewMode != null && _activeViewMode != viewMode) {
@@ -291,7 +331,7 @@ class _StoreProfileRouteState extends State<StoreProfileRoute> {
       _extentStableFrames = 0;
       _resumeTarget = null;
       _lastKnownOffset = 0;
-      _awaitingReveal = false;
+      _awaitingReveal.value = false;
       _revealScheduled = false;
     }
     _activeViewMode = viewMode;
@@ -302,7 +342,7 @@ class _StoreProfileRouteState extends State<StoreProfileRoute> {
         StoreProfileScrollCache.log('skip restore — focusProductId set');
         _didRestoreScroll = true;
         _resumeTarget = null;
-        _awaitingReveal = false;
+        _awaitingReveal.value = false;
       }
       return;
     }
@@ -315,12 +355,12 @@ class _StoreProfileRouteState extends State<StoreProfileRoute> {
           'no cached offset — start at top store=$storeId mode=${viewMode.name}',
         );
         _didRestoreScroll = true;
-        _awaitingReveal = false;
+        _awaitingReveal.value = false;
         return;
       }
       _resumeTarget = saved;
       // Hide list until jump lands — avoids top-then-scroll flash.
-      _awaitingReveal = true;
+      _awaitingReveal.value = true;
       _revealScheduled = false;
       StoreProfileScrollCache.log(
         'seed resume=${saved.toStringAsFixed(1)} '
@@ -347,7 +387,7 @@ class _StoreProfileRouteState extends State<StoreProfileRoute> {
         _restoreAttempts = 0;
         // Near top after product swap — hide again; otherwise silent nudge.
         if (_scrollController.offset < 32) {
-          _awaitingReveal = true;
+          _awaitingReveal.value = true;
           _revealScheduled = false;
         }
       }
@@ -369,7 +409,7 @@ class _StoreProfileRouteState extends State<StoreProfileRoute> {
       _restoreAttempts = 0;
       _lastRestoreMax = -1;
       _extentStableFrames = 0;
-      _awaitingReveal = true;
+      _awaitingReveal.value = true;
       _revealScheduled = false;
     }
 
@@ -431,7 +471,7 @@ class _StoreProfileRouteState extends State<StoreProfileRoute> {
     if (persist && offset > 0) {
       _persistScroll(offset: offset, reason: reason);
     }
-    if (!_awaitingReveal) {
+    if (!_awaitingReveal.value) {
       _applyJumpToBottomVisibility();
       return;
     }
@@ -452,17 +492,13 @@ class _StoreProfileRouteState extends State<StoreProfileRoute> {
           _lastKnownOffset = next;
         }
       }
-      if (_awaitingReveal) {
+      if (_awaitingReveal.value) {
         StoreProfileScrollCache.log(
           'reveal list at=${_lastKnownOffset.toStringAsFixed(1)}',
         );
-        setState(() {
-          _awaitingReveal = false;
-          _revealScheduled = false;
-        });
-      } else {
-        _revealScheduled = false;
+        _awaitingReveal.value = false;
       }
+      _revealScheduled = false;
       _applyJumpToBottomVisibility();
     });
   }
@@ -499,8 +535,7 @@ class _StoreProfileRouteState extends State<StoreProfileRoute> {
     }
 
     // Already at resume point, or already at bottom of a shorter list.
-    if (pixels + 8 >= saved ||
-        (max > 0 && pixels + 8 >= max && saved >= max)) {
+    if (pixels + 8 >= saved || (max > 0 && pixels + 8 >= max && saved >= max)) {
       StoreProfileScrollCache.log(
         'restore already there pixels=${pixels.toStringAsFixed(1)} '
         'saved=${saved.toStringAsFixed(1)} max=${max.toStringAsFixed(1)}',
@@ -519,8 +554,12 @@ class _StoreProfileRouteState extends State<StoreProfileRoute> {
         );
         _restoreAttempts = 0;
         // Don't leave the screen blank forever.
-        if (_awaitingReveal) {
-          _finishRestoreAndReveal(offset: 0, reason: 'emptyExtent', persist: false);
+        if (_awaitingReveal.value) {
+          _finishRestoreAndReveal(
+            offset: 0,
+            reason: 'emptyExtent',
+            persist: false,
+          );
         }
       }
       return;
@@ -581,29 +620,10 @@ class _StoreProfileRouteState extends State<StoreProfileRoute> {
     _finishRestoreAndReveal(offset: target, reason: 'restoreJump');
   }
 
-  void _exitSelection() {
-    if (!_selectionMode &&
-        _selectedIds.isEmpty &&
-        _selectedPhotoKeys.isEmpty) {
-      return;
-    }
-    setState(() {
-      _selectionMode = false;
-      _visitorPhotoSelecting = false;
-      _selectedIds.clear();
-      _selectedPhotoKeys.clear();
-    });
-  }
+  void _exitSelection() => _chrome.exitSelection();
 
   void _enterSelection(StoreProduct product) {
-    setState(() {
-      _selectionMode = true;
-      _visitorPhotoSelecting = false;
-      _selectedPhotoKeys.clear();
-      _selectedIds
-        ..clear()
-        ..add(product.id);
-    });
+    _chrome.enterAlbumSelection(product.id);
   }
 
   void _enterVisitorPhotoSelection(
@@ -620,14 +640,9 @@ class _StoreProfileRouteState extends State<StoreProfileRoute> {
       );
       return;
     }
-    setState(() {
-      _selectionMode = true;
-      _visitorPhotoSelecting = true;
-      _selectedIds.clear();
-      _selectedPhotoKeys
-        ..clear()
-        ..add(StoreProductGrid.photoKey(product.id, imageIndex));
-    });
+    _chrome.enterVisitorPhotoSelection(
+      StoreProductGrid.photoKey(product.id, imageIndex),
+    );
   }
 
   bool _canAskStore(StoreProfileState state) =>
@@ -647,17 +662,7 @@ class _StoreProfileRouteState extends State<StoreProfileRoute> {
   }
 
   void _toggleSelected(StoreProduct product) {
-    setState(() {
-      if (_selectedIds.contains(product.id)) {
-        _selectedIds.remove(product.id);
-        if (_selectedIds.isEmpty) {
-          _selectionMode = false;
-          _visitorPhotoSelecting = false;
-        }
-      } else {
-        _selectedIds.add(product.id);
-      }
-    });
+    _chrome.toggleAlbumSelected(product.id);
   }
 
   void _toggleVisitorPhoto(
@@ -667,7 +672,7 @@ class _StoreProfileRouteState extends State<StoreProfileRoute> {
   }) {
     final key = StoreProductGrid.photoKey(product.id, imageIndex);
     if (!isOwnStore &&
-        !_selectedPhotoKeys.contains(key) &&
+        !_chromeState.selectedPhotoKeys.contains(key) &&
         product.importSelectionBlocked) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
@@ -676,21 +681,11 @@ class _StoreProfileRouteState extends State<StoreProfileRoute> {
       );
       return;
     }
-    setState(() {
-      if (_selectedPhotoKeys.contains(key)) {
-        _selectedPhotoKeys.remove(key);
-        if (_selectedPhotoKeys.isEmpty) {
-          _selectionMode = false;
-          _visitorPhotoSelecting = false;
-        }
-      } else {
-        _selectedPhotoKeys.add(key);
-      }
-    });
+    _chrome.toggleVisitorPhoto(key);
   }
 
   Future<void> _confirmDeleteSelectedItems(BuildContext context) async {
-    final count = _selectedPhotoKeys.length;
+    final count = _chromeState.selectedPhotoKeys.length;
     if (count == 0) return;
     final confirmed = await showDialog<bool>(
       context: context,
@@ -724,15 +719,14 @@ class _StoreProfileRouteState extends State<StoreProfileRoute> {
       },
     );
     if (!context.mounted || confirmed != true) return;
-    final keys = _selectedPhotoKeys.toList();
+    final keys = _chromeState.selectedPhotoKeys.toList();
     _exitSelection();
     context.read<StoreProfileBloc>().add(StoreProfileItemsDeleted(keys));
   }
 
   /// Ownership label ≠ acting profile. Select `store:<id>` before manage/upload.
   Future<bool> _ensureActingAsStoreProfile(BuildContext context) async {
-    final storeId =
-        context.read<StoreProfileBloc>().state.storeId.trim();
+    final storeId = context.read<StoreProfileBloc>().state.storeId.trim();
     if (storeId.isEmpty || storeId == 'my_store' || storeId == 'other_store') {
       return false;
     }
@@ -744,7 +738,7 @@ class _StoreProfileRouteState extends State<StoreProfileRoute> {
       ProfileSwitchingLog.d(
         'PS-81',
         'select store profile before manage profileId=$profileId '
-        '(was active=${session.activeProfileId ?? "(none)"})',
+            '(was active=${session.activeProfileId ?? "(none)"})',
       );
       await ServiceLocator.get<ProfileRepository>().selectActiveProfile(
         profileId,
@@ -1047,7 +1041,7 @@ class _StoreProfileRouteState extends State<StoreProfileRoute> {
 
     // Always rebind collage URLs so ladder.master replaces thumb on the tapped
     // cell — plain back often returns null (no bloc update / no rebuild).
-    setState(() {});
+    _chrome.bumpPaintEpoch();
 
     if (result is! Map) return;
 
@@ -1106,7 +1100,7 @@ class _StoreProfileRouteState extends State<StoreProfileRoute> {
   }
 
   Future<void> _confirmDeleteSelected(BuildContext context) async {
-    final count = _selectedIds.length;
+    final count = _chromeState.selectedIds.length;
     if (count == 0) return;
     final confirmed = await showDialog<bool>(
       context: context,
@@ -1140,7 +1134,7 @@ class _StoreProfileRouteState extends State<StoreProfileRoute> {
       },
     );
     if (!context.mounted || confirmed != true) return;
-    final ids = _selectedIds.toList();
+    final ids = _chromeState.selectedIds.toList();
     _exitSelection();
     context.read<StoreProfileBloc>().add(StoreProfileProductsDeleted(ids));
   }
@@ -1167,10 +1161,7 @@ class _StoreProfileRouteState extends State<StoreProfileRoute> {
             product.urlForRole(i, CatalogImageRole.grid),
     ];
     // ignore: unawaited_futures
-    CatalogImageCache.precacheUrls([
-      ...imageUrls,
-      ...mediaGridUrls,
-    ]);
+    CatalogImageCache.precacheUrls([...imageUrls, ...mediaGridUrls]);
     // ignore: unawaited_futures
     CatalogImageCache.warmWindow(
       urls: mediaGridUrls,
@@ -1216,15 +1207,11 @@ class _StoreProfileRouteState extends State<StoreProfileRoute> {
     int imageIndex = 0,
     Rect? sourceRect,
   }) {
-    if (_visitorPhotoSelecting) {
-      _toggleVisitorPhoto(
-        product,
-        imageIndex,
-        isOwnStore: state.isOwnStore,
-      );
+    if (_chromeState.visitorPhotoSelecting) {
+      _toggleVisitorPhoto(product, imageIndex, isOwnStore: state.isOwnStore);
       return;
     }
-    if (_selectionMode) {
+    if (_chromeState.selectionMode) {
       _toggleSelected(product);
       return;
     }
@@ -1271,16 +1258,30 @@ class _StoreProfileRouteState extends State<StoreProfileRoute> {
   }) {
     if (state.isContentLocked) {
       if (state.isLoadingStoreMeta) {
-        // Meta disk/network hydrate — blank (restart must not cold-shimmer).
-        // Private gate appears once meta confirms lock.
-        return const SliverToBoxAdapter(child: SizedBox.shrink());
+        // Waiting on meta — shimmer, never a blank hole.
+        StoreWarmQa.observeShimmer(show: true, reason: 'metaLock');
+        return StoreProductGridShimmer(viewMode: viewMode);
       }
+      StoreWarmQa.observeShimmer(show: false, reason: 'none');
       return SliverToBoxAdapter(
         child: StorePrivateContentGate(
           storeName: state.storeName,
           followStatus: state.followStatus,
         ),
       );
+    }
+
+    // Transition-only (deduped) — unlocked grid shimmer reasons.
+    if (state.showProductGridShimmer) {
+      final reason =
+          state.isLoadingProducts
+              ? 'loading'
+              : (!state.productsResolved ? 'unresolved' : 'loading');
+      StoreWarmQa.observeShimmer(show: true, reason: reason);
+    } else if (state.products.isNotEmpty) {
+      StoreWarmQa.observeShimmer(show: false, reason: 'cachedProducts');
+    } else if (state.productsResolved) {
+      StoreWarmQa.observeShimmer(show: false, reason: 'none');
     }
 
     final canSelect = state.isOwnStore;
@@ -1309,10 +1310,12 @@ class _StoreProfileRouteState extends State<StoreProfileRoute> {
               products: state.productsForMedia,
               isLoading: state.showProductGridShimmer,
               productsResolved: state.productsResolved,
-              selectionMode: _selectionMode && !_visitorPhotoSelecting,
-              photoSelectionMode: _visitorPhotoSelecting,
-              selectedIds: _selectedIds,
-              selectedPhotoKeys: _selectedPhotoKeys,
+              selectionMode:
+                  _chromeState.selectionMode &&
+                  !_chromeState.visitorPhotoSelecting,
+              photoSelectionMode: _chromeState.visitorPhotoSelecting,
+              selectedIds: _chromeState.selectedIds,
+              selectedPhotoKeys: _chromeState.selectedPhotoKeys,
               columns: galleryColumns,
               pinching: galleryPinching,
               focusProductId: focusProductId,
@@ -1332,7 +1335,7 @@ class _StoreProfileRouteState extends State<StoreProfileRoute> {
               onImageLongPress:
                   canPhotoSelect
                       ? (product, imageIndex) {
-                        if (_visitorPhotoSelecting) {
+                        if (_chromeState.visitorPhotoSelecting) {
                           _toggleVisitorPhoto(
                             product,
                             imageIndex,
@@ -1353,12 +1356,14 @@ class _StoreProfileRouteState extends State<StoreProfileRoute> {
               // between painted collage cells and productsForMedia.
               products: state.productsForMedia,
               viewMode: viewMode,
-              selectionMode: _selectionMode && !_visitorPhotoSelecting,
-              photoSelectionMode: _visitorPhotoSelecting,
+              selectionMode:
+                  _chromeState.selectionMode &&
+                  !_chromeState.visitorPhotoSelecting,
+              photoSelectionMode: _chromeState.visitorPhotoSelecting,
               showPhotoImportStatus:
-                  _visitorPhotoSelecting && !state.isOwnStore,
-              selectedIds: _selectedIds,
-              selectedPhotoKeys: _selectedPhotoKeys,
+                  _chromeState.visitorPhotoSelecting && !state.isOwnStore,
+              selectedIds: _chromeState.selectedIds,
+              selectedPhotoKeys: _chromeState.selectedPhotoKeys,
               deletingProductIds: deletingIds,
               listingAvailability: state.listingAvailability,
               focusProductId: focusProductId,
@@ -1384,7 +1389,7 @@ class _StoreProfileRouteState extends State<StoreProfileRoute> {
               onImageLongPress:
                   canPhotoSelect
                       ? (product, imageIndex) {
-                        if (_visitorPhotoSelecting) {
+                        if (_chromeState.visitorPhotoSelecting) {
                           _toggleVisitorPhoto(
                             product,
                             imageIndex,
@@ -1423,105 +1428,85 @@ class _StoreProfileRouteState extends State<StoreProfileRoute> {
   @override
   Widget build(BuildContext context) {
     final viewPrefs = ServiceLocator.get<ProductViewPreferences>();
-    return MultiBlocListener(
-      listeners: [
-        BlocListener<StoreProfileBloc, StoreProfileState>(
-          listenWhen:
-              (prev, curr) =>
-                  curr.errorMessage != null &&
-                  curr.errorMessage != prev.errorMessage,
-          listener: (context, state) {
-            final message = state.errorMessage?.trim();
-            if (message == null || message.isEmpty) return;
-            ScaffoldMessenger.of(
-              context,
-            ).showSnackBar(SnackBar(content: Text(message)));
-            context.read<StoreProfileBloc>().add(
-              const StoreProfileClearMessage(),
-            );
-          },
-        ),
-        BlocListener<StoreProfileBloc, StoreProfileState>(
-          listenWhen:
-              (prev, curr) =>
-                  curr.infoMessage != null &&
-                  curr.infoMessage != prev.infoMessage,
-          listener: (context, state) {
-            final message = state.infoMessage?.trim();
-            if (message == null || message.isEmpty) return;
-            ScaffoldMessenger.of(
-              context,
-            ).showSnackBar(SnackBar(content: Text(message)));
-            context.read<StoreProfileBloc>().add(
-              const StoreProfileClearMessage(),
-            );
-          },
-        ),
-      ],
-      child: PopScope(
-        canPop: !_selectionMode && !_visitorPhotoSelecting,
-        onPopInvokedWithResult: (didPop, _) {
-          if (didPop) return;
-          if (_selectionMode || _visitorPhotoSelecting) {
-            _exitSelection();
-          }
-        },
-        child: EdgeBackSwipe(
-          onBack: () async => _goHome(context),
-      child: ScreenWrapper(
-        backgroundColor: AppColors.background,
-            // Images scroll under the home indicator; docks pad themselves.
-            extendBodyBehindBottom: true,
-        child: BlocBuilder<StoreProfileBloc, StoreProfileState>(
-              // Skip rebuilds that don't affect the discover listing chrome.
-              buildWhen:
-                  (prev, curr) =>
-                      prev.storeId != curr.storeId ||
-                      prev.products != curr.products ||
-                      prev.productsDetailed != curr.productsDetailed ||
-                      prev.pendingUploads != curr.pendingUploads ||
-                      prev.isLoadingProducts != curr.isLoadingProducts ||
-                      prev.productsResolved != curr.productsResolved ||
-                      prev.isLoadingStoreMeta != curr.isLoadingStoreMeta ||
-                      prev.isOwnStore != curr.isOwnStore ||
-                      prev.canViewContent != curr.canViewContent ||
-                      prev.followStatus != curr.followStatus ||
-                      prev.isFollowBusy != curr.isFollowBusy ||
-                      prev.showFollowRequestsBanner !=
-                          curr.showFollowRequestsBanner ||
-                      prev.pendingFollowRequestCount !=
-                          curr.pendingFollowRequestCount ||
-                      prev.followRequestPreviewNames !=
-                          curr.followRequestPreviewNames ||
-                      prev.storeName != curr.storeName ||
-                      prev.followerCount != curr.followerCount ||
-                      prev.apiProductCount != curr.apiProductCount ||
-                      prev.privacy != curr.privacy ||
-                      prev.viewerHasOwnStore != curr.viewerHasOwnStore ||
-                      prev.coverImageUrl != curr.coverImageUrl ||
-                      prev.storeImages != curr.storeImages ||
-                      prev.deletingProductId != curr.deletingProductId ||
-                      prev.errorMessage != curr.errorMessage ||
-                      prev.infoMessage != curr.infoMessage,
-          builder: (context, state) {
-                return ListenableBuilder(
-                  listenable: viewPrefs,
-                  builder: (context, _) {
-                    final viewMode = viewPrefs.mode;
-                    // Discover listing for owner and visitor (no owner bottom
-                    // nav — Wishlist / My store / Activity live on the main
-                    // shell / home header).
-                    _restoreScrollIfNeeded(state, viewMode);
-                    return _buildDiscoverBody(
-                      context: context,
-                            state: state,
-                      viewMode: viewMode,
-                    );
-                  },
-                );
-              },
-            ),
+    return BlocProvider<StoreProfileChromeCubit>.value(
+      value: _chrome,
+      child: MultiBlocListener(
+        listeners: [
+          BlocListener<StoreProfileBloc, StoreProfileState>(
+            listenWhen:
+                (prev, curr) =>
+                    curr.errorMessage != null &&
+                    curr.errorMessage != prev.errorMessage,
+            listener: (context, state) {
+              final message = state.errorMessage?.trim();
+              if (message == null || message.isEmpty) return;
+              ScaffoldMessenger.of(
+                context,
+              ).showSnackBar(SnackBar(content: Text(message)));
+              context.read<StoreProfileBloc>().add(
+                const StoreProfileClearMessage(),
+              );
+            },
           ),
+          BlocListener<StoreProfileBloc, StoreProfileState>(
+            listenWhen:
+                (prev, curr) =>
+                    curr.infoMessage != null &&
+                    curr.infoMessage != prev.infoMessage,
+            listener: (context, state) {
+              final message = state.infoMessage?.trim();
+              if (message == null || message.isEmpty) return;
+              ScaffoldMessenger.of(
+                context,
+              ).showSnackBar(SnackBar(content: Text(message)));
+              context.read<StoreProfileBloc>().add(
+                const StoreProfileClearMessage(),
+              );
+            },
+          ),
+        ],
+        child: BlocBuilder<StoreProfileChromeCubit, StoreProfileChromeState>(
+          bloc: _chrome,
+          buildWhen:
+              (prev, curr) =>
+                  prev.selectionMode != curr.selectionMode ||
+                  prev.visitorPhotoSelecting != curr.visitorPhotoSelecting ||
+                  prev.selectedIds != curr.selectedIds ||
+                  prev.selectedPhotoKeys != curr.selectedPhotoKeys ||
+                  prev.wishlistBusy != curr.wishlistBusy ||
+                  prev.cartBusy != curr.cartBusy ||
+                  prev.paintEpoch != curr.paintEpoch,
+          builder: (context, chrome) {
+            return PopScope(
+              canPop: !chrome.selectionMode && !chrome.visitorPhotoSelecting,
+              onPopInvokedWithResult: (didPop, _) {
+                if (didPop) return;
+                if (chrome.selectionMode || chrome.visitorPhotoSelecting) {
+                  _exitSelection();
+                }
+              },
+              child: EdgeBackSwipe(
+                onBack: () async => _goHome(context),
+                child: ScreenWrapper(
+                  backgroundColor: AppColors.background,
+                  // Images scroll under the home indicator; docks pad themselves.
+                  extendBodyBehindBottom: true,
+                  child: ListenableBuilder(
+                    listenable: viewPrefs,
+                    builder: (context, _) {
+                      final viewMode = viewPrefs.mode;
+                      // Batch 4: nested builders rebuild header / grid / dock
+                      // independently (messages stay on BlocListener only).
+                      return _buildDiscoverBody(
+                        context: context,
+                        viewMode: viewMode,
+                      );
+                    },
+                  ),
+                ),
+              ),
+            );
+          },
         ),
       ),
     );
@@ -1542,8 +1527,9 @@ class _StoreProfileRouteState extends State<StoreProfileRoute> {
     }) {
       return CustomScrollView(
         controller: _scrollController,
-        // Larger cache + clamping/bouncing = smoother Telegram-like fling.
-        cacheExtent: 1800,
+        // Keep modest — large cacheExtent builds too many collages on open
+        // (Skipped frames / tap jank). ~1–1.5 rows ahead is enough (Plan A2).
+        cacheExtent: 480,
         physics:
             galleryPinching
                 ? const NeverScrollableScrollPhysics()
@@ -1595,235 +1581,275 @@ class _StoreProfileRouteState extends State<StoreProfileRoute> {
         _galleryColumns = cols.toDouble();
       },
       builder: (context, columns, pinching) {
-        return scroll(
-          galleryColumns: columns,
-          galleryPinching: pinching,
-        );
+        return scroll(galleryColumns: columns, galleryPinching: pinching);
       },
     );
   }
 
   /// Listing-first store profile (Discover + visitors). Telegram header tap
   /// opens [Routes.storeChannelRoute]. Grid scrolls under the translucent bar.
+  ///
+  /// Batch 4: shell / header / grid / follow-dock use separate [BlocBuilder]
+  /// scopes so meta-only and product-only emits do not rebuild each other.
   Widget _buildDiscoverBody({
     required BuildContext context,
-    required StoreProfileState state,
     required ProductViewMode viewMode,
     bool attachFocusKey = true,
   }) {
     final topPad = ScreenWrapper.statusBarTop(context);
     final headerExtent = StoreProfileTelegramHeader.extentFor(topPad);
-    // Whole-product select still uses a Cancel/Delete bar under the header.
-    // Owner item (photo) select uses header delete icon (replaces add/search).
-    // Visitor photo select uses the header itself (close · DP · count).
     const selectionBarBlock = 56.0;
-    final showOwnerListingSelectionBar =
-        state.isOwnStore && _selectionMode && !_visitorPhotoSelecting;
-    final scrollTop =
-        headerExtent +
-        (showOwnerListingSelectionBar ? selectionBarBlock : 0);
-    // Prefer viewPadding — body extends under the home indicator.
     final safeBottom = MediaQuery.viewPaddingOf(context).bottom;
-    // Visitor photo select → Import / Wishlist dock (hides Follow while active).
-    final showVisitorActionDock =
-        _visitorPhotoSelecting && !state.isOwnStore;
-    const visitorActionDockHeight = 52.0;
-    // Visitor not following → glassy Follow / Requested dock at bottom.
-    final showFollowDock =
-        !showVisitorActionDock &&
-        !state.isOwnStore &&
-        (state.followStatus == StoreFollowStatus.none ||
-            state.followStatus.isPending);
-    const followDockHeight = 52.0;
-    const followDockGap = 12.0;
-    const jumpSize = 44.0;
-    final bottomDockHeight =
-        showVisitorActionDock
-            ? visitorActionDockHeight
-            : (showFollowDock ? followDockHeight : 0.0);
-    final bottomDockGap =
-        bottomDockHeight > 0 ? followDockGap : 0.0;
-    // Raise jump above the bottom edge; stack above Follow / visitor dock.
-    final jumpBottom =
-        bottomDockHeight > 0
-            ? safeBottom + 16 + bottomDockHeight + bottomDockGap
-            : safeBottom + 96;
-    // Only reserve dock space — never toggle list padding when the jump FAB
-    // appears (that forced sliver relayout mid-fling and killed smoothness).
-    final chromeBottom =
-        bottomDockHeight > 0
-            ? 16 + bottomDockHeight + bottomDockGap
-            : jumpSize + 8.0;
 
-    return Stack(
-      children: [
-        // Full-bleed image grid — scrolls under status bar / home indicator.
-        // Opacity 0 while resume jumps — layout still runs so maxScrollExtent
-        // is real; first visible frame is already at the saved offset.
-        Opacity(
-          opacity: _awaitingReveal ? 0 : 1,
-          child: IgnorePointer(
-            ignoring: _awaitingReveal,
-            child: _buildDiscoverScroll(
-              context: context,
-              state: state,
-              viewMode: viewMode,
-              attachFocusKey: attachFocusKey,
-              scrollTop: scrollTop,
-              chromeBottom: chromeBottom,
+    return BlocBuilder<StoreProfileBloc, StoreProfileState>(
+      buildWhen: storeProfileShellBuildWhen,
+      builder: (context, shell) {
+        // Whole-product select still uses a Cancel/Delete bar under the header.
+        // Owner item (photo) select uses header delete icon (replaces add/search).
+        // Visitor photo select uses the header itself (close · DP · count).
+        final showOwnerListingSelectionBar =
+            shell.isOwnStore &&
+            _chromeState.selectionMode &&
+            !_chromeState.visitorPhotoSelecting;
+        final scrollTop =
+            headerExtent +
+            (showOwnerListingSelectionBar ? selectionBarBlock : 0);
+        final showVisitorActionDock =
+            _chromeState.visitorPhotoSelecting && !shell.isOwnStore;
+        const visitorActionDockHeight = 52.0;
+        final showFollowDock =
+            !showVisitorActionDock &&
+            !shell.isOwnStore &&
+            (shell.followStatus == StoreFollowStatus.none ||
+                shell.followStatus.isPending);
+        const followDockHeight = 52.0;
+        const followDockGap = 12.0;
+        const jumpSize = 44.0;
+        final bottomDockHeight =
+            showVisitorActionDock
+                ? visitorActionDockHeight
+                : (showFollowDock ? followDockHeight : 0.0);
+        final bottomDockGap = bottomDockHeight > 0 ? followDockGap : 0.0;
+        final jumpBottom =
+            bottomDockHeight > 0
+                ? safeBottom + 16 + bottomDockHeight + bottomDockGap
+                : safeBottom + 96;
+        final chromeBottom =
+            bottomDockHeight > 0
+                ? 16 + bottomDockHeight + bottomDockGap
+                : jumpSize + 8.0;
+
+        return Stack(
+          children: [
+            // Grid + gate + follow-requests banner.
+            BlocBuilder<StoreProfileBloc, StoreProfileState>(
+              buildWhen: storeProfileGridBuildWhen,
+              builder: (context, state) {
+                _restoreScrollIfNeeded(state, viewMode);
+                return ValueListenableBuilder<bool>(
+                  valueListenable: _awaitingReveal,
+                  builder: (context, awaitingReveal, _) {
+                    return Stack(
+                      fit: StackFit.expand,
+                      children: [
+                        Visibility(
+                          visible: !awaitingReveal,
+                          maintainState: true,
+                          maintainAnimation: true,
+                          maintainSize: true,
+                          maintainInteractivity: false,
+                          child: IgnorePointer(
+                            ignoring: awaitingReveal,
+                            child: _buildDiscoverScroll(
+                              context: context,
+                              state: state,
+                              viewMode: viewMode,
+                              attachFocusKey: attachFocusKey,
+                              scrollTop: scrollTop,
+                              chromeBottom: chromeBottom,
+                            ),
+                          ),
+                        ),
+                        if (!awaitingReveal) const CatalogImageEdgeFades(),
+                      ],
+                    );
+                  },
+                );
+              },
             ),
-          ),
-        ),
-        if (!_awaitingReveal) const CatalogImageEdgeFades(),
-        Positioned(
-          top: 0,
-          left: 0,
-          right: 0,
-          child: ListenableBuilder(
-            listenable: ChatMockStore.instance,
-            builder: (context, _) {
-              final canAsk = _canAskStore(state);
-              return StoreProfileTelegramHeader(
-                state: state,
-                topPad: topPad,
-                selectedPhotoCount:
-                    _visitorPhotoSelecting ? _selectedPhotoKeys.length : null,
-                onOpenStoreInfo: () => _openStoreChannel(context, state),
-                onBack: () => _goHome(context),
-                onAddProducts: () => _addProducts(context),
-                canAddProducts: _canAddProducts(state),
-                // Selection-mode forward only (no visitor browse toolbar Import).
-                onImport: () => _onVisitorSelectionImport(state),
-                onSearch: () => _openStoreSearch(context, state),
-                onCart: () => Navigator.of(context).pushNamed(Routes.cartRoute),
-                // Own-store item select: delete replaces add/search (no extra bar).
-                onDeleteSelected:
-                    state.isOwnStore &&
-                            _visitorPhotoSelecting &&
-                            _selectedPhotoKeys.isNotEmpty
-                        ? () => _confirmDeleteSelectedItems(context)
-                        : null,
-                onChat: canAsk ? () => _openStoreChat(state) : null,
-                chatUnread:
-                    canAsk
-                        ? ChatMockStore.instance.unreadForStore(state.storeId)
-                        : 0,
-                // Never offer Import while owning this store (item delete instead).
-                showSelectionImport: state.canImport && !state.isOwnStore,
-              );
-            },
-          ),
-        ),
-        if (_selectionMode && !_visitorPhotoSelecting)
-          Positioned(
-            top: headerExtent,
-            left: 0,
-            right: 0,
-            child: Material(
-              color: AppColors.background.withValues(alpha: 0.96),
-              child: Padding(
-                padding: AppPadding.screenHorizontal,
-                child: _SelectionBar(
-                  count: _selectedIds.length,
-                  onCancel: _exitSelection,
-                  onDelete:
-                      _selectedIds.isEmpty
-                          ? null
-                          : () => _confirmDeleteSelected(context),
-                ),
-              ),
-            ),
-          ),
-        if (_visitorPhotoSelecting && !state.isOwnStore)
-          Builder(
-            builder: (context) {
-              final products = [...state.products, ...state.productsForMedia];
-              final split = visitorImportSelectionSplit(
-                photoKeys: _selectedPhotoKeys,
-                products: products,
-              );
-              final cart = ServiceLocator.get<CartStore>();
-              return ListenableBuilder(
-                listenable: cart,
-                builder: (context, _) {
-                  final breakdown = VisitorCartBatch.breakdown(
-                    photoKeys: _selectedPhotoKeys,
-                    products: products,
-                    cart: cart,
-                  );
-                  return VisitorPhotoSelectionOverlay(
-                    onAddToCart: () => _onVisitorSelectionAddToCart(state),
-                    onGoToCart: () {
-                      CartQa.caseStart(
-                        'TC-03',
-                        'Go to cart from selection dock '
-                        'inCart=${breakdown.alreadyInCart}',
+            // Telegram header — independent of product list emits.
+            Positioned(
+              top: 0,
+              left: 0,
+              right: 0,
+              child: BlocBuilder<StoreProfileBloc, StoreProfileState>(
+                buildWhen: storeProfileHeaderBuildWhen,
+                builder: (context, state) {
+                  return ListenableBuilder(
+                    listenable: ChatMockStore.instance,
+                    builder: (context, _) {
+                      final canAsk = _canAskStore(state);
+                      return StoreProfileTelegramHeader(
+                        state: state,
+                        topPad: topPad,
+                        selectedPhotoCount:
+                            _chromeState.visitorPhotoSelecting
+                                ? _chromeState.selectedPhotoKeys.length
+                                : null,
+                        onOpenStoreInfo:
+                            () => _openStoreChannel(context, state),
+                        onBack: () => _goHome(context),
+                        onAddProducts: () => _addProducts(context),
+                        canAddProducts: _canAddProducts(state),
+                        onImport: () => _onVisitorSelectionImport(state),
+                        onSearch: () => _openStoreSearch(context, state),
+                        onCart:
+                            () => Navigator.of(
+                              context,
+                            ).pushNamed(Routes.cartRoute),
+                        onDeleteSelected:
+                            state.isOwnStore &&
+                                    _chromeState.visitorPhotoSelecting &&
+                                    _chromeState.selectedPhotoKeys.isNotEmpty
+                                ? () => _confirmDeleteSelectedItems(context)
+                                : null,
+                        onChat: canAsk ? () => _openStoreChat(state) : null,
+                        chatUnread:
+                            canAsk
+                                ? ChatMockStore.instance.unreadForStore(
+                                  state.storeId,
+                                )
+                                : 0,
+                        showSelectionImport:
+                            state.canImport && !state.isOwnStore,
                       );
-                      Navigator.of(context).pushNamed(Routes.cartRoute).then((
-                        _,
-                      ) {
-                        CartQa.caseEnd(
-                          'TC-03',
-                          pass: true,
-                          detail: 'returned from cart',
-                        );
-                      });
                     },
-                    onImport:
-                        state.canImport
-                            ? () => _onVisitorSelectionImport(state)
-                            : null,
-                    onWishlist: _onVisitorSelectionWishlist,
-                    wishlistBusy: _visitorWishlistBusy,
-                    cartBusy: _visitorCartBusy,
-                    showImport: state.canImport,
-                    importCount: _selectedPhotoKeys.length,
-                    importInstantCount: split.instant,
-                    importPendingCount: split.pending,
-                    cartBreakdown: breakdown,
-                    cartFull: cart.isFull && breakdown.addable > 0,
                   );
                 },
-              );
-            },
-          ),
-        Positioned(
-          right: AppPadding.horizontal,
-          bottom: jumpBottom,
-          child: ValueListenableBuilder<bool>(
-            valueListenable: _showJumpToBottom,
-            builder: (context, show, child) {
-              return IgnorePointer(
-                ignoring: !show,
-                child: AnimatedOpacity(
-                  opacity: show ? 1 : 0,
-                  duration: const Duration(milliseconds: 160),
-                  child: child,
-                ),
-              );
-            },
-            child: _JumpToBottomButton(onTap: _scrollToBottom),
-          ),
-        ),
-        if (showFollowDock)
-          Positioned(
-            left: AppPadding.horizontal,
-            right: AppPadding.horizontal,
-            bottom: safeBottom + 16,
-            child: _GlassFollowDock(
-              isPending: state.followStatus.isPending,
-              isBusy: state.isFollowBusy,
-              onFollow:
-                  () => context.read<StoreProfileBloc>().add(
-                    const StoreProfileFollowPressed(),
-                  ),
-              onCancelRequest:
-                  () => context.read<StoreProfileBloc>().add(
-                    const StoreProfileUnfollowPressed(),
-                  ),
+              ),
             ),
-          ),
-      ],
+            if (_chromeState.selectionMode &&
+                !_chromeState.visitorPhotoSelecting)
+              Positioned(
+                top: headerExtent,
+                left: 0,
+                right: 0,
+                child: Material(
+                  color: AppColors.background.withValues(alpha: 0.96),
+                  child: Padding(
+                    padding: AppPadding.screenHorizontal,
+                    child: _SelectionBar(
+                      count: _chromeState.selectedIds.length,
+                      onCancel: _exitSelection,
+                      onDelete:
+                          _chromeState.selectedIds.isEmpty
+                              ? null
+                              : () => _confirmDeleteSelected(context),
+                    ),
+                  ),
+                ),
+              ),
+            if (_chromeState.visitorPhotoSelecting && !shell.isOwnStore)
+              BlocBuilder<StoreProfileBloc, StoreProfileState>(
+                buildWhen: storeProfileVisitorOverlayBuildWhen,
+                builder: (context, state) {
+                  final products = [
+                    ...state.products,
+                    ...state.productsForMedia,
+                  ];
+                  final split = visitorImportSelectionSplit(
+                    photoKeys: _chromeState.selectedPhotoKeys,
+                    products: products,
+                  );
+                  final cart = ServiceLocator.get<CartStore>();
+                  return ListenableBuilder(
+                    listenable: cart,
+                    builder: (context, _) {
+                      final breakdown = VisitorCartBatch.breakdown(
+                        photoKeys: _chromeState.selectedPhotoKeys,
+                        products: products,
+                        cart: cart,
+                      );
+                      return VisitorPhotoSelectionOverlay(
+                        onAddToCart: () => _onVisitorSelectionAddToCart(state),
+                        onGoToCart: () {
+                          CartQa.caseStart(
+                            'TC-03',
+                            'Go to cart from selection dock '
+                                'inCart=${breakdown.alreadyInCart}',
+                          );
+                          Navigator.of(
+                            context,
+                          ).pushNamed(Routes.cartRoute).then((_) {
+                            CartQa.caseEnd(
+                              'TC-03',
+                              pass: true,
+                              detail: 'returned from cart',
+                            );
+                          });
+                        },
+                        onImport:
+                            state.canImport
+                                ? () => _onVisitorSelectionImport(state)
+                                : null,
+                        onWishlist: _onVisitorSelectionWishlist,
+                        wishlistBusy: _chromeState.wishlistBusy,
+                        cartBusy: _chromeState.cartBusy,
+                        showImport: state.canImport,
+                        importCount: _chromeState.selectedPhotoKeys.length,
+                        importInstantCount: split.instant,
+                        importPendingCount: split.pending,
+                        cartBreakdown: breakdown,
+                        cartFull: cart.isFull && breakdown.addable > 0,
+                      );
+                    },
+                  );
+                },
+              ),
+            Positioned(
+              right: AppPadding.horizontal,
+              bottom: jumpBottom,
+              child: ValueListenableBuilder<bool>(
+                valueListenable: _showJumpToBottom,
+                builder: (context, show, child) {
+                  return IgnorePointer(
+                    ignoring: !show,
+                    child: AnimatedOpacity(
+                      opacity: show ? 1 : 0,
+                      duration: const Duration(milliseconds: 160),
+                      child: child,
+                    ),
+                  );
+                },
+                child: _JumpToBottomButton(onTap: _scrollToBottom),
+              ),
+            ),
+            if (showFollowDock)
+              Positioned(
+                left: AppPadding.horizontal,
+                right: AppPadding.horizontal,
+                bottom: safeBottom + 16,
+                child: BlocBuilder<StoreProfileBloc, StoreProfileState>(
+                  buildWhen: storeProfileFollowDockBuildWhen,
+                  builder: (context, state) {
+                    return _GlassFollowDock(
+                      isPending: state.followStatus.isPending,
+                      isBusy: state.isFollowBusy,
+                      onFollow:
+                          () => context.read<StoreProfileBloc>().add(
+                            const StoreProfileFollowPressed(),
+                          ),
+                      onCancelRequest:
+                          () => context.read<StoreProfileBloc>().add(
+                            const StoreProfileUnfollowPressed(),
+                          ),
+                    );
+                  },
+                ),
+              ),
+          ],
+        );
+      },
     );
   }
 
@@ -1831,43 +1857,39 @@ class _StoreProfileRouteState extends State<StoreProfileRoute> {
   Future<void> _onVisitorSelectionImport(StoreProfileState state) async {
     final products = [...state.products, ...state.productsForMedia];
     final split = visitorImportSelectionSplit(
-      photoKeys: _selectedPhotoKeys,
+      photoKeys: _chromeState.selectedPhotoKeys,
       products: products,
     );
     ImportQa.step(
       'Dock Import tap',
       detail:
-          'selected=${_selectedPhotoKeys.length} '
+          'selected=${_chromeState.selectedPhotoKeys.length} '
           'instant=${split.instant} pending=${split.pending} '
           'source=${state.storeId}',
     );
     final opened = await QuickImportFlow.openFromSelection(
       context: context,
-      photoKeys: Set<String>.from(_selectedPhotoKeys),
+      photoKeys: Set<String>.from(_chromeState.selectedPhotoKeys),
       products: products,
       sourceStoreId: state.storeId,
       sourceStoreName: state.storeName,
       canImport: state.canImport,
     );
     if (!mounted || !opened) return;
-    setState(() {
-      _selectedPhotoKeys.clear();
-      _selectedIds.clear();
-      _selectionMode = false;
-      _visitorPhotoSelecting = false;
-    });
+    _chrome.clearSelection();
   }
 
   /// Private wishlist bookmark for selected cards (viewer wishlist badge).
   Future<void> _onVisitorSelectionWishlist() async {
-    if (_visitorWishlistBusy || _selectedPhotoKeys.isEmpty) return;
+    if (_chromeState.wishlistBusy || _chromeState.selectedPhotoKeys.isEmpty)
+      return;
     final bloc = context.read<StoreProfileBloc>();
 
-    setState(() => _visitorWishlistBusy = true);
+    _chrome.setWishlistBusy(true);
     try {
       final outcome = await VisitorWishlistBatch.wishlistSelected(
         wishlist: ServiceLocator.get<WishlistRepository>(),
-        photoKeys: _selectedPhotoKeys,
+        photoKeys: _chromeState.selectedPhotoKeys,
         products: bloc.state.products,
         storeId: bloc.state.storeId,
       );
@@ -1877,22 +1899,15 @@ class _StoreProfileRouteState extends State<StoreProfileRoute> {
         newlyAddedProductIds: outcome.newlyAddedProductIds,
       );
       bloc.add(StoreProfileProductsReplaced(next, silent: true));
-      setState(() {
-        _selectedPhotoKeys.clear();
-        _selectionMode = false;
-        _visitorPhotoSelecting = false;
-        _visitorWishlistBusy = false;
-      });
+      _chrome.clearSelection();
     } catch (e) {
       if (!mounted) return;
-      setState(() => _visitorWishlistBusy = false);
+      _chrome.setWishlistBusy(false);
       final msg = CatalogErrorMapper.toUserMessage(e).trim();
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
-            msg.isEmpty
-                ? 'Could not update wishlist. Please try again.'
-                : msg,
+            msg.isEmpty ? 'Could not update wishlist. Please try again.' : msg,
           ),
         ),
       );
@@ -1900,10 +1915,10 @@ class _StoreProfileRouteState extends State<StoreProfileRoute> {
   }
 
   Future<void> _onVisitorSelectionAddToCart(StoreProfileState state) async {
-    if (_visitorCartBusy || _selectedPhotoKeys.isEmpty) return;
+    if (_chromeState.cartBusy || _chromeState.selectedPhotoKeys.isEmpty) return;
     final products = [...state.products, ...state.productsForMedia];
     final breakdown = VisitorCartBatch.breakdown(
-      photoKeys: _selectedPhotoKeys,
+      photoKeys: _chromeState.selectedPhotoKeys,
       products: products,
       cart: ServiceLocator.get<CartStore>(),
     );
@@ -1917,24 +1932,19 @@ class _StoreProfileRouteState extends State<StoreProfileRoute> {
       'sel=${breakdown.selected} addable=${breakdown.addable} '
       'inCart=${breakdown.alreadyInCart} oos=${breakdown.outOfStock}',
     );
-    setState(() => _visitorCartBusy = true);
+    _chrome.setCartBusy(true);
     try {
       final cart = ServiceLocator.get<CartRepository>();
       final result = await VisitorCartBatch.addSelected(
         cart: cart,
-        photoKeys: Set<String>.from(_selectedPhotoKeys),
+        photoKeys: Set<String>.from(_chromeState.selectedPhotoKeys),
         products: products,
         storeId: state.storeId,
         storeName: state.storeName,
         storeAvatarUrl: state.coverImageUrl,
       );
       if (!mounted) return;
-      setState(() {
-        _selectedPhotoKeys.clear();
-        _selectionMode = false;
-        _visitorPhotoSelecting = false;
-        _visitorCartBusy = false;
-      });
+      _chrome.clearSelection();
       showCartAddSnack(
         context,
         result,
@@ -1947,7 +1957,7 @@ class _StoreProfileRouteState extends State<StoreProfileRoute> {
       );
     } catch (e) {
       if (!mounted) return;
-      setState(() => _visitorCartBusy = false);
+      _chrome.setCartBusy(false);
       CartQa.caseEnd(tc, pass: false, detail: '$e');
       final msg = CatalogErrorMapper.toUserMessage(e).trim();
       ScaffoldMessenger.of(context).showSnackBar(
@@ -1962,7 +1972,7 @@ class _StoreProfileRouteState extends State<StoreProfileRoute> {
 
   /// Back from owner tabs / visitor header → store listing home.
   void _goHome(BuildContext context) {
-    if (_selectionMode) {
+    if (_chromeState.selectionMode) {
       _exitSelection();
       return;
     }
@@ -1972,10 +1982,9 @@ class _StoreProfileRouteState extends State<StoreProfileRoute> {
       Navigator.of(context).maybePop();
       return;
     }
-    Navigator.of(context).pushNamedAndRemoveUntil(
-      Routes.storeListingRoute,
-      (route) => false,
-    );
+    Navigator.of(
+      context,
+    ).pushNamedAndRemoveUntil(Routes.storeListingRoute, (route) => false);
   }
 
   Future<void> _openFollowRequests(
@@ -1984,27 +1993,27 @@ class _StoreProfileRouteState extends State<StoreProfileRoute> {
   ) async {
     await Navigator.of(context).pushNamed(
       Routes.followRequestsRoute,
-      arguments: {
-        'storeId': state.storeId,
-        'storeName': state.storeName,
-      },
+      arguments: {'storeId': state.storeId, 'storeName': state.storeName},
     );
     if (!context.mounted) return;
     context.read<StoreProfileBloc>().add(
       const StoreProfileLoadFollowRequestPreviews(),
     );
-    context.read<StoreProfileBloc>().add(const StoreProfileLoadStoreMeta());
+    context.read<StoreProfileBloc>().add(
+      const StoreProfileLoadStoreMeta(force: true),
+    );
   }
 }
 
 /// Shared glass fill/border used by header-matching floating chrome.
 ({Color fill, Color border, Color foreground}) _glassChrome() {
   final night = AppColors.isNight;
+  // Fill-only glass (no blur) — stronger alpha so docks stay readable.
   return (
     fill:
         night
-            ? AppColors.appBar.withValues(alpha: 0.42)
-            : AppColors.surface.withValues(alpha: 0.55),
+            ? AppColors.appBar.withValues(alpha: 0.72)
+            : AppColors.surface.withValues(alpha: 0.88),
     border:
         night
             ? AppColors.border.withValues(alpha: 0.45)
@@ -2023,31 +2032,27 @@ class _JumpToBottomButton extends StatelessWidget {
   Widget build(BuildContext context) {
     AppearanceScope.maybeOf(context);
     final chrome = _glassChrome();
-    return ClipOval(
-      child: BackdropFilter(
-        filter: ImageFilter.blur(sigmaX: 18, sigmaY: 18),
-        child: Material(
-          type: MaterialType.transparency,
+    // Fill-only (no BackdropFilter) — same scroll-safe glass as channel chrome.
+    return Material(
+      type: MaterialType.transparency,
       child: InkWell(
         onTap: onTap,
         customBorder: const CircleBorder(),
-            splashColor: Colors.transparent,
-            highlightColor: Colors.transparent,
-            child: DecoratedBox(
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                color: chrome.fill,
-                border: Border.all(color: chrome.border, width: 0.8),
-              ),
-        child: SizedBox(
-                width: 44,
-                height: 44,
-                child: Icon(
-                  Icons.keyboard_arrow_down_rounded,
-                  size: 28,
-                  color: chrome.foreground,
-                ),
-              ),
+        splashColor: Colors.transparent,
+        highlightColor: Colors.transparent,
+        child: DecoratedBox(
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            color: chrome.fill,
+            border: Border.all(color: chrome.border, width: 0.8),
+          ),
+          child: SizedBox(
+            width: 44,
+            height: 44,
+            child: Icon(
+              Icons.keyboard_arrow_down_rounded,
+              size: 28,
+              color: chrome.foreground,
             ),
           ),
         ),
@@ -2075,53 +2080,43 @@ class _GlassFollowDock extends StatelessWidget {
     AppearanceScope.maybeOf(context);
     final chrome = _glassChrome();
     // Follow = translucent blue glass; Requested stays neutral glass.
-    final blue =
-        AppColors.isNight ? AppColors.accent : AppColors.primary;
+    final blue = AppColors.isNight ? AppColors.accent : AppColors.primary;
     final fill =
-        isPending
-            ? chrome.fill
-            : blue.withValues(alpha: isBusy ? 0.48 : 0.72);
-    final border =
-        isPending ? chrome.border : blue.withValues(alpha: 0.85);
-    final foreground =
-        isPending ? chrome.foreground : AppColors.textOnPrimary;
+        isPending ? chrome.fill : blue.withValues(alpha: isBusy ? 0.48 : 0.72);
+    final border = isPending ? chrome.border : blue.withValues(alpha: 0.85);
+    final foreground = isPending ? chrome.foreground : AppColors.textOnPrimary;
     final label = isPending ? 'Requested' : 'Follow';
-    return ClipRRect(
-      borderRadius: BorderRadius.circular(26),
-      child: BackdropFilter(
-        filter: ImageFilter.blur(sigmaX: 18, sigmaY: 18),
-        child: Material(
-          type: MaterialType.transparency,
-          child: InkWell(
-            onTap: isBusy ? null : (isPending ? onCancelRequest : onFollow),
-            splashColor: Colors.transparent,
-            highlightColor: Colors.transparent,
-            child: DecoratedBox(
-                    decoration: BoxDecoration(
-                color: fill,
-                borderRadius: BorderRadius.circular(26),
-                border: Border.all(color: border, width: 0.8),
-              ),
-              child: SizedBox(
-                height: 52,
-                width: double.infinity,
-                child: Center(
-                  child:
-                      isBusy
-                          ? SizedBox(
-                            width: 22,
-                            height: 22,
-                            child: CircularProgressIndicator(
-                              strokeWidth: 2.4,
-                              color: foreground,
-                            ),
-                          )
-                          : Text(
-                            label,
-                            style: AppTextStyles.button(color: foreground),
-                    ),
-                  ),
-                ),
+    return Material(
+      type: MaterialType.transparency,
+      child: InkWell(
+        onTap: isBusy ? null : (isPending ? onCancelRequest : onFollow),
+        borderRadius: BorderRadius.circular(26),
+        splashColor: Colors.transparent,
+        highlightColor: Colors.transparent,
+        child: DecoratedBox(
+          decoration: BoxDecoration(
+            color: fill,
+            borderRadius: BorderRadius.circular(26),
+            border: Border.all(color: border, width: 0.8),
+          ),
+          child: SizedBox(
+            height: 52,
+            width: double.infinity,
+            child: Center(
+              child:
+                  isBusy
+                      ? SizedBox(
+                        width: 22,
+                        height: 22,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2.4,
+                          color: foreground,
+                        ),
+                      )
+                      : Text(
+                        label,
+                        style: AppTextStyles.button(color: foreground),
+                      ),
             ),
           ),
         ),
@@ -2163,9 +2158,7 @@ class _SelectionBar extends StatelessWidget {
               ),
               Expanded(
                 child: Text(
-                  count == 0
-                      ? 'Select products'
-                      : '$count selected',
+                  count == 0 ? 'Select products' : '$count selected',
                   textAlign: TextAlign.center,
                   style: AppTextStyles.body(fontWeight: FontWeight.w600),
                 ),
@@ -2190,4 +2183,3 @@ class _SelectionBar extends StatelessWidget {
     );
   }
 }
-

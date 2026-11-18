@@ -10,6 +10,7 @@ class StoreListingState extends Equatable {
     this.isDeletingAccount = false,
     this.accountDeleted = false,
     this.errorMessage,
+    this.activityUnread = 0,
   });
 
   final String query;
@@ -20,6 +21,7 @@ class StoreListingState extends Equatable {
   final bool isDeletingAccount;
   final bool accountDeleted;
   final String? errorMessage;
+  final int activityUnread;
 
   List<StoreChannel> get visibleStores {
     final q = query.trim().toLowerCase();
@@ -42,6 +44,7 @@ class StoreListingState extends Equatable {
     bool? isDeletingAccount,
     bool? accountDeleted,
     String? errorMessage,
+    int? activityUnread,
     bool clearError = false,
     bool clearCursor = false,
     bool clearAccountDeleted = false,
@@ -58,6 +61,7 @@ class StoreListingState extends Equatable {
               ? false
               : (accountDeleted ?? this.accountDeleted),
       errorMessage: clearError ? null : (errorMessage ?? this.errorMessage),
+      activityUnread: activityUnread ?? this.activityUnread,
     );
   }
 
@@ -71,5 +75,6 @@ class StoreListingState extends Equatable {
     isDeletingAccount,
     accountDeleted,
     errorMessage,
+    activityUnread,
   ];
 }

@@ -1,6 +1,8 @@
 import 'dart:ui';
 
 import 'package:flutter/material.dart';
+import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:project_c/bloc/storeprofile/store_profile_bloc.dart';
 import 'package:project_c/helper/catalog_media_debug.dart';
 import 'package:project_c/helper/catalog_responsive_image.dart';
 import 'package:project_c/helper/colors.dart';
@@ -45,11 +47,7 @@ class StoreProductGrid extends StatelessWidget {
   /// Second arg is the tapped collage photo index (0 when the card has no
   /// images or the tap was outside a collage cell).
   /// [sourceRect] is the tapped cell in global coords (Telegram photo open).
-  final void Function(
-    StoreProduct product,
-    int imageIndex, {
-    Rect? sourceRect,
-  })
+  final void Function(StoreProduct product, int imageIndex, {Rect? sourceRect})
   onProductTap;
   final ValueChanged<StoreProduct>? onProductLongPress;
 
@@ -101,8 +99,7 @@ class StoreProductGrid extends StatelessWidget {
 
   Widget _card(StoreProduct product) {
     // Visitors never see source-deleted / declined copies (owner-only).
-    final shelfGhost =
-        product.isSourceDeleted || product.isImportDeclined;
+    final shelfGhost = product.isSourceDeleted || product.isImportDeclined;
     if (shelfGhost && onRemoveSourceDeleted == null) {
       return const SizedBox.shrink();
     }
@@ -116,74 +113,63 @@ class StoreProductGrid extends StatelessWidget {
         if (key.startsWith('${product.id}|'))
           int.tryParse(key.substring(product.id.length + 1)) ?? -1,
     }..removeWhere((i) => i < 0);
-    return GestureDetector(
-      // Fallback when there are no collage cells (empty product) or the tap
-      // lands on chrome overlays; collage cells report their own index.
-      onTap:
-          shelfGhost
-              ? () {}
-              : () => onProductTap(product, 0),
-      onLongPress:
-          shelfGhost || onProductLongPress == null
-              ? null
-              : () => onProductLongPress!(product),
-      child: KeyedSubtree(
-        key: focused ? focusKey : null,
-        child: _ProductCard(
-          key: ValueKey(product.id),
-          product: product,
-          selectionMode: selectionMode,
-          photoSelectionMode: photoSelectionMode,
-          showPhotoImportStatus: showPhotoImportStatus,
-          selectedPhotoIndexes: selectedPhotos,
-          isSelected: selected,
-          isFocused: focused,
-          isDeleting: deletingProductIds.contains(product.id),
-          availability: listingAvailability[product.id],
-          large: viewMode == ProductViewMode.single,
-          onRemoveSourceDeleted:
-              onRemoveSourceDeleted == null
-                  ? null
-                  : () => onRemoveSourceDeleted!(product),
-          onImageLongPress:
-              shelfGhost || onImageLongPress == null
-                  ? null
-                  : (imageIndex) => onImageLongPress!(product, imageIndex),
-          onImageTap:
-              // Own-store product select: taps go to card GestureDetector.
-              // Visitor photo select / normal browse: collage cells win.
-              shelfGhost ||
-                      (selectionMode && !photoSelectionMode)
-                  ? null
-                  : (imageIndex, {Rect? sourceRect}) => onProductTap(
-                    product,
-                    imageIndex,
-                    sourceRect: sourceRect,
-                  ),
+    return RepaintBoundary(
+      child: GestureDetector(
+        // Fallback when there are no collage cells (empty product) or the tap
+        // lands on chrome overlays; collage cells report their own index.
+        onTap: shelfGhost ? () {} : () => onProductTap(product, 0),
+        onLongPress:
+            shelfGhost || onProductLongPress == null
+                ? null
+                : () => onProductLongPress!(product),
+        child: KeyedSubtree(
+          key: focused ? focusKey : null,
+          child: _ProductCard(
+            key: ValueKey(product.id),
+            product: product,
+            selectionMode: selectionMode,
+            photoSelectionMode: photoSelectionMode,
+            showPhotoImportStatus: showPhotoImportStatus,
+            selectedPhotoIndexes: selectedPhotos,
+            isSelected: selected,
+            isFocused: focused,
+            isDeleting: deletingProductIds.contains(product.id),
+            availability: listingAvailability[product.id],
+            large: viewMode == ProductViewMode.single,
+            onRemoveSourceDeleted:
+                onRemoveSourceDeleted == null
+                    ? null
+                    : () => onRemoveSourceDeleted!(product),
+            onImageLongPress:
+                shelfGhost || onImageLongPress == null
+                    ? null
+                    : (imageIndex) => onImageLongPress!(product, imageIndex),
+            onImageTap:
+                // Own-store product select: taps go to card GestureDetector.
+                // Visitor photo select / normal browse: collage cells win.
+                shelfGhost || (selectionMode && !photoSelectionMode)
+                    ? null
+                    : (imageIndex, {Rect? sourceRect}) => onProductTap(
+                      product,
+                      imageIndex,
+                      sourceRect: sourceRect,
+                    ),
+          ),
         ),
       ),
     );
   }
 
-  Widget buildSliver({
-    bool isLoading = false,
-    bool productsResolved = true,
-  }) {
+  Widget buildSliver({bool isLoading = false, bool productsResolved = true}) {
     if (products.isEmpty) {
-      if (isLoading) {
+      // Loading or disk hydrate — shimmer, never a blank hole.
+      if (isLoading || !productsResolved) {
         return StoreProductGridShimmer(viewMode: viewMode);
-      }
-      // Disk hydrate after restart — blank, not shimmer / false empty.
-      if (!productsResolved) {
-        return const SliverToBoxAdapter(child: SizedBox.shrink());
       }
       return SliverFillRemaining(
         hasScrollBody: false,
         child: Center(
-          child: Text(
-            'No products yet',
-            style: AppTextStyles.bodySecondary(),
-          ),
+          child: Text('No products yet', style: AppTextStyles.bodySecondary()),
         ),
       );
     }
@@ -224,10 +210,7 @@ class StoreProductGrid extends StatelessWidget {
   Widget build(BuildContext context) {
     if (products.isEmpty) {
       return Center(
-        child: Text(
-          'No products yet',
-          style: AppTextStyles.bodySecondary(),
-        ),
+        child: Text('No products yet', style: AppTextStyles.bodySecondary()),
       );
     }
 
@@ -408,9 +391,9 @@ class _ProductCardState extends State<_ProductCard> {
   @override
   void didUpdateWidget(covariant _ProductCard oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.product.id != widget.product.id ||
-        oldWidget.product.imagePaths.length !=
-            widget.product.imagePaths.length) {
+    // Only reset page dots when the listing changes — expanding album paths
+    // (9 → 20) must keep the current swipe page.
+    if (oldWidget.product.id != widget.product.id) {
       _albumPage = 0;
       _albumPageCount = 0;
     }
@@ -464,8 +447,9 @@ class _ProductCardState extends State<_ProductCard> {
         path: product.urlForRole(productIndex, cellRole, log: c == 0),
       ));
     }
-    final existingPaths =
-        displayCells.map((c) => c.path).toList(growable: false);
+    final existingPaths = displayCells
+        .map((c) => c.path)
+        .toList(growable: false);
     final hasImages = existingPaths.isNotEmpty;
     if (hasImages) {
       CatalogMediaDebug.qualityViewPaint(
@@ -478,19 +462,16 @@ class _ProductCardState extends State<_ProductCard> {
     final showPrimaryBorder =
         (selectionMode && widget.isSelected) ||
         (!selectionMode && widget.isFocused);
-    // Classic Telegram: page dots only for 10+ (9 per page). Arrangement
-    // path uses Settings N×N page slices when the flag is on.
+    // Classic Telegram: page dots for 10+ (9 per page). Use album total
+    // (may exceed loaded preview paths after BE-2 productsLimit=9).
+    final albumTotal = product.displayAlbumItemCount;
     final albumPageCount =
         arrangement != null
-            ? arrangement.pageCountFor(existingPaths.length)
-            : (existingPaths.length > 9
-                ? (existingPaths.length + 8) ~/ 9
-                : 0);
+            ? arrangement.pageCountFor(albumTotal)
+            : (albumTotal > 9 ? (albumTotal + 8) ~/ 9 : 0);
     final isPagedAlbum = albumPageCount > 1;
     final albumPage =
-        albumPageCount > 0
-            ? _albumPage.clamp(0, albumPageCount - 1)
-            : 0;
+        albumPageCount > 0 ? _albumPage.clamp(0, albumPageCount - 1) : 0;
     // Soft always-on outline — Day: light grey, Night: quiet graphite.
     // Selection/focus still uses a stronger primary stroke.
     final outline =
@@ -504,7 +485,7 @@ class _ProductCardState extends State<_ProductCard> {
               width: 1,
             );
     final titleColor = AppColors.textOnPrimary;
-    final imageCount = existingPaths.length;
+    final imageCount = albumTotal > 0 ? albumTotal : existingPaths.length;
 
     return AnimatedContainer(
       duration: const Duration(milliseconds: 160),
@@ -530,6 +511,9 @@ class _ProductCardState extends State<_ProductCard> {
             if (hasImages)
               ProductImageCollage(
                 imagePaths: existingPaths,
+                expectedImageCount: albumTotal,
+                // Stable shell across BE-2 lazy expand (paths 9 → N).
+                layoutIdentity: product.id,
                 imageThumbhashes: [
                   for (final c in displayCells)
                     product.thumbhashAt(c.index) ?? '',
@@ -540,6 +524,12 @@ class _ProductCardState extends State<_ProductCard> {
                       product.thumbhashAt(c.index),
                     ),
                 ],
+                // Fixed decode width — skip per-cell LayoutBuilder; match warm.
+                decodeCacheWidth: CatalogImageCache.collageCellCacheWidth(
+                  largeCard: large,
+                  imageCount: existingPaths.length,
+                  screenWidth: MediaQuery.sizeOf(context).width,
+                ),
                 tileBorderRadius: large ? 3.5 : 2.5,
                 selectionMode: widget.photoSelectionMode,
                 // Lock / out-of-stock only for visitor import selection.
@@ -579,14 +569,18 @@ class _ProductCardState extends State<_ProductCard> {
                 onAlbumPageChanged:
                     isPagedAlbum
                         ? (page, count) {
-                          if (_albumPage == page &&
-                              _albumPageCount == count) {
-                            return;
+                          if (_albumPage != page || _albumPageCount != count) {
+                            setState(() {
+                              _albumPage = page;
+                              _albumPageCount = count;
+                            });
                           }
-                          setState(() {
-                            _albumPage = page;
-                            _albumPageCount = count;
-                          });
+                          // Swipe past first preview page → hydrate remaining.
+                          if (page > 0 && product.needsAlbumExpand) {
+                            context.read<StoreProfileBloc>().add(
+                              StoreProfileExpandAlbumCollage(product.id),
+                            );
+                          }
                         }
                         : null,
                 onImageLongPress:
@@ -703,10 +697,7 @@ class _ProductCardState extends State<_ProductCard> {
                         ),
                         if (imageCount >= 1) ...[
                           const SizedBox(width: 6),
-                          _AlbumImageCount(
-                            count: imageCount,
-                            large: large,
-                          ),
+                          _AlbumImageCount(count: imageCount, large: large),
                         ],
                       ],
                     ),
@@ -715,8 +706,7 @@ class _ProductCardState extends State<_ProductCard> {
                 ),
               ),
             ),
-            if (product.isSourceDeleted &&
-                widget.onRemoveSourceDeleted != null)
+            if (product.isSourceDeleted && widget.onRemoveSourceDeleted != null)
               Positioned.fill(
                 child: _ShelfGhostOverlay(
                   title: 'Source Deleted',
@@ -820,10 +810,7 @@ class _ShelfGhostOverlay extends StatelessWidget {
 /// Carousel-style page dots for 10+ image product albums.
 /// Renders exactly [pageCount] dots and highlights [pageIndex].
 class _AlbumPageDots extends StatelessWidget {
-  const _AlbumPageDots({
-    required this.pageIndex,
-    required this.pageCount,
-  });
+  const _AlbumPageDots({required this.pageIndex, required this.pageCount});
 
   final int pageIndex;
   final int pageCount;
@@ -857,10 +844,7 @@ class _AlbumPageDots extends StatelessWidget {
 
 /// Compact image-count chip beside the product title.
 class _AlbumImageCount extends StatelessWidget {
-  const _AlbumImageCount({
-    required this.count,
-    required this.large,
-  });
+  const _AlbumImageCount({required this.count, required this.large});
 
   final int count;
   final bool large;
@@ -909,20 +893,11 @@ class _LikeViewCountBadges extends StatelessWidget {
     final wish = wishlistCount;
     final chips = <Widget>[
       if (like != null && like > 0)
-        _MetricBadge(
-          icon: Icons.thumb_up_rounded,
-          count: like,
-        ),
+        _MetricBadge(icon: Icons.thumb_up_rounded, count: like),
       if (views != null && views > 0)
-        _MetricBadge(
-          icon: Icons.visibility_outlined,
-          count: views,
-        ),
+        _MetricBadge(icon: Icons.visibility_outlined, count: views),
       if (wish != null && wish > 0)
-        _MetricBadge(
-          icon: Icons.favorite_rounded,
-          count: wish,
-        ),
+        _MetricBadge(icon: Icons.favorite_rounded, count: wish),
     ];
     if (chips.isEmpty) return const SizedBox.shrink();
     return Row(
@@ -977,10 +952,7 @@ class _MetricBadge extends StatelessWidget {
 }
 
 class _SelectionCheck extends StatelessWidget {
-  const _SelectionCheck({
-    required this.isSelected,
-    required this.isDeleting,
-  });
+  const _SelectionCheck({required this.isSelected, required this.isDeleting});
 
   final bool isSelected;
   final bool isDeleting;
@@ -1002,7 +974,10 @@ class _SelectionCheck extends StatelessWidget {
       height: 24,
       decoration: BoxDecoration(
         shape: BoxShape.circle,
-        color: isSelected ? AppColors.primary : Colors.black.withValues(alpha: 0.35),
+        color:
+            isSelected
+                ? AppColors.primary
+                : Colors.black.withValues(alpha: 0.35),
         border: Border.all(color: AppColors.textOnPrimary, width: 1.5),
       ),
       child:

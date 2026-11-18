@@ -18,6 +18,8 @@ import 'package:project_c/bloc/storeprofile/store_profile_bloc.dart';
 import 'package:project_c/bloc/team/team_bloc.dart';
 import 'package:project_c/data/merchant_store_session.dart';
 import 'package:project_c/di/service_locator.dart';
+import 'package:project_c/helper/catalog_api_call_log.dart';
+import 'package:project_c/helper/store_warm_qa.dart';
 import 'package:project_c/models/bulk_upload.dart';
 import 'package:project_c/session/catalog_session.dart';
 import 'package:project_c/models/catalog/catalog_product_models.dart';
@@ -266,12 +268,13 @@ PageRoute? _staffListRoute(RouteSettings settings) {
   final storeId =
       map['storeId'] is String ? (map['storeId'] as String).trim() : '';
   final storeName =
-      map['storeName'] is String ? (map['storeName'] as String).trim() : 'Store';
+      map['storeName'] is String
+          ? (map['storeName'] as String).trim()
+          : 'Store';
   if (storeId.isEmpty) return null;
   return _buildAnimatedRoute(
     settings: settings,
-    builder:
-        (_) => StaffListRoute(storeId: storeId, storeName: storeName),
+    builder: (_) => StaffListRoute(storeId: storeId, storeName: storeName),
   );
 }
 
@@ -347,9 +350,16 @@ PageRoute? _chatThreadRoute(RouteSettings settings) {
           : null;
   return _buildAnimatedRoute(
     settings: settings,
-    builder:
-        (_) =>
-            ChatThreadRoute(chatId: chatId, openDiscussionId: openDiscussionId),
+    builder: (_) {
+      CatalogApiCallLog.beginScreenScope(
+        kind: CatalogApiCallLog.kindChatThread,
+        subjectId: chatId,
+      );
+      return ChatThreadRoute(
+        chatId: chatId,
+        openDiscussionId: openDiscussionId,
+      );
+    },
   );
 }
 
@@ -473,9 +483,13 @@ PageRoute? _followRequestsRoute(RouteSettings settings) {
 
   return _buildAnimatedRoute(
     settings: settings,
-    builder:
-        (context) =>
-            FollowRequestsRoute(storeId: storeId, storeName: storeName),
+    builder: (context) {
+      CatalogApiCallLog.beginScreenScope(
+        kind: CatalogApiCallLog.kindFollowRequests,
+        subjectId: storeId,
+      );
+      return FollowRequestsRoute(storeId: storeId, storeName: storeName);
+    },
   );
 }
 
@@ -536,14 +550,19 @@ PageRoute? _followersFollowingRoute(RouteSettings settings) {
 
   return _buildAnimatedRoute(
     settings: settings,
-    builder:
-        (context) => FollowersFollowingRoute(
-          storeId: storeId,
-          storeName: storeName.isEmpty ? 'Store' : storeName,
-          initialTab: initialTab,
-          followerCount: followerCount,
-          followingCount: followingCount,
-        ),
+    builder: (context) {
+      CatalogApiCallLog.beginScreenScope(
+        kind: CatalogApiCallLog.kindFollowersFollowing,
+        subjectId: storeId,
+      );
+      return FollowersFollowingRoute(
+        storeId: storeId,
+        storeName: storeName.isEmpty ? 'Store' : storeName,
+        initialTab: initialTab,
+        followerCount: followerCount,
+        followingCount: followingCount,
+      );
+    },
   );
 }
 
@@ -568,8 +587,9 @@ PageRoute? _storeListingRoute(RouteSettings settings) {
             BlocProvider(create: (_) => ContactsBloc()),
             BlocProvider(create: (_) => AccountProfileBloc()),
             BlocProvider(
-              create: (_) => ProfileContextBloc()
-                ..add(const ProfileContextStarted()),
+              create:
+                  (_) =>
+                      ProfileContextBloc()..add(const ProfileContextStarted()),
             ),
           ],
           child: const MainShellRoute(),
@@ -621,20 +641,20 @@ PageRoute? _storeProfileRoute(RouteSettings settings) {
           ? args['storeId'] as String
           : 'my_store');
   final avatarColor = channel?.avatarColor ?? 0xFF2AABEE;
+  // Home open passes members: [] — keep empty const; own-store shell still
+  // falls back to session.members inside the bloc when needed.
   final members =
       args is Map
           ? _asTeamMembers(args['members'])
           : (isOwnStore ? session.members : const <TeamMember>[]);
-  final products =
-      channel != null
-          ? (isOwnStore
-              ? List<StoreProduct>.from(session.products)
-              : List<StoreProduct>.from(channel.products))
-          : (args is Map && args['products'] != null
-              ? _asProducts(args['products'])
-              : (isOwnStore
-                  ? List<StoreProduct>.from(session.products)
-                  : const <StoreProduct>[]));
+  // Avoid sync List.from(session.products) on every open (Batch 1). Bloc seeds
+  // the grid from StoreProductsCache memory; optional thin seed below.
+  final List<StoreProduct>? productsSeed = _storeProfileProductsSeed(
+    args: args,
+    channel: channel,
+    isOwnStore: isOwnStore,
+    session: session,
+  );
   final focusProductId =
       args is Map && args['focusProductId'] is String
           ? (args['focusProductId'] as String).trim()
@@ -648,28 +668,71 @@ PageRoute? _storeProfileRoute(RouteSettings settings) {
                   : channel.followStatus)
               : channel.followStatus);
 
+  StoreWarmQa.event('PROFILE_ROUTE_CREATED', {
+    'store': storeId,
+    'seedProducts': productsSeed?.length ?? 0,
+    'hasChannel': channel != null,
+  });
+
   return _buildAnimatedRoute(
     settings: settings,
     builder:
         (context) => BlocProvider(
-          create:
-              (_) => StoreProfileBloc(
-                storeName: storeName,
-                members:
-                    members.isEmpty && isOwnStore ? session.members : members,
-                products: products,
-                isOwnStore: isOwnStore,
-                storeId: storeId,
-                storeLink: storeLink,
-                coverImageUrl: channel?.coverImageUrl,
-                avatarColor: avatarColor,
-                initialFollowStatus: initialFollow,
-              ),
+          create: (_) {
+            final bloc = StoreProfileBloc(
+              storeName: storeName,
+              members:
+                  members.isEmpty && isOwnStore ? session.members : members,
+              products: productsSeed,
+              isOwnStore: isOwnStore,
+              storeId: storeId,
+              storeLink: storeLink,
+              coverImageUrl: channel?.coverImageUrl,
+              avatarColor: avatarColor,
+              initialFollowStatus: initialFollow,
+              initialCanViewContent: channel?.canViewContent,
+              // Defer meta/collections until after the push animation so
+              // tap→transition is not fighting disk JSON + image decode.
+              deferInitialCatalogLoads: true,
+            );
+            // PROFILE_BLOC_CREATED is also emitted inside the bloc ctor.
+            return bloc;
+          },
           child: StoreProfileRoute(
             focusProductId: focusProductId.isEmpty ? null : focusProductId,
           ),
         ),
   );
+}
+
+/// Lightweight product seed for [StoreProfileBloc] — no full-list copy of
+/// [MerchantStoreSession.products] on the Navigator push path.
+List<StoreProduct>? _storeProfileProductsSeed({
+  required Object? args,
+  required StoreChannel? channel,
+  required bool isOwnStore,
+  required MerchantStoreSession session,
+}) {
+  if (channel != null) {
+    // Prefer memory cache in the bloc; only pass a thin seed (no List.from).
+    if (isOwnStore) {
+      final list = session.products;
+      return list.isEmpty ? null : list;
+    }
+    final list = channel.products;
+    return list.isEmpty ? null : list;
+  }
+  if (args is Map && args['products'] != null) {
+    final list = _asProducts(args['products']);
+    return list.isEmpty ? null : list;
+  }
+  // Non-channel own-store deep links: still avoid copying huge session lists
+  // when empty; non-empty kept as a reference (bloc does not mutate in place).
+  if (isOwnStore) {
+    final list = session.products;
+    return list.isEmpty ? null : list;
+  }
+  return null;
 }
 
 PageRoute? _storeChannelRoute(RouteSettings settings) {
@@ -706,6 +769,10 @@ PageRoute? _storeChannelRoute(RouteSettings settings) {
           : null;
 
   final enableFollowChrome = !isOwnStore && profileBloc != null;
+  CatalogApiCallLog.beginScreenScope(
+    kind: CatalogApiCallLog.kindStoreChannel,
+    subjectId: storeId,
+  );
   final page = StoreChannelRoute(
     storeId: storeId,
     storeName: storeName,
@@ -943,21 +1010,29 @@ PageRoute? _addProductComposeRoute(RouteSettings settings) {
           : const <bool>[];
   return _buildAnimatedRoute(
     settings: settings,
-    builder:
-        (context) => AddProductComposeRoute(
-          imagePaths: imagePaths,
-          storeId: storeId,
-          initialIndex: initialIndex,
-          initialDrafts: initialDrafts,
-          itemIds: itemIds,
-          returnResult: returnResult,
-          allowAddDelete: allowAddDelete,
-          importMode: importMode,
-          sourceStoreId: sourceStoreId,
-          sourceStoreName: sourceStoreName,
-          sourceProductIds: sourceProductIds,
-          sourceLocked: sourceLocked,
-        ),
+    builder: (context) {
+      final sid = (storeId ?? '').trim();
+      if (sid.isNotEmpty) {
+        CatalogApiCallLog.beginScreenScope(
+          kind: CatalogApiCallLog.kindAddProduct,
+          subjectId: sid,
+        );
+      }
+      return AddProductComposeRoute(
+        imagePaths: imagePaths,
+        storeId: storeId,
+        initialIndex: initialIndex,
+        initialDrafts: initialDrafts,
+        itemIds: itemIds,
+        returnResult: returnResult,
+        allowAddDelete: allowAddDelete,
+        importMode: importMode,
+        sourceStoreId: sourceStoreId,
+        sourceStoreName: sourceStoreName,
+        sourceProductIds: sourceProductIds,
+        sourceLocked: sourceLocked,
+      );
+    },
   );
 }
 
@@ -1010,29 +1085,37 @@ PageRoute? _addProductGroupRoute(RouteSettings settings) {
           : const <ComposePhotoDraft>[];
   return _buildAnimatedRoute(
     settings: settings,
-    builder:
-        (context) => BlocProvider(
-          create:
-              (_) => BulkUploadBloc(
-                images: selectedItems,
-                storeId: storeId,
-                initialTitle: initialTitle.isEmpty ? null : initialTitle,
-                initialTags: initialTags,
-                initialItemSpecs:
-                    photoDrafts.isEmpty
-                        ? null
-                        : [for (final d in photoDrafts) d.spec],
-              ),
-          child: AddProductGroupRoute(
-            composeOverlay: composeOverlay,
-            composeSpec: composeSpec,
-            composeStockStatus: composeStockStatus,
-            composeMtoDays: composeMtoDays,
-            composeIsLocked: composeIsLocked,
-            composeApplyToAll: composeApplyToAll,
-            composeDrafts: photoDrafts,
-          ),
+    builder: (context) {
+      final sid = (storeId ?? '').trim();
+      if (sid.isNotEmpty) {
+        CatalogApiCallLog.beginScreenScope(
+          kind: CatalogApiCallLog.kindAddProduct,
+          subjectId: sid,
+        );
+      }
+      return BlocProvider(
+        create:
+            (_) => BulkUploadBloc(
+              images: selectedItems,
+              storeId: storeId,
+              initialTitle: initialTitle.isEmpty ? null : initialTitle,
+              initialTags: initialTags,
+              initialItemSpecs:
+                  photoDrafts.isEmpty
+                      ? null
+                      : [for (final d in photoDrafts) d.spec],
+            ),
+        child: AddProductGroupRoute(
+          composeOverlay: composeOverlay,
+          composeSpec: composeSpec,
+          composeStockStatus: composeStockStatus,
+          composeMtoDays: composeMtoDays,
+          composeIsLocked: composeIsLocked,
+          composeApplyToAll: composeApplyToAll,
+          composeDrafts: photoDrafts,
         ),
+      );
+    },
   );
 }
 
@@ -1256,15 +1339,22 @@ PageRoute? _collectionBrowseRoute(RouteSettings settings) {
 
   return _buildAnimatedRoute(
     settings: settings,
-    builder:
-        (context) => CollectionBrowseRoute(
-          product: product,
-          storeId: storeId,
-          storeName: storeName,
-          storeLink: storeLink,
-          isOwnStore: isOwnStore,
-          seedProducts: seedProducts,
-        ),
+    builder: (context) {
+      final browseId =
+          product.id.trim().isNotEmpty ? product.id.trim() : storeId;
+      CatalogApiCallLog.beginScreenScope(
+        kind: CatalogApiCallLog.kindCollectionBrowse,
+        subjectId: browseId,
+      );
+      return CollectionBrowseRoute(
+        product: product,
+        storeId: storeId,
+        storeName: storeName,
+        storeLink: storeLink,
+        isOwnStore: isOwnStore,
+        seedProducts: seedProducts,
+      );
+    },
   );
 }
 
@@ -1351,21 +1441,30 @@ PageRoute? _productDetailsRoute(RouteSettings settings) {
     child: ColoredBox(
       color: Colors.black,
       child: BlocProvider(
-        create:
-            (_) => ProductDetailsBloc(
-              product: product,
-              storeName: storeName,
-              storeLink: storeLink,
-              storeId: storeId,
-              isOwnStore: isOwnStore,
-              initialImageIndex: imageIndex,
-              galleryFeed: galleryFeed,
-              galleryFeedIndex: galleryFeedIndex,
-              seedCategory: seedCategory,
-              showStoreGroupLink: showStoreGroupLink,
-              initialLikedPhotoIds: likedPhotoIds,
-              initialIsWishlisted: initialIsWishlisted,
-            ),
+        create: (_) {
+          final detailsId =
+              product.id.trim().isNotEmpty
+                  ? product.id.trim()
+                  : (storeId ?? '').trim();
+          CatalogApiCallLog.beginScreenScope(
+            kind: CatalogApiCallLog.kindProductDetails,
+            subjectId: detailsId,
+          );
+          return ProductDetailsBloc(
+            product: product,
+            storeName: storeName,
+            storeLink: storeLink,
+            storeId: storeId,
+            isOwnStore: isOwnStore,
+            initialImageIndex: imageIndex,
+            galleryFeed: galleryFeed,
+            galleryFeedIndex: galleryFeedIndex,
+            seedCategory: seedCategory,
+            showStoreGroupLink: showStoreGroupLink,
+            initialLikedPhotoIds: likedPhotoIds,
+            initialIsWishlisted: initialIsWishlisted,
+          );
+        },
         child: const ProductDetailsRoute(),
       ),
     ),
@@ -1392,7 +1491,13 @@ PageRoute? _productDetailsRoute(RouteSettings settings) {
 PageRoute? _cartRoute(RouteSettings settings) {
   return _buildAnimatedRoute(
     settings: settings,
-    builder: (context) => const CartRoute(),
+    builder: (context) {
+      CatalogApiCallLog.beginScreenScope(
+        kind: CatalogApiCallLog.kindCart,
+        subjectId: 'cart',
+      );
+      return const CartRoute();
+    },
   );
 }
 
@@ -1434,13 +1539,18 @@ PageRoute? _storeSearchRoute(RouteSettings settings) {
           : null;
   return _buildAnimatedRoute(
     settings: settings,
-    builder:
-        (context) => StoreSearchRoute(
-          storeId: storeId,
-          storeName: storeName,
-          storeCity: storeCity,
-          productCount: productCount,
-        ),
+    builder: (context) {
+      CatalogApiCallLog.beginScreenScope(
+        kind: CatalogApiCallLog.kindStoreSearch,
+        subjectId: storeId,
+      );
+      return StoreSearchRoute(
+        storeId: storeId,
+        storeName: storeName,
+        storeCity: storeCity,
+        productCount: productCount,
+      );
+    },
   );
 }
 

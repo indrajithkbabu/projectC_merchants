@@ -58,12 +58,32 @@ class _CartRouteState extends State<CartRoute> {
     if (widget.refreshSignal != oldWidget.refreshSignal &&
         widget.refreshSignal > 0) {
       // ignore: discarded_futures
-      _load(quiet: true);
+      _load(quiet: true, forceNetwork: true);
     }
   }
 
-  Future<void> _load({bool quiet = false}) async {
+  Future<void> _load({bool quiet = false, bool forceNetwork = false}) async {
     CartQa.caseStart('TC-06', 'Open cart GET /me/cart (grouped + fine)');
+    // Shell hub mounts Cart under IndexedStack while on Stores — reuse Auth
+    // hydrate (including empty carts) instead of a second GET. Explicit
+    // refreshSignal still hits the network.
+    if (!forceNetwork &&
+        quiet &&
+        widget.embeddedInShell &&
+        _store.isHydrated) {
+      if (!mounted) return;
+      setState(() {
+        _loading = false;
+        _loadError = null;
+      });
+      CartQa.caseEnd(
+        'TC-06',
+        pass: true,
+        detail:
+            'reuse hydrated items=${_cart.count} stores=${_cart.storeCount}',
+      );
+      return;
+    }
     if (!quiet || _cart.count == 0) {
       setState(() {
         _loading = true;

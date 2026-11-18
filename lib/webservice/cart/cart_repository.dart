@@ -56,6 +56,9 @@ class CartRepositoryImpl implements CartRepository {
   final CartRequest _request;
   final CartStore _store;
 
+  /// Auth hydrate + embedded CartRoute both refresh on shell mount — one GET.
+  Future<CartPage>? _inFlightRefresh;
+
   @override
   CartStore get store => _store;
 
@@ -77,6 +80,33 @@ class CartRepositoryImpl implements CartRepository {
   @override
   Future<void> hydrate({bool loadItems = false}) async {
     CartQa.caseStart('TC-00', 'Hydrate cart cache (badge + in-cart ids)');
+    // Shell CartRoute often finishes GET /me/cart before Auth hydrate —
+    // do not issue a second full cart fetch this session.
+    if (_store.isHydrated) {
+      CartQa.caseEnd(
+        'TC-00',
+        pass: true,
+        detail:
+            'reuse hydrated items=${_store.count} stores=${_store.storeCount}',
+      );
+      return;
+    }
+    final inFlight = _inFlightRefresh;
+    if (inFlight != null) {
+      try {
+        await inFlight;
+        CartQa.caseEnd(
+          'TC-00',
+          pass: true,
+          detail:
+              'reuse in-flight items=${_store.count} stores=${_store.storeCount}',
+        );
+      } catch (e) {
+        AppLog.e(_tag, 'hydrate waited in-flight cart failed', e);
+        CartQa.caseEnd('TC-00', pass: false, detail: '$e');
+      }
+      return;
+    }
     try {
       await refreshCart();
       CartQa.caseEnd(
@@ -103,6 +133,18 @@ class CartRepositoryImpl implements CartRepository {
 
   @override
   Future<CartPage> refreshCart() async {
+    final existing = _inFlightRefresh;
+    if (existing != null) return existing;
+    final future = _refreshCartNetwork();
+    _inFlightRefresh = future;
+    try {
+      return await future;
+    } finally {
+      if (identical(_inFlightRefresh, future)) _inFlightRefresh = null;
+    }
+  }
+
+  Future<CartPage> _refreshCartNetwork() async {
     final page = await _request.fetchCart();
     _store.applyPage(page);
     return page;

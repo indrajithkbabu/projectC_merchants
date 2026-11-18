@@ -20,6 +20,7 @@ import 'package:project_c/presentation/privacy/privacy_widgets/wishlist_item_car
 import 'package:project_c/presentation/search/search_models.dart';
 import 'package:project_c/presentation/search/search_widgets/search_app_bar_field.dart';
 import 'package:project_c/presentation/search/search_widgets/search_filter_bar.dart';
+import 'package:project_c/services/store_products_prefetcher.dart';
 import 'package:project_c/services/wishlist_prefetcher.dart';
 import 'package:project_c/webservice/catalog_error_mapper.dart';
 import 'package:project_c/webservice/store/store_repository.dart';
@@ -74,6 +75,7 @@ class _WishlistRouteState extends State<WishlistRoute>
 
   List<WishlistItem> _items = const [];
   String? _nextCursor;
+
   /// Shell tab never blocks on shimmer — paint warm/empty then quiet-fill.
   bool _loading = false;
   bool _loadingMore = false;
@@ -83,11 +85,13 @@ class _WishlistRouteState extends State<WishlistRoute>
   bool _chromeVisible = true;
   double _measuredChromeHeight = 0;
   double _prevChromeAnimValue = 1;
+
   /// True after the soft keyboard was clearly open while search was focused.
   /// Used so swipe/back IME dismiss can clear stuck focus without racing the
   /// open animation (which can briefly report inset 0).
   bool _sawImeWhileFocused = false;
   Timer? _imeDismissUnfocusTimer;
+
   /// Suppresses scroll-collapse while chrome animates or search is focusing.
   bool _suppressScrollCollapse = false;
   Timer? _suppressScrollCollapseTimer;
@@ -99,6 +103,9 @@ class _WishlistRouteState extends State<WishlistRoute>
   final Map<int, Offset> _pinchPointers = <int, Offset>{};
   double? _pinchStartDistance;
   int _lastWarmedColumns = _minColumns.toInt();
+  final CatalogWarmOwner _warmOwner = CatalogImageCache.createWarmOwner(
+    debugLabel: 'wishlist',
+  );
 
   @override
   void initState() {
@@ -142,7 +149,10 @@ class _WishlistRouteState extends State<WishlistRoute>
 
   @override
   void dispose() {
-    CatalogImageCache.cancelOffscreenWarm(reason: 'wishlistDispose');
+    CatalogImageCache.cancelOffscreenWarm(
+      _warmOwner,
+      reason: 'wishlistDispose',
+    );
     WidgetsBinding.instance.removeObserver(this);
     _imeDismissUnfocusTimer?.cancel();
     _suppressScrollCollapseTimer?.cancel();
@@ -181,6 +191,7 @@ class _WishlistRouteState extends State<WishlistRoute>
       firstIndex: 0,
       lastIndex: math.min(urls.length - 1, warmCount - 1),
       cacheWidth: CatalogImageCache.gridCacheWidth(),
+      owner: _warmOwner,
     );
     _lastWarmedColumns = math.max(_lastWarmedColumns, columns);
   }
@@ -244,19 +255,17 @@ class _WishlistRouteState extends State<WishlistRoute>
     if (!_pinching) return;
     final from = _columns;
     final to =
-        from
-            .round()
-            .clamp(_minColumns.toInt(), _maxColumns.toInt())
-            .toDouble();
+        from.round().clamp(_minColumns.toInt(), _maxColumns.toInt()).toDouble();
     setState(() => _pinching = false);
     _warmWishlistGrid(columns: to.toInt());
     if ((from - to).abs() < 0.02) {
       if (from != to) setState(() => _columns = to);
       return;
     }
-    final anim = Tween<double>(begin: from, end: to).animate(
-      CurvedAnimation(parent: _columnSnap, curve: Curves.easeOutCubic),
-    );
+    final anim = Tween<double>(
+      begin: from,
+      end: to,
+    ).animate(CurvedAnimation(parent: _columnSnap, curve: Curves.easeOutCubic));
     void tick() {
       if (!mounted) return;
       setState(() => _columns = anim.value);
@@ -468,18 +477,14 @@ class _WishlistRouteState extends State<WishlistRoute>
 
   Widget _collapsedChromeActions() {
     final filtersActive =
-        _filters.hasActiveFilters ||
-        _filters.sort != SearchSortOption.newest;
+        _filters.hasActiveFilters || _filters.sort != SearchSortOption.newest;
     final queryActive = _searchCtrl.text.trim().isNotEmpty;
     return AnimatedBuilder(
       animation: _chromeAnim,
       builder: (context, child) {
         final t = (1.0 - _chromeAnim.value).clamp(0.0, 1.0);
         if (t < 0.04) return const SizedBox.shrink();
-        return Opacity(
-          opacity: Curves.easeOutCubic.transform(t),
-          child: child,
-        );
+        return Opacity(opacity: Curves.easeOutCubic.transform(t), child: child);
       },
       child: Row(
         mainAxisSize: MainAxisSize.min,
@@ -640,8 +645,9 @@ class _WishlistRouteState extends State<WishlistRoute>
           if (q.isEmpty) return true;
           final hay =
               '${item.displayTitle} ${item.collectionName} ${item.tag} '
-              '${item.store.name} ${item.metalFilterValues.join(' ')} '
-              '${item.purityLabel}'.toLowerCase();
+                      '${item.store.name} ${item.metalFilterValues.join(' ')} '
+                      '${item.purityLabel}'
+                  .toLowerCase();
           return hay.contains(q);
         }).toList();
 
@@ -688,18 +694,15 @@ class _WishlistRouteState extends State<WishlistRoute>
         storeNames.putIfAbsent(
           sid,
           () =>
-              item.store.name.trim().isEmpty
-                  ? 'Store'
-                  : item.store.name.trim(),
+              item.store.name.trim().isEmpty ? 'Store' : item.store.name.trim(),
         );
       }
     }
     final metalKeys = metalCounts.keys.toList()..sort();
     final purityKeys = purityCounts.keys.toList()..sort();
-    final storeKeys = storeCounts.keys.toList()
-      ..sort(
-        (a, b) => (storeNames[a] ?? a).compareTo(storeNames[b] ?? b),
-      );
+    final storeKeys =
+        storeCounts.keys.toList()
+          ..sort((a, b) => (storeNames[a] ?? a).compareTo(storeNames[b] ?? b));
     return SearchFilterCatalog(
       metals: [
         for (final k in metalKeys)
@@ -749,11 +752,7 @@ class _WishlistRouteState extends State<WishlistRoute>
         'initialTotal': _visible.length,
         'loadPreview': (SearchFilterSelection selection) async {
           final count =
-              _filterItems(
-                _items,
-                filters: selection,
-                query: _query,
-              ).length;
+              _filterItems(_items, filters: selection, query: _query).length;
           return (catalog: _catalogFromItems(_items), totalProducts: count);
         },
       },
@@ -768,9 +767,7 @@ class _WishlistRouteState extends State<WishlistRoute>
       decoration: BoxDecoration(
         color: AppColors.primary.withValues(alpha: 0.12),
         borderRadius: BorderRadius.circular(999),
-        border: Border.all(
-          color: AppColors.primary.withValues(alpha: 0.28),
-        ),
+        border: Border.all(color: AppColors.primary.withValues(alpha: 0.28)),
       ),
       child: Text(
         '$count',
@@ -806,6 +803,25 @@ class _WishlistRouteState extends State<WishlistRoute>
       } else if (!removed) {
         throw StateError('Unable to remove wishlist item');
       }
+      // Clear session override so product details seed hydrate cannot keep
+      // showing wishlisted after remove-from-tab (details→add marks true).
+      if (targetId.isNotEmpty) {
+        WishlistPrefetcher.instance.markWishlisted(targetId, wishlisted: false);
+      }
+      final warm = WishlistPrefetcher.instance.peek();
+      if (warm != null) {
+        WishlistPrefetcher.instance.adopt(
+          WishlistPage(
+            items: [
+              for (final e in warm.items)
+                if (e.id.trim() != id &&
+                    (targetId.isEmpty || e.listingId.trim() != targetId))
+                  e,
+            ],
+            nextCursor: warm.nextCursor,
+          ),
+        );
+      }
       if (!mounted) return;
       setState(() {
         _items = _items.where((e) => e.id != id).toList(growable: false);
@@ -831,16 +847,16 @@ class _WishlistRouteState extends State<WishlistRoute>
               ? await _stores.unfollowStore(storeId)
               : await _stores.followStore(storeId);
       if (!mounted) return;
-      final nextStatus =
-          cancel ? StoreFollowStatus.none : result.status;
+      final nextStatus = cancel ? StoreFollowStatus.none : result.status;
       setState(() {
-        _items =
-            _items.map((e) {
+        _items = _items
+            .map((e) {
               if (e.store.id != storeId) return e;
               return e.copyWith(
                 store: e.store.copyWith(followStatus: nextStatus),
               );
-            }).toList(growable: false);
+            })
+            .toList(growable: false);
         _followBusyStoreId = null;
       });
       if (!cancel && nextStatus.isFollowing) {
@@ -861,17 +877,11 @@ class _WishlistRouteState extends State<WishlistRoute>
       id: item.listingId.trim(),
       title: item.displayTitle,
       description: item.description,
-      tags: [
-        if (item.tag.isNotEmpty) item.tag,
-      ],
+      tags: [if (item.tag.isNotEmpty) item.tag],
       imagePaths:
-          item.photo.url.trim().isEmpty
-              ? const <String>[]
-              : [item.photo.url],
+          item.photo.url.trim().isEmpty ? const <String>[] : [item.photo.url],
       photoAssetIds:
-          item.assetId.trim().isEmpty
-              ? const <String>[]
-              : [item.assetId],
+          item.assetId.trim().isEmpty ? const <String>[] : [item.assetId],
       imageThumbhashes:
           (item.photo.thumbhash?.trim().isNotEmpty ?? false)
               ? [item.photo.thumbhash!.trim()]
@@ -885,22 +895,22 @@ class _WishlistRouteState extends State<WishlistRoute>
   }
 
   /// Active product rows with a photo — swipe feed for product details.
-  List<WishlistItem> get _swipeableVisible =>
-      _visible
-          .where(
-            (e) =>
-                e.isProduct &&
-                e.isActive &&
-                e.listingId.trim().isNotEmpty &&
-                e.store.id.trim().isNotEmpty &&
-                e.photo.url.trim().isNotEmpty,
-          )
-          .toList(growable: false);
+  List<WishlistItem> get _swipeableVisible => _visible
+      .where(
+        (e) =>
+            e.isProduct &&
+            e.isActive &&
+            e.listingId.trim().isNotEmpty &&
+            e.store.id.trim().isNotEmpty &&
+            e.photo.url.trim().isNotEmpty,
+      )
+      .toList(growable: false);
 
   Future<void> _openItem(WishlistItem item) async {
     if (item.isLocked) {
       final storeId = item.store.id.trim();
       if (storeId.isEmpty) return;
+      StoreProductsPrefetcher.instance.prefetch(storeId);
       await Navigator.of(context).pushNamed(
         Routes.storeProfileRoute,
         arguments: <String, Object?>{
@@ -927,9 +937,7 @@ class _WishlistRouteState extends State<WishlistRoute>
         description: item.description,
         tags: const [],
         imagePaths:
-            item.photo.url.trim().isEmpty
-                ? const <String>[]
-                : [item.photo.url],
+            item.photo.url.trim().isEmpty ? const <String>[] : [item.photo.url],
         imageThumbhashes:
             (item.photo.thumbhash?.trim().isNotEmpty ?? false)
                 ? [item.photo.thumbhash!.trim()]
@@ -951,24 +959,22 @@ class _WishlistRouteState extends State<WishlistRoute>
 
     final swipeable = _swipeableVisible;
     final feedIndex = swipeable.indexWhere((e) => e.id == item.id);
-    final feed =
-        swipeable
-            .map((e) {
-              final product = _productFromItem(e);
-              final path =
-                  product.imagePaths.isEmpty ? '' : product.imagePaths.first;
-              final link = _storeLinkFor(e);
-              return ProductDetailsFeedItem(
-                product: product,
-                imageIndex: 0,
-                path: path,
-                storeId: e.store.id.trim(),
-                storeName:
-                    e.store.name.trim().isEmpty ? null : e.store.name.trim(),
-                storeLink: link.isEmpty ? null : link,
-              );
-            })
-            .toList(growable: false);
+    final feed = swipeable
+        .map((e) {
+          final product = _productFromItem(e);
+          final path =
+              product.imagePaths.isEmpty ? '' : product.imagePaths.first;
+          final link = _storeLinkFor(e);
+          return ProductDetailsFeedItem(
+            product: product,
+            imageIndex: 0,
+            path: path,
+            storeId: e.store.id.trim(),
+            storeName: e.store.name.trim().isEmpty ? null : e.store.name.trim(),
+            storeLink: link.isEmpty ? null : link,
+          );
+        })
+        .toList(growable: false);
 
     final product = _productFromItem(item);
     final link = _storeLinkFor(item);
@@ -985,8 +991,7 @@ class _WishlistRouteState extends State<WishlistRoute>
         // Bookmark ≠ public like — seed wishlist only.
         'isWishlisted': true,
         if (feed.isNotEmpty) 'galleryFeed': feed,
-        if (feed.isNotEmpty)
-          'galleryFeedIndex': feedIndex < 0 ? 0 : feedIndex,
+        if (feed.isNotEmpty) 'galleryFeedIndex': feedIndex < 0 ? 0 : feedIndex,
       },
     );
     // Pick up likes/unlikes made in product details without remount shimmer.
@@ -1001,8 +1006,7 @@ class _WishlistRouteState extends State<WishlistRoute>
     final countBadge = total > 0 ? _countPill(total) : null;
     // Float nav over content — reserve space inside scrollables only
     // (never shrink the whole tab with outer bottom padding / blank band).
-    final bottomPad =
-        widget.bottomInset > 0 ? widget.bottomInset + 8 : 24.0;
+    final bottomPad = widget.bottomInset > 0 ? widget.bottomInset + 8 : 24.0;
 
     final collapsedActions = _collapsedChromeActions();
     final hideTitle = widget.hideShellTitle && widget.embeddedInShell;
@@ -1029,41 +1033,41 @@ class _WishlistRouteState extends State<WishlistRoute>
                   )
                 else
                   SizedBox(
-                  height: ShellTabTitleBar.rowHeight,
-                  child: Row(
-                    children: [
-                      if (widget.onBack != null)
-                        AppBackButton(onPressed: widget.onBack),
-                      Expanded(
-                        child: Align(
-                          alignment: Alignment.centerLeft,
-                          child: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Flexible(
-                                child: Text(
-                                  'Wishlist',
-                                  style: AppTextStyles.headline(
-                                    fontSize: 18,
-                                    fontWeight: FontWeight.w700,
-                                    height: 1.2,
+                    height: ShellTabTitleBar.rowHeight,
+                    child: Row(
+                      children: [
+                        if (widget.onBack != null)
+                          AppBackButton(onPressed: widget.onBack),
+                        Expanded(
+                          child: Align(
+                            alignment: Alignment.centerLeft,
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Flexible(
+                                  child: Text(
+                                    'Wishlist',
+                                    style: AppTextStyles.headline(
+                                      fontSize: 18,
+                                      fontWeight: FontWeight.w700,
+                                      height: 1.2,
+                                    ),
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
                                   ),
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
                                 ),
-                              ),
-                              if (countBadge != null) ...[
-                                const SizedBox(width: 8),
-                                countBadge,
+                                if (countBadge != null) ...[
+                                  const SizedBox(width: 8),
+                                  countBadge,
+                                ],
                               ],
-                            ],
+                            ),
                           ),
                         ),
-                      ),
-                      collapsedActions,
-                    ],
+                        collapsedActions,
+                      ],
+                    ),
                   ),
-                ),
               ] else
                 Align(
                   alignment: Alignment.centerRight,
@@ -1175,29 +1179,28 @@ class _WishlistRouteState extends State<WishlistRoute>
                                       ),
                                       childAspectRatio: 1,
                                     ),
-                                delegate: SliverChildBuilderDelegate(
-                                  (context, index) {
-                                    final item = visible[index];
-                                    return IgnorePointer(
-                                      ignoring: _pinching,
-                                      child: WishlistItemCard(
-                                        key: ValueKey(item.id),
-                                        item: item,
-                                        onTap: () => _openItem(item),
-                                        onRemove: () => _remove(item),
-                                        onFollow:
-                                            item.isLocked
-                                                ? () => _followLocked(item)
-                                                : null,
-                                        isFollowBusy:
-                                            _followBusyStoreId ==
-                                            item.store.id,
-                                        isRemoveBusy: _busyId == item.id,
-                                      ),
-                                    );
-                                  },
-                                  childCount: visible.length,
-                                ),
+                                delegate: SliverChildBuilderDelegate((
+                                  context,
+                                  index,
+                                ) {
+                                  final item = visible[index];
+                                  return IgnorePointer(
+                                    ignoring: _pinching,
+                                    child: WishlistItemCard(
+                                      key: ValueKey(item.id),
+                                      item: item,
+                                      onTap: () => _openItem(item),
+                                      onRemove: () => _remove(item),
+                                      onFollow:
+                                          item.isLocked
+                                              ? () => _followLocked(item)
+                                              : null,
+                                      isFollowBusy:
+                                          _followBusyStoreId == item.store.id,
+                                      isRemoveBusy: _busyId == item.id,
+                                    ),
+                                  );
+                                }, childCount: visible.length),
                               ),
                             ),
                             if (_loadingMore)
@@ -1270,9 +1273,7 @@ class _WishlistShimmerState extends State<_WishlistShimmer>
           ),
           itemCount: 6,
           itemBuilder: (_, __) {
-            return Container(
-              decoration: AppShimmer.box(t, radius: 12),
-            );
+            return Container(decoration: AppShimmer.box(t, radius: 12));
           },
         );
       },

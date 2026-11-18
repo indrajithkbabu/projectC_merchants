@@ -1,4 +1,5 @@
 import 'package:equatable/equatable.dart';
+import 'package:project_c/models/catalog/catalog_product_models.dart';
 import 'package:project_c/models/store_product.dart';
 
 /// One photo in a multi-product details swipe feed (e.g. store gallery / search).
@@ -11,6 +12,7 @@ class ProductDetailsFeedItem extends Equatable {
     this.storeName,
     this.storeLink,
     this.seedCategory,
+    this.seedCatalog,
   });
 
   final StoreProduct product;
@@ -27,6 +29,11 @@ class ProductDetailsFeedItem extends Equatable {
   /// Category seed until detail specs load (search hits).
   final String? seedCategory;
 
+  /// Full list/detail [CatalogProduct] when the opener already loaded it
+  /// (e.g. collection browse `products?collectionId=`). Details can hydrate
+  /// specs / liked / wishlisted from this and skip `GET /products/:id`.
+  final CatalogProduct? seedCatalog;
+
   @override
   List<Object?> get props => [
         product.id,
@@ -36,5 +43,10 @@ class ProductDetailsFeedItem extends Equatable {
         storeName,
         storeLink,
         seedCategory,
+        seedCatalog?.id,
+        seedCatalog?.liked,
+        seedCatalog?.wishlisted,
+        seedCatalog?.likeCount,
+        seedCatalog?.viewCount,
       ];
 }

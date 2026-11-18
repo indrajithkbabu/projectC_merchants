@@ -1,7 +1,7 @@
 import 'package:equatable/equatable.dart';
 import 'package:project_c/helper/catalog_media_debug.dart';
 import 'package:project_c/models/bulk_upload.dart';
-import 'package:project_c/models/catalog/catalog_stock_status.dart';
+import 'package:project_c/models/catalog/catalog_product_models.dart';
 import 'package:project_c/models/catalog/collection_specifications.dart';
 import 'package:project_c/models/catalog/quick_import_api_models.dart';
 
@@ -122,8 +122,12 @@ class CatalogPhoto extends Equatable {
   final DateTime? updatedAt;
 
   factory CatalogPhoto.fromJson(Map<String, dynamic> json) {
+    final rawId = (json['id'] as String?)?.trim() ?? '';
+    final rawImageId = (json['imageId'] as String?)?.trim() ?? '';
+    final id =
+        rawId.isNotEmpty ? rawId : (rawImageId.isNotEmpty ? rawImageId : null);
     return CatalogPhoto(
-      id: json['id'] as String?,
+      id: id,
       width: (json['width'] as num?)?.toInt() ?? 0,
       height: (json['height'] as num?)?.toInt() ?? 0,
       url: json['url'] as String? ?? '',
@@ -299,6 +303,7 @@ class CollectionSummary extends Equatable {
     this.declinedProductCount,
     this.createdAt,
     this.updatedAt,
+    this.products = const [],
   });
 
   final String id;
@@ -341,6 +346,10 @@ class CollectionSummary extends Equatable {
 
   /// Last edit — members only; omitted for public viewers.
   final DateTime? updatedAt;
+
+  /// Embedded products when list is called with `include=products` (BE-2).
+  /// Empty for slim list responses — FE falls back to products?collectionId=.
+  final List<CatalogProduct> products;
 
   factory CollectionSummary.fromJson(Map<String, dynamic> json) {
     final perms = json['permissions'];
@@ -386,8 +395,23 @@ class CollectionSummary extends Equatable {
         (json['productCount'] as num?)?.toInt() ??
         (json['photoCount'] as num?)?.toInt() ??
         0;
+    // BE-2: only the `products` key (not `items` — that is the collections page).
+    final rawEmbedded = json['products'];
+    final embedded = <CatalogProduct>[];
+    if (rawEmbedded is List) {
+      for (final entry in rawEmbedded) {
+        if (entry is! Map) continue;
+        try {
+          embedded.add(
+            CatalogProduct.fromJson(Map<String, dynamic>.from(entry)),
+          );
+        } catch (_) {
+          // Skip malformed rows; legacy enrich can still hydrate this card.
+        }
+      }
+    }
     return CollectionSummary(
-      id: json['id'] as String? ?? '',
+      id: json['id'] as String? ?? json['_id'] as String? ?? '',
       name: json['name'] as String? ?? '',
       tag: json['tag'] as String? ?? '',
       description: json['description'] as String? ?? '',
@@ -433,6 +457,7 @@ class CollectionSummary extends Equatable {
       updatedAt: parseCatalogDateTime(
         json['updatedAt'] ?? json['updated_at'],
       ),
+      products: embedded,
     );
   }
 
@@ -464,6 +489,7 @@ class CollectionSummary extends Equatable {
     declinedProductCount,
     createdAt,
     updatedAt,
+    products,
   ];
 }
 

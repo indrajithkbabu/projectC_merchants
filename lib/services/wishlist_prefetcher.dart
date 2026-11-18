@@ -54,6 +54,8 @@ class WishlistPrefetcher {
   void invalidate() {
     _warm = null;
     _inFlight = null;
+    _localWishlisted.clear();
+    _localUnwishlisted.clear();
   }
 
   /// Apply a successful fetch into the warm cache (e.g. after tab quiet load).
@@ -61,10 +63,38 @@ class WishlistPrefetcher {
     _warm = page;
   }
 
+  /// Session overrides after details toggle (browse seed can stay stale).
+  final Set<String> _localWishlisted = <String>{};
+  final Set<String> _localUnwishlisted = <String>{};
+
+  /// Record a successful wishlist add/remove so seed hydrate cannot wipe it.
+  void markWishlisted(String targetId, {required bool wishlisted}) {
+    final id = targetId.trim();
+    if (id.isEmpty) return;
+    if (wishlisted) {
+      _localWishlisted.add(id);
+      _localUnwishlisted.remove(id);
+    } else {
+      _localUnwishlisted.add(id);
+      _localWishlisted.remove(id);
+    }
+  }
+
+  /// Explicit session override, or null when none.
+  bool? wishlistOverride(String targetId) {
+    final id = targetId.trim();
+    if (id.isEmpty) return null;
+    if (_localUnwishlisted.contains(id)) return false;
+    if (_localWishlisted.contains(id)) return true;
+    return null;
+  }
+
   /// Best-effort: product/collection id is in the warm wishlist page.
   bool containsTargetId(String targetId) {
     final id = targetId.trim();
     if (id.isEmpty) return false;
+    final override = wishlistOverride(id);
+    if (override != null) return override;
     final page = _warm;
     if (page == null) return false;
     for (final item in page.items) {

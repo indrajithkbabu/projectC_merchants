@@ -67,9 +67,10 @@ class PendingUploadsSliver extends StatelessWidget {
     final slivers = <Widget>[];
     for (final item in pending) {
       final photos = _visiblePhotos(item);
-      final count = photos.isNotEmpty
-          ? photos.length
-          : (item.photoCount < 1 ? 1 : item.photoCount);
+      final count =
+          photos.isNotEmpty
+              ? photos.length
+              : (item.photoCount < 1 ? 1 : item.photoCount);
       slivers.add(
         SliverToBoxAdapter(
           child: Padding(
@@ -101,9 +102,11 @@ class PendingUploadsSliver extends StatelessWidget {
             crossAxisSpacing: 2,
           ),
           itemCount: count,
-          itemBuilder: (context, index) => item.hasFailed
-              ? const _FailedCloseTile()
-              : const _PendingShimmerFallback(),
+          itemBuilder:
+              (context, index) =>
+                  item.hasFailed
+                      ? const _FailedCloseTile()
+                      : const _PendingShimmerFallback(),
         );
       } else {
         grid = _PendingRevealHost(
@@ -156,10 +159,7 @@ List<int> _tickableIndexes(List<PendingPhotoSlot> photos) {
 
 /// Blocks taps while uploading; on failure, tap retries the API call.
 class _PendingInteractionShell extends StatelessWidget {
-  const _PendingInteractionShell({
-    required this.pending,
-    required this.child,
-  });
+  const _PendingInteractionShell({required this.pending, required this.child});
 
   final PendingProductUpload pending;
   final Widget child;
@@ -183,11 +183,8 @@ class _PendingInteractionShell extends StatelessWidget {
 
 /// Drives one-by-one tick reveal after [PendingProductUpload.isRevealing].
 class _PendingRevealHost extends StatefulWidget {
-  const _PendingRevealHost({
-    required this.pending,
-    this.child,
-    this.builder,
-  }) : assert(child != null || builder != null);
+  const _PendingRevealHost({required this.pending, this.child, this.builder})
+    : assert(child != null || builder != null);
 
   final PendingProductUpload pending;
   final Widget? child;
@@ -308,10 +305,7 @@ class _PendingRevealHostState extends State<_PendingRevealHost> {
 }
 
 class _PendingUploadCard extends StatelessWidget {
-  const _PendingUploadCard({
-    required this.pending,
-    required this.large,
-  });
+  const _PendingUploadCard({required this.pending, required this.large});
 
   final PendingProductUpload pending;
   final bool large;
@@ -324,17 +318,13 @@ class _PendingUploadCard extends StatelessWidget {
       for (final slot in photos)
         if (slot.paintPath.isNotEmpty) slot,
     ];
-    final paths = <String>[
-      for (final slot in visibleSlots) slot.paintPath,
-    ];
+    final paths = <String>[for (final slot in visibleSlots) slot.paintPath];
     final hashes = <String>[
       for (final slot in visibleSlots) slot.thumbhash.trim(),
     ];
     final aspectRatios = <double?>[
       for (final hash in hashes)
-        ProductImagePaths.thumbhashAspectRatio(
-          hash.isEmpty ? null : hash,
-        ),
+        ProductImagePaths.thumbhashAspectRatio(hash.isEmpty ? null : hash),
     ];
 
     return _PendingInteractionShell(
@@ -359,6 +349,10 @@ class _PendingUploadCard extends StatelessWidget {
                       imageThumbhashes: hashes,
                       imageAspectRatios: aspectRatios,
                       layoutIdentity: 'pending_${pending.id}_${paths.length}',
+                      decodeCacheWidth: CatalogImageCache.collageCellCacheWidth(
+                        imageCount: paths.length,
+                        screenWidth: MediaQuery.sizeOf(context).width,
+                      ),
                       cellOverlayBuilder: (index) {
                         if (index < 0 || index >= visibleSlots.length) {
                           return const SizedBox.shrink();
@@ -491,28 +485,29 @@ class _UploadStatusOverlay extends StatelessWidget {
               color: AppColors.overlayBadge,
             ),
             alignment: Alignment.center,
-            child: showFail
-                ? Icon(
-                    Icons.close_rounded,
-                    size: 22,
-                    color: AppColors.textOnPrimary,
-                  )
-                : showTick
+            child:
+                showFail
                     ? Icon(
-                        Icons.check_rounded,
-                        size: 22,
-                        color: AppColors.textOnPrimary,
-                      )
+                      Icons.close_rounded,
+                      size: 22,
+                      color: AppColors.textOnPrimary,
+                    )
+                    : showTick
+                    ? Icon(
+                      Icons.check_rounded,
+                      size: 22,
+                      color: AppColors.textOnPrimary,
+                    )
                     : showLoader
-                        ? SizedBox(
-                            width: 18,
-                            height: 18,
-                            child: CircularProgressIndicator(
-                              strokeWidth: 2.2,
-                              color: AppColors.textOnPrimary,
-                            ),
-                          )
-                        : const SizedBox.shrink(),
+                    ? SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2.2,
+                        color: AppColors.textOnPrimary,
+                      ),
+                    )
+                    : const SizedBox.shrink(),
           ),
         ),
       ),

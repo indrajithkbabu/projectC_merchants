@@ -38,10 +38,13 @@ class _StoreGalleryBodyState extends State<StoreGalleryBody> {
   DateTime? _lastDecodeAt;
   List<String> _flatUrls = const [];
   CatalogImageRole _warmRole = CatalogImageRole.grid;
+  final CatalogWarmOwner _warmOwner = CatalogImageCache.createWarmOwner(
+    debugLabel: 'gallery',
+  );
 
   @override
   void dispose() {
-    CatalogImageCache.cancelOffscreenWarm(reason: 'galleryDispose');
+    CatalogImageCache.cancelOffscreenWarm(_warmOwner, reason: 'galleryDispose');
     _scrollController.dispose();
     super.dispose();
   }
@@ -71,7 +74,7 @@ class _StoreGalleryBodyState extends State<StoreGalleryBody> {
     _lastDiskWarmCount = urls.length;
     // Disk only — decode is viewport-scoped via scroll.
     // ignore: unawaited_futures
-    CatalogImageCache.precacheUrls(urls);
+    CatalogImageCache.precacheUrls(urls, owner: _warmOwner);
     CatalogMediaDebug.feQa(
       'P3.5',
       status: 'PASS',
@@ -93,6 +96,7 @@ class _StoreGalleryBodyState extends State<StoreGalleryBody> {
       // ignore: unawaited_futures
       CatalogImageCache.precacheUrls(
         _collectUrls(state, role: CatalogImageRole.grid),
+        owner: _warmOwner,
       );
     }
     if (roleChanged || countChanged) {
@@ -128,6 +132,7 @@ class _StoreGalleryBodyState extends State<StoreGalleryBody> {
         firstIndex: 0,
         lastIndex: CatalogImageCache.defaultMaxDecode - 1,
         cacheWidth: cacheWidth,
+        owner: _warmOwner,
       );
       return;
     }
@@ -136,6 +141,7 @@ class _StoreGalleryBodyState extends State<StoreGalleryBody> {
       urls: _flatUrls,
       metrics: m,
       cacheWidth: cacheWidth,
+      owner: _warmOwner,
     );
   }
 
@@ -187,7 +193,9 @@ class _StoreGalleryBodyState extends State<StoreGalleryBody> {
           return Center(
             child: Text(
               'No photos yet',
-              style: AppTextStyles.bodySecondary(color: AppColors.textOnPrimary),
+              style: AppTextStyles.bodySecondary(
+                color: AppColors.textOnPrimary,
+              ),
             ),
           );
         }
@@ -200,31 +208,23 @@ class _StoreGalleryBodyState extends State<StoreGalleryBody> {
 
         return RawGestureDetector(
           gestures: {
-            ScaleGestureRecognizer:
-                GestureRecognizerFactoryWithHandlers<ScaleGestureRecognizer>(
-                  () => ScaleGestureRecognizer(),
-                  (instance) {
-                    instance
-                      ..onStart = _onScaleStart
-                      ..onUpdate = (details) {
-                        final before =
-                            context
-                                .read<StoreGalleryBloc>()
-                                .state
-                                .crossAxisCount;
-                        _onScaleUpdate(details);
-                        final after =
-                            context
-                                .read<StoreGalleryBloc>()
-                                .state
-                                .crossAxisCount;
-                        if (after != before) {
-                          _lastDecodeKey = -1;
-                          _warmDecodeWindow();
-                        }
-                      };
-                  },
-                ),
+            ScaleGestureRecognizer: GestureRecognizerFactoryWithHandlers<
+              ScaleGestureRecognizer
+            >(() => ScaleGestureRecognizer(), (instance) {
+              instance
+                ..onStart = _onScaleStart
+                ..onUpdate = (details) {
+                  final before =
+                      context.read<StoreGalleryBloc>().state.crossAxisCount;
+                  _onScaleUpdate(details);
+                  final after =
+                      context.read<StoreGalleryBloc>().state.crossAxisCount;
+                  if (after != before) {
+                    _lastDecodeKey = -1;
+                    _warmDecodeWindow();
+                  }
+                };
+            }),
           },
           child: NotificationListener<ScrollNotification>(
             onNotification: (notification) {
@@ -242,9 +242,11 @@ class _StoreGalleryBodyState extends State<StoreGalleryBody> {
               slivers: [
                 if (widget.topInset > 0)
                   SliverToBoxAdapter(child: SizedBox(height: widget.topInset)),
-                for (var dayIndex = 0;
-                    dayIndex < state.sections.length;
-                    dayIndex++)
+                for (
+                  var dayIndex = 0;
+                  dayIndex < state.sections.length;
+                  dayIndex++
+                )
                   ..._daySlivers(
                     state.sections[dayIndex],
                     state.crossAxisCount,
@@ -304,9 +306,7 @@ class _StoreGalleryBodyState extends State<StoreGalleryBody> {
                 style: AppTextStyles.body(
                   fontWeight: FontWeight.w600,
                   color:
-                      isFocused
-                          ? AppColors.primary
-                          : AppColors.textOnPrimary,
+                      isFocused ? AppColors.primary : AppColors.textOnPrimary,
                 ),
               ),
             ),
@@ -394,10 +394,7 @@ class _GalleryTile extends StatelessWidget {
   Widget build(BuildContext context) {
     return GestureDetector(
       onTap: onTap,
-      child: ColoredBox(
-        color: AppColors.surfaceSecondary,
-        child: _tileImage(),
-      ),
+      child: ColoredBox(color: AppColors.surfaceSecondary, child: _tileImage()),
     );
   }
 

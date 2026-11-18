@@ -193,6 +193,14 @@ class _BootstrapHomePreviewState extends State<_BootstrapHomePreview> {
         context.select<AuthBloc, CatalogProfile?>((b) => b.state.profile) ??
         session.profile;
     final hasStore = (profile?.ownStore?.id.trim() ?? '').isNotEmpty;
+    // Match MainShell nav avatar source so bootstrap → shell does not flicker.
+    final active = session.activeProfile;
+    final initials =
+        active?.displayInitials ?? _initialsFromProfile(profile) ?? 'Me';
+    final imageUrl =
+        (active?.effectiveAvatarUrl.trim().isNotEmpty == true)
+            ? active!.effectiveAvatarUrl.trim()
+            : (profile?.effectiveProfileImageUrl.trim() ?? '');
     final bottomPad = FloatingBottomNavBar.reservedHeight(context) + 8;
     final stores = _stores;
 
@@ -271,7 +279,7 @@ class _BootstrapHomePreviewState extends State<_BootstrapHomePreview> {
             child: FloatingBottomNavBar(
               currentIndex: 0,
               onChanged: (_) {},
-              items: _navItems(hasStore: hasStore),
+              items: _navItems(initials: initials, imageUrl: imageUrl),
             ),
           ),
         ],
@@ -279,61 +287,93 @@ class _BootstrapHomePreviewState extends State<_BootstrapHomePreview> {
     );
   }
 
-  List<FloatingNavItem> _navItems({required bool hasStore}) {
-    if (!hasStore) {
-      return const [
-        FloatingNavItem(
-          tab: FloatingNavTab.stores,
-          label: 'Stores',
-          icon: Icons.home_outlined,
-          activeIcon: Icons.home_rounded,
-        ),
-        FloatingNavItem(
-          tab: FloatingNavTab.contacts,
-          label: 'Contacts',
-          icon: Icons.person_outline_rounded,
-          activeIcon: Icons.person_rounded,
-        ),
-        FloatingNavItem(
-          tab: FloatingNavTab.settings,
-          label: 'Settings',
-          icon: Icons.settings_outlined,
-          activeIcon: Icons.settings_rounded,
-        ),
-        FloatingNavItem(
-          tab: FloatingNavTab.profile,
-          label: 'Profile',
-          icon: Icons.account_circle_outlined,
-          activeIcon: Icons.account_circle_rounded,
-        ),
-      ];
-    }
-    return const [
-      FloatingNavItem(
+  /// Same tab set as [MainShellRoute]: Stores · Message · Wishlist · Profile.
+  List<FloatingNavItem> _navItems({
+    required String initials,
+    required String imageUrl,
+  }) {
+    return [
+      const FloatingNavItem(
         tab: FloatingNavTab.stores,
         label: 'Stores',
         icon: Icons.home_outlined,
         activeIcon: Icons.home_rounded,
       ),
-      FloatingNavItem(
+      const FloatingNavItem(
         tab: FloatingNavTab.contacts,
-        label: 'Contacts',
-        icon: Icons.person_outline_rounded,
-        activeIcon: Icons.person_rounded,
+        label: 'Message',
+        icon: Icons.chat_bubble_outline_rounded,
+        activeIcon: Icons.chat_bubble_rounded,
       ),
-      FloatingNavItem(
+      const FloatingNavItem(
         tab: FloatingNavTab.wishlist,
         label: 'Wishlist',
         icon: Icons.favorite_border_rounded,
         activeIcon: Icons.favorite_rounded,
       ),
       FloatingNavItem(
-        tab: FloatingNavTab.myStore,
-        label: 'My store',
-        icon: Icons.store_mall_directory_outlined,
-        activeIcon: Icons.store_mall_directory_rounded,
+        tab: FloatingNavTab.profile,
+        label: 'Profile',
+        icon: Icons.account_circle_outlined,
+        avatar: _BootstrapNavProfileAvatar(
+          initials: initials,
+          imageUrl: imageUrl,
+        ),
       ),
     ];
+  }
+
+  static String? _initialsFromProfile(CatalogProfile? profile) {
+    if (profile == null) return null;
+    final first = profile.firstName?.trim() ?? '';
+    final last = profile.lastName?.trim() ?? '';
+    if (first.isNotEmpty && last.isNotEmpty) {
+      return '${first[0]}${last[0]}'.toUpperCase();
+    }
+    final name = profile.displayName.trim();
+    if (name.isEmpty) return null;
+    final parts = name.split(RegExp(r'\s+'));
+    if (parts.length >= 2 && parts[0].isNotEmpty && parts[1].isNotEmpty) {
+      return '${parts[0][0]}${parts[1][0]}'.toUpperCase();
+    }
+    return name.substring(0, name.length.clamp(0, 2)).toUpperCase();
+  }
+}
+
+/// Compact Profile nav avatar matching shell chrome (photo or initials).
+class _BootstrapNavProfileAvatar extends StatelessWidget {
+  const _BootstrapNavProfileAvatar({
+    required this.initials,
+    required this.imageUrl,
+  });
+
+  final String initials;
+  final String imageUrl;
+
+  @override
+  Widget build(BuildContext context) {
+    final url = imageUrl.trim();
+    final bg = AppColors.surfaceSecondary;
+    if (url.isNotEmpty) {
+      return CatalogNetworkAvatar(
+        key: ValueKey('bootstrap-nav-avatar:$url'),
+        url: url,
+        size: 22,
+        backgroundColor: bg,
+      );
+    }
+    return CircleAvatar(
+      radius: 11,
+      backgroundColor: bg,
+      child: Text(
+        initials,
+        style: AppTextStyles.caption(
+          fontSize: 9,
+          fontWeight: FontWeight.w700,
+          color: AppColors.navBarInactive,
+        ),
+      ),
+    );
   }
 }
 

@@ -13,6 +13,7 @@ class StoreChannel extends Equatable {
     this.isOwn = false,
     this.relationship,
     this.followStatus = StoreFollowStatus.none,
+    this.canViewContent,
     this.coverImageUrl = '',
     this.imageUrls = const [],
     this.phone = '',
@@ -33,6 +34,10 @@ class StoreChannel extends Equatable {
 
   /// From home/detail `followStatus` (owner/member → `self`).
   final StoreFollowStatus followStatus;
+
+  /// From home/detail [CatalogStore.resolvedCanViewContent] when known.
+  /// Lets profile unlock the grid on tap without waiting for GET store.
+  final bool? canViewContent;
 
   /// Accepted staff membership (not owner).
   bool get isMember => relationship == StoreRelationship.member;
@@ -87,6 +92,7 @@ class StoreChannel extends Equatable {
     bool? isOwn,
     StoreRelationship? relationship,
     StoreFollowStatus? followStatus,
+    bool? canViewContent,
     String? coverImageUrl,
     List<String>? imageUrls,
     String? phone,
@@ -101,6 +107,7 @@ class StoreChannel extends Equatable {
       isOwn: isOwn ?? this.isOwn,
       relationship: relationship ?? this.relationship,
       followStatus: followStatus ?? this.followStatus,
+      canViewContent: canViewContent ?? this.canViewContent,
       coverImageUrl: coverImageUrl ?? this.coverImageUrl,
       imageUrls: imageUrls ?? this.imageUrls,
       phone: phone ?? this.phone,
@@ -253,6 +260,7 @@ class StoreChannel extends Equatable {
     isOwn,
     relationship,
     followStatus,
+    canViewContent,
     coverImageUrl,
     imageUrls,
     phone,

@@ -12,9 +12,11 @@ import 'package:project_c/presentation/storeprofile/storeprofile_widgets/visitor
 
 /// Light-theme gallery mosaic (store profile Gallery + channel Gallery tab).
 ///
-/// Pinch columns (2…9) via [GalleryPinchHost] / parent; quality follows the
-/// same ladder as channel Media (`roleForMediaColumns`).
-class StoreProductGallerySliver extends StatelessWidget {
+/// Pinch columns (2…9) via [GalleryPinchHost] / parent. Paint role follows
+/// [CatalogResponsiveImage.roleForMediaColumns] but **locks while pinching**
+/// so mid-pinch does not flip thumbnail↔detail (Img High #4). Uses real
+/// [SliverGrid]s (no nested `shrinkWrap` GridViews — UI-1).
+class StoreProductGallerySliver extends StatefulWidget {
   const StoreProductGallerySliver({
     super.key,
     required this.products,
@@ -58,16 +60,43 @@ class StoreProductGallerySliver extends StatelessWidget {
   final GlobalKey? focusKey;
 
   @override
+  State<StoreProductGallerySliver> createState() =>
+      _StoreProductGallerySliverState();
+}
+
+class _StoreProductGallerySliverState extends State<StoreProductGallerySliver> {
+  /// Role at pinch start — held until release so URL tier does not thrash.
+  CatalogImageRole? _lockedPaintRole;
+
+  @override
+  void didUpdateWidget(covariant StoreProductGallerySliver oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.pinching && !oldWidget.pinching) {
+      _lockedPaintRole = CatalogResponsiveImage.roleForMediaColumns(
+        oldWidget.columns.round().clamp(2, 9),
+      );
+    } else if (!widget.pinching) {
+      _lockedPaintRole = null;
+    }
+  }
+
+  CatalogImageRole get _paintRole {
+    final locked = _lockedPaintRole;
+    if (widget.pinching && locked != null) return locked;
+    return CatalogResponsiveImage.roleForMediaColumns(
+      widget.columns.round().clamp(2, 9),
+    );
+  }
+
+  @override
   Widget build(BuildContext context) {
-    if (products.isEmpty) {
-      if (isLoading) {
+    if (widget.products.isEmpty) {
+      // Loading or disk hydrate — shimmer, never a blank hole.
+      if (widget.isLoading || !widget.productsResolved) {
         return StoreProductGridShimmer(
           viewMode: ProductViewMode.gallery,
-          galleryColumns: columns.round().clamp(2, 9),
+          galleryColumns: widget.columns.round().clamp(2, 9),
         );
-      }
-      if (!productsResolved) {
-        return const SliverToBoxAdapter(child: SizedBox.shrink());
       }
       return SliverFillRemaining(
         hasScrollBody: false,
@@ -80,14 +109,17 @@ class StoreProductGallerySliver extends StatelessWidget {
       );
     }
 
-    final crossAxisCount = columns.round().clamp(2, 9);
-    final paintRole =
-        CatalogResponsiveImage.roleForMediaColumns(crossAxisCount);
-    final decodeWidth = CatalogImageCache.cacheWidthForRole(paintRole);
+    final crossAxisCount = widget.columns.round().clamp(2, 9);
+    final paintRole = _paintRole;
+    // Role picks URL tier; decode follows cell width (Img High #3).
+    final decodeWidth = CatalogImageCache.cacheWidthForMediaColumns(
+      crossAxisCount,
+      screenWidth: MediaQuery.sizeOf(context).width,
+    );
     final spacing = crossAxisCount >= 6 ? 1.0 : 2.0;
 
-    final focusId = focusProductId?.trim() ?? '';
-    final sections = StoreGalleryState.buildSections(products);
+    final focusId = widget.focusProductId?.trim() ?? '';
+    final sections = StoreGalleryState.buildSections(widget.products);
     final slivers = <Widget>[];
 
     for (var dayIndex = 0; dayIndex < sections.length; dayIndex++) {
@@ -109,14 +141,14 @@ class StoreProductGallerySliver extends StatelessWidget {
       for (var i = 0; i < day.products.length; i++) {
         final section = day.products[i];
         final product = section.product;
-        final selected = selectedIds.contains(product.id);
+        final selected = widget.selectedIds.contains(product.id);
         final focused = focusId.isNotEmpty && product.id == focusId;
 
         if (!day.isSingleProduct) {
           slivers.add(
             SliverToBoxAdapter(
               child: Padding(
-                key: focused ? focusKey : null,
+                key: focused ? widget.focusKey : null,
                 padding: EdgeInsets.only(top: i == 0 ? 0 : 14, bottom: 6),
                 child: Row(
                   children: [
@@ -132,13 +164,13 @@ class StoreProductGallerySliver extends StatelessWidget {
                         ),
                       ),
                     ),
-                    if (selectionMode) _MiniCheck(isSelected: selected),
+                    if (widget.selectionMode) _MiniCheck(isSelected: selected),
                   ],
                 ),
               ),
             ),
           );
-        } else if (selectionMode) {
+        } else if (widget.selectionMode) {
           slivers.add(
             SliverToBoxAdapter(
               child: Align(
@@ -152,162 +184,162 @@ class StoreProductGallerySliver extends StatelessWidget {
           );
         }
 
-        slivers.add(
-          SliverToBoxAdapter(
-            child: KeyedSubtree(
-              key: day.isSingleProduct && focused ? focusKey : null,
-              child: DecoratedBox(
-                decoration: BoxDecoration(
-                  border:
-                      focused
-                          ? Border.all(color: AppColors.primary, width: 2.5)
-                          : null,
-                  borderRadius: focused ? BorderRadius.circular(4) : null,
-                ),
-                child: GridView.builder(
-                  shrinkWrap: true,
-                  physics: const NeverScrollableScrollPhysics(),
-                  padding: EdgeInsets.zero,
-                  gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-                    crossAxisCount: crossAxisCount,
-                    mainAxisSpacing: spacing,
-                    crossAxisSpacing: spacing,
-                  ),
-                  itemCount: section.tileCount,
-                  itemBuilder: (context, index) {
-                    final path =
-                        section.imagePaths.isEmpty
-                            ? null
-                            : product.urlForRole(
-                              index,
-                              paintRole,
-                              log: index == 0 && dayIndex == 0,
-                            );
-                    if (index == 0 &&
-                        dayIndex == 0 &&
-                        path != null &&
-                        path.isNotEmpty) {
-                      CatalogMediaDebug.qualityMediaPaint(
-                        columns: crossAxisCount,
-                        role: paintRole,
-                        sampleUrl: path,
+        final grid = SliverGrid(
+          gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+            crossAxisCount: crossAxisCount,
+            mainAxisSpacing: spacing,
+            crossAxisSpacing: spacing,
+          ),
+          delegate: SliverChildBuilderDelegate(
+            (context, index) {
+              final path =
+                  section.imagePaths.isEmpty
+                      ? null
+                      : product.urlForRole(
+                        index,
+                        paintRole,
+                        log: index == 0 && dayIndex == 0,
                       );
-                    }
-                    return Builder(
-                      builder: (tileContext) {
-                        final photoKey = '${product.id}|$index';
-                        final photoSelected =
-                            selectedPhotoKeys.contains(photoKey);
-                        return GestureDetector(
-                          onTap:
-                              pinching
-                                  ? null
-                                  : () {
-                                    Rect? sourceRect;
-                                    final box = tileContext.findRenderObject();
-                                    if (box is RenderBox && box.hasSize) {
-                                      sourceRect =
-                                          box.localToGlobal(Offset.zero) &
-                                          box.size;
-                                    }
-                                    onImageTap(
-                                      product,
-                                      index,
-                                      sourceRect: sourceRect,
-                                    );
-                                  },
-                          onLongPress:
-                              pinching
-                                  ? null
-                                  : onImageLongPress != null
-                                  ? () => onImageLongPress!(product, index)
-                                  : onProductLongPress == null
-                                  ? null
-                                  : () => onProductLongPress!(product),
-                          child: ColoredBox(
-                            color: AppColors.surfaceSecondary,
-                            child: Stack(
-                              fit: StackFit.expand,
-                              children: [
-                                _tileImage(
-                                  path,
-                                  product.toneIndex,
-                                  product.thumbhashAt(index),
-                                  decodeWidth,
-                                ),
-                                if (product.isImportDeclinedAt(index) ||
-                                    product.isImportPendingAt(index))
-                                  Positioned(
-                                    top: 5,
-                                    left: 5,
-                                    child: Container(
-                                      padding: const EdgeInsets.symmetric(
-                                        horizontal: 6,
-                                        vertical: 3,
-                                      ),
-                                      decoration: BoxDecoration(
-                                        color:
-                                            product.isImportDeclinedAt(index)
-                                                ? AppColors.error.withValues(
-                                                  alpha: 0.92,
-                                                )
-                                                : AppColors.warning.withValues(
-                                                  alpha: 0.92,
-                                                ),
-                                        borderRadius: BorderRadius.circular(8),
-                                      ),
-                                      child: Text(
-                                        product.isImportDeclinedAt(index)
-                                            ? 'Declined'
-                                            : 'Pending',
-                                        maxLines: 1,
-                                        overflow: TextOverflow.ellipsis,
-                                        style: AppTextStyles.caption(
-                                          fontSize: 10,
-                                          fontWeight: FontWeight.w700,
-                                          color: Colors.white,
-                                        ),
-                                      ),
-                                    ),
-                                  ),
-                                if (photoSelectionMode)
-                                  Positioned(
-                                    top: 5,
-                                    right: 5,
-                                    child: TelegramPhotoSelectBadge(
-                                      selected: photoSelected,
-                                    ),
-                                  ),
-                                if (photoSelectionMode)
-                                  Positioned(
-                                    top:
-                                        product.isImportDeclinedAt(index) ||
-                                                product.isImportPendingAt(
-                                                  index,
-                                                )
-                                            ? 28
-                                            : 5,
-                                    left: 5,
-                                    right: 28,
-                                    child: VisitorImportStatusMarks(
-                                      locked: product.isLockedAt(index),
-                                      stock: product.stockStatusAt(index),
-                                      alreadyImported:
-                                          product.isAlreadyImported,
-                                      selectionBlocked:
-                                          product.importSelectionBlocked,
-                                    ),
-                                  ),
-                              ],
-                            ),
+              if (index == 0 &&
+                  dayIndex == 0 &&
+                  path != null &&
+                  path.isNotEmpty) {
+                CatalogMediaDebug.qualityMediaPaint(
+                  columns: crossAxisCount,
+                  role: paintRole,
+                  sampleUrl: path,
+                );
+              }
+              return Builder(
+                builder: (tileContext) {
+                  final photoKey = '${product.id}|$index';
+                  final photoSelected =
+                      widget.selectedPhotoKeys.contains(photoKey);
+                  return GestureDetector(
+                    onTap:
+                        widget.pinching
+                            ? null
+                            : () {
+                              Rect? sourceRect;
+                              final box = tileContext.findRenderObject();
+                              if (box is RenderBox && box.hasSize) {
+                                sourceRect =
+                                    box.localToGlobal(Offset.zero) & box.size;
+                              }
+                              widget.onImageTap(
+                                product,
+                                index,
+                                sourceRect: sourceRect,
+                              );
+                            },
+                    onLongPress:
+                        widget.pinching
+                            ? null
+                            : widget.onImageLongPress != null
+                            ? () => widget.onImageLongPress!(product, index)
+                            : widget.onProductLongPress == null
+                            ? null
+                            : () => widget.onProductLongPress!(product),
+                    child: ColoredBox(
+                      color: AppColors.surfaceSecondary,
+                      child: Stack(
+                        fit: StackFit.expand,
+                        children: [
+                          _tileImage(
+                            path,
+                            product.toneIndex,
+                            product.thumbhashAt(index),
+                            decodeWidth,
                           ),
-                        );
-                      },
-                    );
-                  },
-                ),
-              ),
-            ),
+                          if (product.isImportDeclinedAt(index) ||
+                              product.isImportPendingAt(index))
+                            Positioned(
+                              top: 5,
+                              left: 5,
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 6,
+                                  vertical: 3,
+                                ),
+                                decoration: BoxDecoration(
+                                  color:
+                                      product.isImportDeclinedAt(index)
+                                          ? AppColors.error.withValues(
+                                            alpha: 0.92,
+                                          )
+                                          : AppColors.warning.withValues(
+                                            alpha: 0.92,
+                                          ),
+                                  borderRadius: BorderRadius.circular(8),
+                                ),
+                                child: Text(
+                                  product.isImportDeclinedAt(index)
+                                      ? 'Declined'
+                                      : 'Pending',
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: AppTextStyles.caption(
+                                    fontSize: 10,
+                                    fontWeight: FontWeight.w700,
+                                    color: Colors.white,
+                                  ),
+                                ),
+                              ),
+                            ),
+                          if (widget.photoSelectionMode)
+                            Positioned(
+                              top: 5,
+                              right: 5,
+                              child: TelegramPhotoSelectBadge(
+                                selected: photoSelected,
+                              ),
+                            ),
+                          if (widget.photoSelectionMode)
+                            Positioned(
+                              top:
+                                  product.isImportDeclinedAt(index) ||
+                                          product.isImportPendingAt(index)
+                                      ? 28
+                                      : 5,
+                              left: 5,
+                              right: 28,
+                              child: VisitorImportStatusMarks(
+                                locked: product.isLockedAt(index),
+                                stock: product.stockStatusAt(index),
+                                alreadyImported: product.isAlreadyImported,
+                                selectionBlocked:
+                                    product.importSelectionBlocked,
+                              ),
+                            ),
+                        ],
+                      ),
+                    ),
+                  );
+                },
+              );
+            },
+            childCount: section.tileCount,
+            addAutomaticKeepAlives: false,
+          ),
+        );
+
+        slivers.add(
+          SliverPadding(
+            key: day.isSingleProduct && focused ? widget.focusKey : null,
+            padding: EdgeInsets.zero,
+            sliver:
+                focused
+                    ? DecoratedSliver(
+                      decoration: BoxDecoration(
+                        border: Border.all(
+                          color: AppColors.primary,
+                          width: 2.5,
+                        ),
+                        borderRadius: BorderRadius.circular(4),
+                      ),
+                      sliver: grid,
+                    )
+                    : grid,
           ),
         );
       }
