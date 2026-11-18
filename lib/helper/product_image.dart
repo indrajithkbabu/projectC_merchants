@@ -2,31 +2,59 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math' as math;
-import 'dart:typed_data';
 import 'dart:ui' as ui;
 
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:fast_thumbhash/fast_thumbhash.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_cache_manager/flutter_cache_manager.dart';
 import 'package:http/http.dart' as http;
 import 'package:project_c/helper/catalog_media_debug.dart';
 import 'package:project_c/helper/catalog_responsive_image.dart';
 import 'package:project_c/helper/colors.dart';
+import 'package:project_c/helper/store_warm_qa.dart';
+
+/// Per-consumer lease for off-screen image warming (Batch 7A).
+///
+/// One screen cancels only its own lease. Shared disk/decode futures are not
+/// cleared on cancel — other active owners can still join/complete them.
+class CatalogWarmOwner {
+  CatalogWarmOwner._({this.debugLabel = ''});
+
+  final String debugLabel;
+
+  int _epoch = 0;
+  bool _closed = false;
+
+  /// Capture at schedule time; [allows] is false after [cancel].
+  int get epoch => _epoch;
+
+  /// True after [cancel] — owner must not schedule new warm work.
+  bool get isCancelled => _closed;
+
+  /// Whether work started at [capturedEpoch] may continue.
+  bool allows(int capturedEpoch) => !_closed && capturedEpoch == _epoch;
+
+  /// Abandon pending/delayed work for this owner. Safe to call repeatedly.
+  void cancel() {
+    if (_closed) return;
+    _closed = true;
+    _epoch++;
+  }
+}
 
 /// Adds `Accept: image/webp` so Cloudflare `format=auto` prefers WebP when
 /// BE still ships auto URLs; harmless when BE already uses `format=webp`.
 class _CatalogMediaHttpClient extends http.BaseClient {
-  _CatalogMediaHttpClient([http.Client? inner]) : _inner = inner ?? http.Client();
+  _CatalogMediaHttpClient([http.Client? inner])
+    : _inner = inner ?? http.Client();
 
   final http.Client _inner;
 
   @override
   Future<http.StreamedResponse> send(http.BaseRequest request) {
-    request.headers.putIfAbsent(
-      'Accept',
-      () => 'image/webp,image/*,*/*;q=0.8',
-    );
+    request.headers.putIfAbsent('Accept', () => 'image/webp,image/*,*/*;q=0.8');
     return _inner.send(request);
   }
 }
@@ -124,24 +152,101 @@ class CatalogImageCache {
   /// In-flight decode warms (dedupe).
   static final Map<String, Future<void>> _decodeInFlight = {};
 
-  /// Bumped on route dispose to abandon offscreen warm work (P3.5).
-  static int _warmGeneration = 0;
+  /// Active warm leases (for logout [clearAll] only).
+  static final Set<CatalogWarmOwner> _warmOwners = <CatalogWarmOwner>{};
 
-  /// Cancel / abandon in-flight warm work for screens that left the tree.
-  static int cancelOffscreenWarm({String reason = 'dispose'}) {
-    _warmGeneration++;
-    _diskInFlight.clear();
-    _decodeInFlight.clear();
+  /// Invalidates unowned warm work (no [CatalogWarmOwner]) on [clearAll].
+  static int _orphanSession = 0;
+
+  /// Create a screen/consumer lease for off-screen warm work.
+  static CatalogWarmOwner createWarmOwner({String debugLabel = ''}) {
+    final owner = CatalogWarmOwner._(debugLabel: debugLabel);
+    _warmOwners.add(owner);
+    StoreWarmQa.log(
+      'OWNER_CREATE label=${debugLabel.isEmpty ? 'anon' : debugLabel} '
+      'epoch=${owner.epoch} activeOwners=${_warmOwners.length}',
+    );
+    return owner;
+  }
+
+  /// Cancel only [owner]'s delayed/batch warm work (Batch 7A).
+  ///
+  /// Does **not** clear shared [_diskInFlight] / [_decodeInFlight] maps — other
+  /// owners may still need those futures.
+  static void cancelOffscreenWarm(
+    CatalogWarmOwner owner, {
+    String reason = 'dispose',
+  }) {
+    final label = owner.debugLabel.isEmpty ? 'anon' : owner.debugLabel;
+    final peersBefore = [
+      for (final o in _warmOwners)
+        if (!identical(o, owner))
+          (o.debugLabel.isEmpty ? 'anon' : o.debugLabel),
+    ];
+    owner.cancel();
+    _warmOwners.remove(owner);
+    StoreWarmQa.log(
+      'OWNER_CANCEL label=$label epoch=${owner.epoch} reason=$reason '
+      'peersStillActive=${peersBefore.join(',')}',
+    );
     CatalogMediaDebug.fePending(
       'P3.5',
       status: 'PASS',
-      detail: 'cancelOffscreenWarm gen=$_warmGeneration reason=$reason',
+      detail:
+          'cancelOffscreenWarm owner=$label '
+          'epoch=${owner.epoch} reason=$reason',
       once: false,
     );
-    return _warmGeneration;
   }
 
-  static int get warmGeneration => _warmGeneration;
+  static bool _isWarmActive(
+    CatalogWarmOwner? owner,
+    int? epoch,
+    int orphanSession,
+  ) {
+    if (owner != null) {
+      if (owner.isCancelled) return false;
+      return owner.allows(epoch ?? -1);
+    }
+    return orphanSession == _orphanSession;
+  }
+
+  @visibleForTesting
+  static int get debugOrphanSession => _orphanSession;
+
+  @visibleForTesting
+  static int get debugWarmOwnerCount => _warmOwners.length;
+
+  @visibleForTesting
+  static int get debugDiskInFlightCount => _diskInFlight.length;
+
+  @visibleForTesting
+  static int get debugDecodeInFlightCount => _decodeInFlight.length;
+
+  @visibleForTesting
+  static void debugPrimeDiskInFlight(String url, Future<void> future) {
+    _diskInFlight[url.trim()] = future;
+  }
+
+  @visibleForTesting
+  static void debugPrimeDecodeInFlight(
+    String url,
+    int cacheWidth,
+    Future<void> future,
+  ) {
+    _decodeInFlight['${url.trim()}@$cacheWidth'] = future;
+  }
+
+  @visibleForTesting
+  static void debugResetWarmOwnersForTest() {
+    for (final owner in _warmOwners.toList(growable: false)) {
+      owner.cancel();
+    }
+    _warmOwners.clear();
+    _orphanSession++;
+    _diskInFlight.clear();
+    _decodeInFlight.clear();
+  }
 
   /// True when [url] was downloaded/cached on disk this session.
   static bool isDiskWarm(String url) => _diskReady.contains(url.trim());
@@ -249,10 +354,7 @@ class CatalogImageCache {
 
   /// How many Media-grid tiles to decode-warm for ~[screens] of a [columns]
   /// grid. Capped so [ImageCache] is not thrashed on dense 9-col layouts.
-  static int mediaGridWarmCount({
-    required int columns,
-    double screens = 1.75,
-  }) {
+  static int mediaGridWarmCount({required int columns, double screens = 1.75}) {
     final cols = columns.clamp(2, 9);
     final view = _primaryView;
     if (view == null) return (cols * 12 * screens).round().clamp(36, 96);
@@ -275,7 +377,11 @@ class CatalogImageCache {
     _decodedKeys.clear();
     _diskInFlight.clear();
     _decodeInFlight.clear();
-    _warmGeneration++;
+    for (final owner in _warmOwners.toList(growable: false)) {
+      owner.cancel();
+    }
+    _warmOwners.clear();
+    _orphanSession++;
     _ThumbhashImageLru.clear();
     try {
       await instance.emptyCache();
@@ -329,6 +435,55 @@ class CatalogImageCache {
     };
   }
 
+  /// Decode width for Media / Gallery / browse cells (Img High #3).
+  ///
+  /// Role still picks the CDN URL tier; decode size follows the on-screen
+  /// cell (`screenWidth / columns`), not half-screen [gridCacheWidth].
+  static int cacheWidthForMediaColumns(int columns, {double? screenWidth}) {
+    final cols = columns.clamp(2, 9);
+    final view = _primaryView;
+    final logicalScreen =
+        screenWidth ??
+        (view == null ? 0.0 : view.physicalSize.width / view.devicePixelRatio);
+    if (!(logicalScreen.isFinite && logicalScreen > 0)) {
+      return gridCacheWidth();
+    }
+    return cacheWidthForCellLogical(logicalScreen / cols);
+  }
+
+  /// Decode width for Store Profile Group/Single collage cells (Batch 2).
+  ///
+  /// Matches [StoreProductGrid] card width (2-col Group / 1-col Single) and a
+  /// typical multi-tile cell (~½ card). Warm + paint must share this key so
+  /// first frame does not miss warm and re-decode at LayoutBuilder width.
+  ///
+  /// [horizontalGutter] ≈ screen pad (15×2) + column gap (10) for Group.
+  static int collageCellCacheWidth({
+    bool largeCard = false,
+    int imageCount = 2,
+    double? screenWidth,
+    double horizontalGutter = 40,
+  }) {
+    final view = _primaryView;
+    final logicalScreen =
+        screenWidth ??
+        (view == null ? 0.0 : view.physicalSize.width / view.devicePixelRatio);
+    if (!(logicalScreen.isFinite && logicalScreen > 0)) {
+      return gridCacheWidth();
+    }
+    final cardLogical =
+        largeCard
+            ? (logicalScreen - 30).clamp(1.0, logicalScreen)
+            : ((logicalScreen - horizontalGutter) / 2).clamp(
+              1.0,
+              logicalScreen,
+            );
+    // Single-image tiles fill the card; multi-image Telegram layouts are
+    // typically ≤ half card for the largest cell — one shared warm key.
+    final cellLogical = imageCount <= 1 ? cardLogical : cardLogical / 2;
+    return cacheWidthForCellLogical(cellLogical);
+  }
+
   /// Stable decode width for store/profile circular avatars (shared memory key).
   static int avatarCacheWidth() {
     final view = _primaryView;
@@ -355,15 +510,14 @@ class CatalogImageCache {
   ///
   /// Prefers [FileImage] when the file is already on disk so cold reopen can
   /// paint without waiting on [CachedNetworkImageProvider] async resolve.
-  static ImageProvider providerFor(
-    String url, {
-    required int cacheWidth,
-  }) {
+  static ImageProvider providerFor(String url, {required int cacheWidth}) {
     logFeQaCacheConfigIfNeeded();
     final value = url.trim();
     final path = _filePaths[value];
     final ImageProvider provider;
-    if (path != null && path.isNotEmpty && File(path).existsSync()) {
+    // Trust probe/warm-populated paths — avoid sync existsSync on every paint
+    // (Batch 2). Missing files fall through Image errorBuilder / network.
+    if (path != null && path.isNotEmpty) {
       provider = FileImage(File(path));
       CatalogMediaDebug.feQa(
         'P4.5',
@@ -373,10 +527,7 @@ class CatalogImageCache {
         onceKey: 'localFilePaint',
       );
     } else {
-      provider = CachedNetworkImageProvider(
-        value,
-        cacheManager: instance,
-      );
+      provider = CachedNetworkImageProvider(value, cacheManager: instance);
     }
     return ResizeImage.resizeIfNeeded(cacheWidth, null, provider);
   }
@@ -393,9 +544,7 @@ class CatalogImageCache {
         if (!_filePaths.containsKey(url)) url,
     ];
     if (pending.isEmpty) return;
-    await Future.wait([
-      for (final url in pending) _probeOne(url),
-    ]);
+    await Future.wait([for (final url in pending) _probeOne(url)]);
   }
 
   static Future<void> _probeOne(String url) async {
@@ -414,15 +563,30 @@ class CatalogImageCache {
   static Future<void> warmAvatars(
     Iterable<String> urls, {
     int concurrency = 6,
+    CatalogWarmOwner? owner,
   }) async {
+    final epoch = owner?.epoch;
+    final orphan = _orphanSession;
+    if (!_isWarmActive(owner, epoch, orphan)) return;
     final pending = _normalize(urls);
     if (pending.isEmpty) return;
     await probeDisk(pending);
-    await _diskWarmAll(pending, concurrency: concurrency);
+    if (!_isWarmActive(owner, epoch, orphan)) return;
+    await _diskWarmAll(
+      pending,
+      concurrency: concurrency,
+      owner: owner,
+      epoch: epoch,
+      orphanSession: orphan,
+    );
+    if (!_isWarmActive(owner, epoch, orphan)) return;
     await _decodeWarmAll(
       pending,
       cacheWidth: avatarCacheWidth(),
       concurrency: concurrency,
+      owner: owner,
+      epoch: epoch,
+      orphanSession: orphan,
     );
   }
 
@@ -435,21 +599,35 @@ class CatalogImageCache {
     int concurrency = 8,
     int maxDecode = defaultMaxDecode,
     int? cacheWidth,
+    CatalogWarmOwner? owner,
   }) async {
+    final epoch = owner?.epoch;
+    final orphan = _orphanSession;
+    if (!_isWarmActive(owner, epoch, orphan)) {
+      StoreWarmQa.log(
+        'WARM_SKIP op=warmDiskHits owner=${owner?.debugLabel ?? 'orphan'} '
+        'reason=ownerInactive',
+      );
+      return;
+    }
     final pending = _normalize(urls);
     if (pending.isEmpty || maxDecode <= 0) return;
     await probeDisk(pending);
+    if (!_isWarmActive(owner, epoch, orphan)) return;
+    final width = cacheWidth ?? gridCacheWidth();
     final onDisk = [
       for (final url in pending)
-        if (_diskReady.contains(url)) url,
+        if (_diskReady.contains(url) && !isDecoded(url, width)) url,
     ];
     if (onDisk.isEmpty) return;
     ensureCatalogMemoryBudget();
-    final width = cacheWidth ?? gridCacheWidth();
     await _decodeWarmAll(
       onDisk.take(maxDecode).toList(growable: false),
       cacheWidth: width,
       concurrency: concurrency,
+      owner: owner,
+      epoch: epoch,
+      orphanSession: orphan,
     );
   }
 
@@ -459,24 +637,62 @@ class CatalogImageCache {
   /// [FileImage] before paint — otherwise tiles flash ThumbHash even when the
   /// bytes are already on disk. Set [decode] + [maxDecode] for the visible
   /// window so first paint can hit `reuseDecoded` / sync frames.
+  ///
+  /// Pass [owner] from [createWarmOwner] so delayed warms stop only when
+  /// **that** screen cancels (Batch 7A) — not when another route disposes.
   static Future<void> precacheUrls(
     Iterable<String> urls, {
     int concurrency = 8,
     bool decode = false,
     int maxDecode = defaultMaxDecode,
     int? cacheWidth,
+    CatalogWarmOwner? owner,
   }) async {
+    final epoch = owner?.epoch;
+    final orphan = _orphanSession;
+    if (!_isWarmActive(owner, epoch, orphan)) {
+      StoreWarmQa.log(
+        'WARM_SKIP op=precacheUrls decode=$decode '
+        'owner=${owner?.debugLabel ?? 'orphan'} reason=ownerInactive',
+      );
+      return;
+    }
     final pending = _normalize(urls);
     if (pending.isEmpty) return;
+    if (owner != null) {
+      StoreWarmQa.log(
+        'WARM_RUN op=precacheUrls decode=$decode urls=${pending.length} '
+        'owner=${owner.debugLabel} epoch=$epoch',
+      );
+    }
 
     // Re-attach disk hits after process restart (files still under CacheManager).
     await probeDisk(pending);
-    await _diskWarmAll(pending, concurrency: concurrency);
+    if (!_isWarmActive(owner, epoch, orphan)) return;
+    await _diskWarmAll(
+      pending,
+      concurrency: concurrency,
+      owner: owner,
+      epoch: epoch,
+      orphanSession: orphan,
+    );
+    if (!_isWarmActive(owner, epoch, orphan)) return;
 
     if (!decode || maxDecode <= 0) return;
     final width = cacheWidth ?? gridCacheWidth();
-    final toDecode = pending.take(maxDecode).toList(growable: false);
-    await _decodeWarmAll(toDecode, cacheWidth: width, concurrency: concurrency);
+    final toDecode = [
+      for (final url in pending.take(maxDecode))
+        if (!isDecoded(url, width)) url,
+    ];
+    if (toDecode.isEmpty) return;
+    await _decodeWarmAll(
+      toDecode,
+      cacheWidth: width,
+      concurrency: concurrency,
+      owner: owner,
+      epoch: epoch,
+      orphanSession: orphan,
+    );
   }
 
   /// Raise [ImageCache] budget for catalog grids (dense Media / collage).
@@ -501,16 +717,17 @@ class CatalogImageCache {
     int diskPad = 48,
     int? cacheWidth,
     int concurrency = 8,
-    int? generation,
+    CatalogWarmOwner? owner,
   }) async {
     ensureCatalogMemoryBudget();
-    final gen = generation ?? _warmGeneration;
+    final epoch = owner?.epoch;
+    final orphan = _orphanSession;
     final normalized = [
       for (final u in urls)
         if (u.trim().startsWith('http')) u.trim(),
     ];
     if (normalized.isEmpty) return;
-    if (gen != _warmGeneration) return;
+    if (!_isWarmActive(owner, epoch, orphan)) return;
 
     final n = normalized.length;
     final start = firstIndex.clamp(0, n - 1);
@@ -526,17 +743,25 @@ class CatalogImageCache {
     CatalogMediaDebug.warm(
       'warmWindow urls=${normalized.length} decode=$start..$end '
       '(${decodeSlice.length}) diskPad=${diskSlice.length} cacheW=$width '
-      'concurrency=$concurrency gen=$gen',
+      'concurrency=$concurrency owner=${owner?.debugLabel ?? 'orphan'}',
     );
-    await _diskWarmAll(diskSlice, concurrency: concurrency, generation: gen);
-    if (gen != _warmGeneration) return;
+    await _diskWarmAll(
+      diskSlice,
+      concurrency: concurrency,
+      owner: owner,
+      epoch: epoch,
+      orphanSession: orphan,
+    );
+    if (!_isWarmActive(owner, epoch, orphan)) return;
     await _decodeWarmAll(
       decodeSlice,
       cacheWidth: width,
       concurrency: concurrency,
-      generation: gen,
+      owner: owner,
+      epoch: epoch,
+      orphanSession: orphan,
     );
-    if (gen != _warmGeneration) return;
+    if (!_isWarmActive(owner, epoch, orphan)) return;
     CatalogMediaDebug.warm(
       'warmWindow done decode=${decodeSlice.length} cacheW=$width',
     );
@@ -545,7 +770,7 @@ class CatalogImageCache {
       status: 'PASS',
       detail:
           'warmWindow decode=$start..$end disk=${diskSlice.length} '
-          'cacheW=$width gen=$gen',
+          'cacheW=$width owner=${owner?.debugLabel ?? 'orphan'}',
       once: true,
       onceKey: 'warmWindow',
     );
@@ -558,8 +783,8 @@ class CatalogImageCache {
     int pageSize = 24,
     int? cacheWidth,
     int concurrency = 6,
+    CatalogWarmOwner? owner,
   }) async {
-    final gen = _warmGeneration;
     final normalized = [
       for (final u in urls)
         if (u.trim().startsWith('http')) u.trim(),
@@ -582,7 +807,7 @@ class CatalogImageCache {
       diskPad: 8,
       cacheWidth: cacheWidth ?? gridCacheWidth(),
       concurrency: concurrency,
-      generation: gen,
+      owner: owner,
     );
   }
 
@@ -595,14 +820,17 @@ class CatalogImageCache {
     double spacing = 2,
     int rowPad = 3,
     int? cacheWidth,
+    CatalogWarmOwner? owner,
   }) async {
     if (urls.isEmpty || crossAxisCount <= 0) return;
     final cols = crossAxisCount;
     final cell =
         (viewportWidth - spacing * (cols - 1)).clamp(1.0, viewportWidth) / cols;
     final stride = cell + spacing;
-    final firstRow =
-        math.max(0, ((metrics.pixels - spacing) / stride).floor() - rowPad);
+    final firstRow = math.max(
+      0,
+      ((metrics.pixels - spacing) / stride).floor() - rowPad,
+    );
     final visibleRows =
         (metrics.viewportDimension / stride).ceil() + rowPad * 2;
     final first = firstRow * cols;
@@ -612,6 +840,7 @@ class CatalogImageCache {
       firstIndex: first,
       lastIndex: last,
       cacheWidth: cacheWidth,
+      owner: owner,
     );
   }
 
@@ -624,9 +853,11 @@ class CatalogImageCache {
     int windowSize = defaultMaxDecode,
     int? cacheWidth,
     bool prefetchNext = true,
+    CatalogWarmOwner? owner,
   }) async {
     if (urls.isEmpty) return;
-    final gen = _warmGeneration;
+    final epoch = owner?.epoch;
+    final orphan = _orphanSession;
     final n = urls.length;
     if (metrics.maxScrollExtent <= 0) {
       await warmWindow(
@@ -634,7 +865,7 @@ class CatalogImageCache {
         firstIndex: 0,
         lastIndex: math.min(n - 1, windowSize - 1),
         cacheWidth: cacheWidth,
-        generation: gen,
+        owner: owner,
       );
       return;
     }
@@ -647,16 +878,17 @@ class CatalogImageCache {
       firstIndex: center - half,
       lastIndex: last,
       cacheWidth: cacheWidth,
-      generation: gen,
+      owner: owner,
     );
     // Near end of viewport → prefetch the next page of tiles.
-    if (prefetchNext && t >= 0.55 && gen == _warmGeneration) {
+    if (prefetchNext && _isWarmActive(owner, epoch, orphan) && t >= 0.55) {
       // ignore: unawaited_futures
       prefetchNextPage(
         urls: urls,
         afterIndex: last,
         pageSize: windowSize,
         cacheWidth: cacheWidth,
+        owner: owner,
       );
     }
   }
@@ -664,9 +896,10 @@ class CatalogImageCache {
   static Future<void> _diskWarmAll(
     List<String> urls, {
     required int concurrency,
-    int? generation,
+    CatalogWarmOwner? owner,
+    int? epoch,
+    required int orphanSession,
   }) async {
-    final gen = generation ?? _warmGeneration;
     final need = [
       for (final url in urls)
         if (!_diskReady.contains(url)) url,
@@ -674,23 +907,21 @@ class CatalogImageCache {
     if (need.isEmpty) return;
 
     for (var i = 0; i < need.length; i += concurrency) {
-      if (gen != _warmGeneration) return;
+      if (!_isWarmActive(owner, epoch, orphanSession)) return;
       final end = math.min(i + concurrency, need.length);
       await Future.wait([
-        for (final url in need.sublist(i, end)) _diskWarmOne(url, generation: gen),
+        for (final url in need.sublist(i, end)) _diskWarmOne(url),
       ]);
     }
   }
 
-  static Future<void> _diskWarmOne(String url, {int? generation}) {
-    final gen = generation ?? _warmGeneration;
-    if (gen != _warmGeneration) return Future<void>.value();
+  /// Disk fetch is shared — always mark on success so other owners benefit.
+  static Future<void> _diskWarmOne(String url) {
     final existing = _diskInFlight[url];
     if (existing != null) return existing;
     final future = instance
         .getSingleFile(url)
         .then<void>((file) {
-          if (gen != _warmGeneration) return;
           _diskReady.add(url);
           _filePaths[url] = file.path;
         })
@@ -706,40 +937,38 @@ class CatalogImageCache {
     List<String> urls, {
     required int cacheWidth,
     required int concurrency,
-    int? generation,
+    CatalogWarmOwner? owner,
+    int? epoch,
+    required int orphanSession,
   }) async {
     if (urls.isEmpty) return;
-    final gen = generation ?? _warmGeneration;
     for (var i = 0; i < urls.length; i += concurrency) {
-      if (gen != _warmGeneration) return;
+      if (!_isWarmActive(owner, epoch, orphanSession)) return;
       final end = math.min(i + concurrency, urls.length);
       await Future.wait([
         for (final url in urls.sublist(i, end))
-          _decodeIntoMemory(url, cacheWidth, generation: gen),
+          _decodeIntoMemory(url, cacheWidth),
       ]);
     }
   }
 
   /// Decode [url] into Flutter's [ImageCache] at [cacheWidth] (no context).
-  static Future<void> _decodeIntoMemory(
-    String url,
-    int cacheWidth, {
-    int? generation,
-  }) {
-    final gen = generation ?? _warmGeneration;
-    if (gen != _warmGeneration) return Future<void>.value();
+  ///
+  /// Shared across owners — completing a decode always marks the key so a
+  /// cancelled peer does not discard work another consumer still needs.
+  static Future<void> _decodeIntoMemory(String url, int cacheWidth) {
     final key = '$url@$cacheWidth';
     final existing = _decodeInFlight[key];
     if (existing != null) return existing;
 
     final future = () async {
+      final sw = Stopwatch()..start();
+      StoreWarmQa.imageDecodeStart(url, cacheWidth: cacheWidth);
       try {
-        if (gen != _warmGeneration) return;
         // Prefer file on disk first so decode never hits the network.
         if (!_diskReady.contains(url)) {
-          await _diskWarmOne(url, generation: gen);
+          await _diskWarmOne(url);
         }
-        if (gen != _warmGeneration) return;
         final dpr = _primaryView?.devicePixelRatio ?? 2.0;
         final provider = providerFor(url, cacheWidth: cacheWidth);
         final stream = provider.resolve(
@@ -765,8 +994,21 @@ class CatalogImageCache {
           const Duration(seconds: 20),
           onTimeout: () {},
         );
-        if (decoded && gen == _warmGeneration) markDiskWarm(url);
-      } catch (_) {}
+        sw.stop();
+        if (decoded) {
+          markDiskWarm(url);
+          StoreWarmQa.imageDecodeComplete(
+            url,
+            cacheWidth: cacheWidth,
+            durationMs: sw.elapsedMilliseconds,
+            via: 'warm',
+          );
+        } else {
+          StoreWarmQa.imageDecodeFailed(url, cacheWidth: cacheWidth);
+        }
+      } catch (_) {
+        StoreWarmQa.imageDecodeFailed(url, cacheWidth: cacheWidth);
+      }
     }();
 
     _decodeInFlight[key] = future;
@@ -789,7 +1031,9 @@ class ProductImagePaths {
     final value = path.trim();
     if (value.isEmpty) return false;
     if (isNetwork(value)) return true;
-    return File(value).existsSync();
+    // Local upload / pending paths — do not sync-stat the filesystem on every
+    // grid rebuild (Batch 2). Missing files paint via Image errorBuilder.
+    return true;
   }
 
   static List<String> displayable(List<String> paths) {
@@ -971,6 +1215,7 @@ class ThumbhashBlurPlaceholder extends StatefulWidget {
 class _ThumbhashBlurPlaceholderState extends State<ThumbhashBlurPlaceholder> {
   ui.Image? _image;
   Color? _fallback;
+
   /// True when [_image] is owned by the LRU (must not dispose on widget leave).
   bool _fromLru = false;
 
@@ -1045,10 +1290,97 @@ class _ThumbhashBlurPlaceholderState extends State<ThumbhashBlurPlaceholder> {
   }
 }
 
+/// Batch I4 — crossfade from ThumbHash/solid placeholder to the decoded image.
+///
+/// Kept as a focused widget so [ProductMediaImage] frameBuilder can swap
+/// `imageReady` without remounting (same [State] → [AnimatedOpacity] runs),
+/// and so widget tests can drive the transition without network I/O.
+class ProductImageCrossfade extends StatefulWidget {
+  const ProductImageCrossfade({
+    super.key,
+    required this.image,
+    required this.placeholder,
+    required this.imageReady,
+    this.instant = false,
+    this.duration = fadeDuration,
+  });
+
+  /// Default grid / profile reveal length (Batch I4).
+  static const fadeDuration = Duration(milliseconds: 180);
+
+  final Widget image;
+  final Widget placeholder;
+
+  /// True once the first decoded frame is available.
+  final bool imageReady;
+
+  /// Cached / sync decode — paint [image] immediately (no fade delay).
+  final bool instant;
+
+  final Duration duration;
+
+  @override
+  State<ProductImageCrossfade> createState() => _ProductImageCrossfadeState();
+}
+
+class _ProductImageCrossfadeState extends State<ProductImageCrossfade> {
+  bool _fadeComplete = false;
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.instant && widget.imageReady) {
+      _fadeComplete = true;
+    }
+  }
+
+  @override
+  void didUpdateWidget(covariant ProductImageCrossfade oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.instant && widget.imageReady) {
+      _fadeComplete = true;
+      return;
+    }
+    // Ready → not ready (URL identity change via new State normally; reset if
+    // the same element is reused).
+    if (!widget.imageReady && oldWidget.imageReady) {
+      _fadeComplete = false;
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    // Case B / post-fade: image only — no placeholder overdraw, no restart.
+    if ((widget.instant || _fadeComplete) && widget.imageReady) {
+      return widget.image;
+    }
+
+    // Keep [AnimatedOpacity] mounted while waiting so 0→1 actually animates
+    // when [imageReady] flips (inserting at opacity 1 would skip the fade).
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        widget.placeholder,
+        AnimatedOpacity(
+          opacity: widget.imageReady ? 1.0 : 0.0,
+          duration: widget.duration,
+          curve: Curves.easeOut,
+          onEnd: () {
+            if (!mounted || !widget.imageReady) return;
+            setState(() => _fadeComplete = true);
+          },
+          child: widget.image,
+        ),
+      ],
+    );
+  }
+}
+
 /// Renders a local file or remote URL with disk+memory cache for network URLs.
 ///
-/// Cold miss → thumbhash / solid. Disk or [ImageCache] hit → immediate paint
-/// (no fade), including after pinch-zoom rebuilds with the same decode width.
+/// Cold miss → thumbhash / solid, then Batch I4 crossfade to the decoded
+/// frame. Disk or [ImageCache] hit → immediate paint (no fade), including
+/// after pinch-zoom rebuilds with the same decode width.
 class ProductMediaImage extends StatelessWidget {
   const ProductMediaImage({
     super.key,
@@ -1165,7 +1497,7 @@ class ProductMediaImage extends StatelessWidget {
     }
 
     final file = File(value);
-    if (!file.existsSync()) return error ?? _broken();
+    // Skip existsSync on the paint path (Batch 2) — errorBuilder covers misses.
 
     // Decode at cell width (same as network tiles) so pending / gallery
     // previews never inflate full-resolution camera bitmaps on the UI isolate.
@@ -1226,7 +1558,13 @@ class ProductMediaImage extends StatelessWidget {
       gaplessPlayback: true,
       filterQuality: paintQuality,
       frameBuilder: (context, child, frame, wasSynchronouslyLoaded) {
-        if (wasSynchronouslyLoaded || frame != null) {
+        final frameReady = wasSynchronouslyLoaded || frame != null;
+        // Sync / already-decoded / disk-warm: paint immediately (Case B).
+        // Avoids making a cache hit feel slower with a fade.
+        final instant =
+            wasSynchronouslyLoaded || heldDecoded || diskWarm;
+
+        if (frameReady) {
           CatalogImageCache.markDecoded(value, cacheWidth);
           if (frame != null) CatalogImageCache.markDiskWarm(value);
           // Detail/zoom paint unlocks the quality ladder for this URL family.
@@ -1238,11 +1576,14 @@ class ProductMediaImage extends StatelessWidget {
             thumbhash: hash,
             alreadyDecoded: alreadyDecoded,
           );
-          return child;
-        }
-        // Prior decode / disk warm — avoid second ThumbHash flash on remount,
-        // ladder source flip (fallback.master → ladder.master), or filter bump.
-        if (heldDecoded || diskWarm) {
+          StoreWarmQa.imageDecodeComplete(
+            value,
+            cacheWidth: cacheWidth,
+            via: wasSynchronouslyLoaded ? 'syncFrame' : 'asyncFrame',
+          );
+        } else if (heldDecoded || diskWarm) {
+          // Prior decode / disk warm — avoid second ThumbHash flash on remount,
+          // ladder source flip (fallback.master → ladder.master), or filter bump.
           CatalogImageQualityLadder.markPainted(value);
           CatalogMediaDebug.paintOnce(
             url: value,
@@ -1251,23 +1592,40 @@ class ProductMediaImage extends StatelessWidget {
             thumbhash: hash,
             alreadyDecoded: heldDecoded,
           );
-          return child;
+          StoreWarmQa.imageDecodeComplete(
+            value,
+            cacheWidth: cacheWidth,
+            via: heldDecoded ? 'reuseDecoded' : 'gaplessHold',
+          );
+        } else {
+          // InstantCatalogPhoto: blur until the CDN frame arrives.
+          CatalogMediaDebug.paintOnce(
+            url: value,
+            cacheWidth: cacheWidth,
+            outcome: 'placeholder',
+            thumbhash: hash,
+            alreadyDecoded: false,
+          );
+          StoreWarmQa.imagePlaceholder(value, cacheWidth: cacheWidth);
         }
-        // InstantCatalogPhoto: keep blur until the CDN frame arrives.
-        CatalogMediaDebug.paintOnce(
-          url: value,
-          cacheWidth: cacheWidth,
-          outcome: 'placeholder',
-          thumbhash: hash,
-          alreadyDecoded: false,
+
+        // Case B / gapless hold: no crossfade (cached must not feel slower).
+        if (instant) return child;
+
+        // Case A: one stable crossfade host so 0→1 runs in place (Batch I4).
+        return ProductImageCrossfade(
+          image: child,
+          placeholder: _placeholder(),
+          imageReady: frameReady,
+          instant: false,
         );
-        return _placeholder();
       },
       errorBuilder: (_, __, ___) {
         CatalogMediaDebug.gap(
           'paint ERROR ${CatalogMediaDebug.shortUrl(value)} '
           'cacheW=$cacheWidth ${CatalogMediaDebug.thumbhashFlag(hash)}',
         );
+        StoreWarmQa.imageDecodeFailed(value, cacheWidth: cacheWidth);
         return error ?? _broken();
       },
     );
@@ -1276,10 +1634,7 @@ class ProductMediaImage extends StatelessWidget {
   static Widget _broken() {
     return ColoredBox(
       color: AppColors.surfaceSecondary,
-      child: Icon(
-        Icons.broken_image_outlined,
-        color: AppColors.textSecondary,
-      ),
+      child: Icon(Icons.broken_image_outlined, color: AppColors.textSecondary),
     );
   }
 }

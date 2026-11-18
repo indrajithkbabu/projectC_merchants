@@ -12,8 +12,16 @@ class StoreProfileLoadCollections extends StoreProfileEvent {
 }
 
 /// Background refresh after a warm/cached paint (no shimmer).
+///
+/// [force] false → prefetcher may skip when TTL still valid (post-warm open).
+/// Mutation-driven refreshes keep default [force] true.
 class StoreProfileQuietRefreshCollections extends StoreProfileEvent {
-  const StoreProfileQuietRefreshCollections();
+  const StoreProfileQuietRefreshCollections({this.force = true});
+
+  final bool force;
+
+  @override
+  List<Object?> get props => [force];
 }
 
 class StoreProfileLoadMembers extends StoreProfileEvent {
@@ -24,8 +32,31 @@ class StoreProfileLoadImportRequestCount extends StoreProfileEvent {
   const StoreProfileLoadImportRequestCount();
 }
 
+/// Load / refresh store header meta (`GET /stores/:id`).
+///
+/// [force] false (default): skip network when a fetch for this store finished
+/// within the quiet TTL or join an in-flight fetch (dedupes open remounts).
+/// [force] true: always network (follow / privacy / explicit refresh).
 class StoreProfileLoadStoreMeta extends StoreProfileEvent {
-  const StoreProfileLoadStoreMeta();
+  const StoreProfileLoadStoreMeta({this.force = false});
+
+  final bool force;
+
+  @override
+  List<Object?> get props => [force];
+}
+
+/// Shell Profile tab — start meta/collections/members once (deferred on home).
+class StoreProfileEnsureInitialCatalogLoads extends StoreProfileEvent {
+  const StoreProfileEnsureInitialCatalogLoads();
+}
+
+/// Batch I3 — async disk product hydrate right after the first frame.
+///
+/// Does not wait for the delayed [StoreProfileEnsureInitialCatalogLoads]
+/// (~280–320 ms). Memory hits skip this; empty disk does not mark resolved.
+class StoreProfileHydrateDiskCache extends StoreProfileEvent {
+  const StoreProfileHydrateDiskCache();
 }
 
 class StoreProfileAppendImagesRequested extends StoreProfileEvent {
@@ -111,10 +142,7 @@ class StoreProfileItemsDeleted extends StoreProfileEvent {
 }
 
 class StoreProfileProductsReplaced extends StoreProfileEvent {
-  const StoreProfileProductsReplaced(
-    this.products, {
-    this.silent = false,
-  });
+  const StoreProfileProductsReplaced(this.products, {this.silent = false});
 
   final List<StoreProduct> products;
 
@@ -241,6 +269,28 @@ class StoreProfileHideInFlightListing extends StoreProfileEvent {
 
 class StoreProfileLoadFollowRequestPreviews extends StoreProfileEvent {
   const StoreProfileLoadFollowRequestPreviews();
+}
+
+/// Fill remaining collage frames when album has more than the BE-2 preview
+/// page (`productsLimit=9`). Background queue is deferred + throttled after
+/// grid paint; swipe may dispatch this immediately for the visible album.
+class StoreProfileExpandAlbumCollage extends StoreProfileEvent {
+  const StoreProfileExpandAlbumCollage(this.listingId);
+
+  final String listingId;
+
+  @override
+  List<Object?> get props => [listingId];
+}
+
+/// Parallel wave of album expands (fast-APK style fan-out after first paint).
+class StoreProfileExpandAlbumBatch extends StoreProfileEvent {
+  const StoreProfileExpandAlbumBatch(this.listingIds);
+
+  final List<String> listingIds;
+
+  @override
+  List<Object?> get props => [listingIds];
 }
 
 /// Quiet probe of GET /import-targets for other-store product badges.

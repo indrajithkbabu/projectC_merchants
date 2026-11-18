@@ -108,7 +108,7 @@ class StoreGalleryState extends Equatable {
   /// Enriched collection cards store nested CatalogProduct ids in
   /// [StoreProduct.photoAssetIds] — expand those so each feed item carries
   /// the jewel product (tap opens the right piece, not another listing).
-  List<ProductDetailsFeedItem> buildPhotoFeed() {
+  List<ProductDetailsFeedItem> buildPhotoFeed({String storeId = ''}) {
     final feed = <ProductDetailsFeedItem>[];
     for (final day in sections) {
       for (final section in day.products) {
@@ -116,6 +116,10 @@ class StoreGalleryState extends Equatable {
           section.product,
         );
         for (final piece in pieces) {
+          final seed = CatalogUiMapper.catalogSeedFromStoreProduct(
+            piece,
+            storeId: storeId,
+          );
           final paths = piece.imagePaths;
           if (paths.isEmpty) {
             feed.add(
@@ -123,6 +127,7 @@ class StoreGalleryState extends Equatable {
                 product: piece,
                 imageIndex: 0,
                 path: '',
+                seedCatalog: seed,
               ),
             );
             continue;
@@ -133,6 +138,7 @@ class StoreGalleryState extends Equatable {
                 product: piece,
                 imageIndex: i,
                 path: paths[i],
+                seedCatalog: seed,
               ),
             );
           }
@@ -154,7 +160,7 @@ class StoreGalleryState extends Equatable {
     required int imageIndex,
     String path = '',
   }) {
-    final feed = buildPhotoFeed();
+    final feed = buildPhotoFeed(storeId: storeId ?? '');
     if (feed.isEmpty) return 0;
 
     final needle = path.trim();
@@ -188,7 +194,7 @@ class StoreGalleryState extends Equatable {
     required int imageIndex,
     String path = '',
   }) {
-    final feed = buildPhotoFeed();
+    final feed = buildPhotoFeed(storeId: storeId ?? '');
     final index = feedIndexFor(
       productId: productId,
       imageIndex: imageIndex,

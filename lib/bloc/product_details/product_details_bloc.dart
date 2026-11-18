@@ -9,12 +9,14 @@ import 'package:project_c/helper/catalog_ui_mapper.dart';
 import 'package:project_c/helper/product_image.dart';
 import 'package:project_c/helper/whatsapp_invite.dart';
 import 'package:project_c/models/bulk_upload.dart';
+import 'package:project_c/models/catalog/catalog_product_models.dart';
 import 'package:project_c/models/catalog/collection_models.dart';
 import 'package:project_c/models/catalog/collection_specifications.dart';
 import 'package:project_c/models/product_details_feed_item.dart';
 import 'package:project_c/models/store_product.dart';
 import 'package:project_c/webservice/catalog_api_exception.dart';
 import 'package:project_c/webservice/catalog_error_mapper.dart';
+import 'package:project_c/services/viewer_product_flags.dart';
 import 'package:project_c/services/wishlist_prefetcher.dart';
 import 'package:project_c/webservice/collection/collection_repository.dart';
 import 'package:project_c/webservice/wishlist/wishlist_repository.dart';
@@ -57,7 +59,14 @@ class ProductDetailsBloc
                (galleryFeed == null || galleryFeed.isEmpty)
                    ? 0
                    : galleryFeedIndex.clamp(0, galleryFeed.length - 1),
-           isLoadingPhotos: _canFetchPhotos(storeId, product),
+           // Seeded browse feed hydrates locally — no loading flash for GET.
+           // Thin / incomplete seeds still show loading until product GET.
+           isLoadingPhotos:
+               _canFetchPhotos(storeId, product) &&
+               (() {
+                 final seed = _feedSeedFor(galleryFeed, product.id);
+                 return seed == null || !_seedSufficientToSkipGet(seed);
+               })(),
            seedCategory: seedCategory.trim(),
            showStoreGroupLink: showStoreGroupLink,
            canEdit: _resolveCanEdit(
@@ -96,6 +105,9 @@ class ProductDetailsBloc
   final WishlistRepository _wishlistRepository;
   static const _tag = 'ProductDetailsBloc';
 
+  /// Product ids already hydrated this session (seed or GET) — swipe-back skip.
+  final Set<String> _hydratedProductIds = <String>{};
+
   static bool _canFetchPhotos(String? storeId, StoreProduct product) {
     if (storeId == null || storeId.isEmpty) return false;
     if (storeId == 'my_store' || storeId == 'other_store') return false;
@@ -105,7 +117,12 @@ class ProductDetailsBloc
 
   static String? _kindFromProduct(StoreProduct product) {
     if (product.tags.contains('imported')) return 'imported';
-    if (product.tags.contains('original')) return 'original';
+    final status =
+        (product.importFlags.importStatus ?? '').trim().toLowerCase();
+    if (status == 'imported') return 'imported';
+    if (product.tags.contains('original') || status == 'original') {
+      return 'original';
+    }
     return null;
   }
 
@@ -230,7 +247,243 @@ class ProductDetailsBloc
       storeName: item.storeName,
       storeLink: item.storeLink,
       seedCategory: item.seedCategory,
+      seedCatalog: item.seedCatalog,
     );
+  }
+
+  /// Browse / gallery feed seed for a jewel product id, if present.
+  CatalogProduct? _seedCatalogFor(String productId) =>
+      _feedSeedFor(state.galleryFeed, productId);
+
+  static CatalogProduct? _feedSeedFor(
+    List<ProductDetailsFeedItem>? feed,
+    String productId,
+  ) {
+    final id = productId.trim();
+    if (id.isEmpty || feed == null || feed.isEmpty) return null;
+    for (final item in feed) {
+      if (item.product.id.trim() != id) continue;
+      final seed = item.seedCatalog;
+      if (seed == null) continue;
+      if (seed.id.trim().isNotEmpty && seed.id.trim() != id) continue;
+      return seed;
+    }
+    return null;
+  }
+
+  /// Browse seed is rich enough to skip GET. Gallery/single/incomplete
+  /// multi-image / thin collage stubs return false → keep product GET.
+  static bool _seedSufficientToSkipGet(CatalogProduct seed) {
+    if (seed.id.trim().isEmpty) return false;
+    final imageCount =
+        seed.imageUrls.isNotEmpty
+            ? seed.imageUrls.length
+            : (seed.primaryImageUrl.trim().isEmpty ? 0 : 1);
+    if (imageCount <= 0) return false;
+    // sub_collection with only a primary needs GET to expand images[].
+    if (seed.kind == CatalogProductKind.subCollection && imageCount < 2) {
+      return false;
+    }
+    return true;
+  }
+
+  /// Usable feed seed for skip-GET, or null → fall through to network.
+  CatalogProduct? _usableFeedSeed(String productId) {
+    final seed = _seedCatalogFor(productId);
+    if (seed == null) return null;
+    if (!_seedSufficientToSkipGet(seed)) return null;
+    return seed;
+  }
+
+  /// Apply list/detail [CatalogProduct] into details state (same as product GET).
+  void _applyCatalogProductHydrate(
+    Emitter<ProductDetailsState> emit,
+    CatalogProduct catalogProduct, {
+    required String source,
+  }) {
+    if (catalogProduct.id.trim().isEmpty) return;
+    final fromProduct =
+        CatalogUiMapper.catalogProductToStoreProduct(catalogProduct);
+    final resolvedCanEdit = _resolveCanEdit(
+      explicit: state.product.canEdit,
+      isOwnStore: state.isOwnStore,
+      kind: _kindFromProduct(fromProduct),
+    );
+    final resolvedCanDelete =
+        state.product.canDelete || state.isOwnStore;
+    final merged = state.product.copyWith(
+      title:
+          fromProduct.title.trim().isNotEmpty ? fromProduct.title : null,
+      imagePaths:
+          fromProduct.imagePaths.isNotEmpty ? fromProduct.imagePaths : null,
+      photoAssetIds:
+          fromProduct.photoAssetIds.isNotEmpty
+              ? fromProduct.photoAssetIds
+              : null,
+      imageThumbhashes:
+          fromProduct.imageThumbhashes.isNotEmpty
+              ? fromProduct.imageThumbhashes
+              : null,
+      isLocked: fromProduct.isLocked,
+      stockStatus: fromProduct.stockStatus,
+      mtoDays: fromProduct.mtoDays,
+      precisionTag:
+          fromProduct.precisionTag.isNotEmpty
+              ? fromProduct.precisionTag
+              : null,
+      collectionId:
+          fromProduct.collectionId.isNotEmpty
+              ? fromProduct.collectionId
+              : null,
+      likeCount: fromProduct.likeCount,
+      viewCount: fromProduct.viewCount,
+      importFlags: fromProduct.importFlags,
+      imageImportStatuses:
+          fromProduct.imageImportStatuses.isNotEmpty
+              ? fromProduct.imageImportStatuses
+              : null,
+      canEdit: resolvedCanEdit,
+      canDelete: resolvedCanDelete,
+    );
+    final hydratedId = merged.id.trim();
+    final likedIds = Set<String>.from(state.likedPhotoIds);
+    final likedKey = hydratedId.isEmpty ? '' : 'product:$hydratedId';
+    // Session like toggle beats stale browse seed liked:false.
+    final likedOverride =
+        hydratedId.isEmpty
+            ? null
+            : ViewerProductFlags.instance.likedOverride(hydratedId);
+    final resolvedLiked =
+        likedOverride ??
+        ((likedKey.isNotEmpty && likedIds.contains(likedKey)) ||
+            catalogProduct.liked == true);
+    if (resolvedLiked && likedKey.isNotEmpty) {
+      likedIds.add(likedKey);
+      final primaryAsset =
+          merged.photoAssetIds.isNotEmpty
+              ? merged.photoAssetIds.first.trim()
+              : '';
+      if (primaryAsset.isNotEmpty) likedIds.add(primaryAsset);
+    } else if (likedOverride == false && likedKey.isNotEmpty) {
+      likedIds.remove(likedKey);
+    }
+
+    final fromServer = catalogProduct.wishlisted;
+    final wishOverride =
+        hydratedId.isEmpty
+            ? null
+            : WishlistPrefetcher.instance.wishlistOverride(hydratedId);
+    // Session wishlist toggle / in-bloc set / warm page beat stale seed false.
+    final wishlisted =
+        wishOverride ??
+        ((hydratedId.isNotEmpty &&
+                state.wishlistedProductIds.contains(hydratedId)) ||
+            fromServer == true ||
+            (hydratedId.isNotEmpty &&
+                WishlistPrefetcher.instance.containsTargetId(hydratedId)));
+    if (fromServer != null || wishOverride != null) {
+      BeVerify.ok(
+        'details hydrate from $source',
+        detail:
+            '${BeVerify.flag('liked', catalogProduct.liked)} '
+            '${BeVerify.flag('wishlisted', fromServer)} '
+            'like=$resolvedLiked wishlist=$wishlisted '
+            'likedOv=$likedOverride wishOv=$wishOverride',
+      );
+    } else {
+      BeVerify.fail(
+        'wishlisted omitted — using cache fallback',
+        detail:
+            'source=$source wishlist=$wishlisted '
+            '${BeVerify.flag('liked', catalogProduct.liked)}',
+      );
+    }
+    final productSpec = ProductSpec.fromCatalogProductMap(
+      catalogProduct.toFlatSpecMap(),
+    );
+    final wishIds = Set<String>.from(state.wishlistedProductIds);
+    if (wishlisted && hydratedId.isNotEmpty) {
+      wishIds.add(hydratedId);
+    } else if (!wishlisted && hydratedId.isNotEmpty) {
+      wishIds.remove(hydratedId);
+    }
+    // Seed count chrome maps so chips work before any toggle (jewel seed
+    // sets productSpecsById → hasEmbeddedProducts, which otherwise blanks chips).
+    final nextLikeCounts = Map<String, int>.from(state.photoLikeCounts);
+    final likeCount = catalogProduct.likeCount;
+    if (likeCount != null && hydratedId.isNotEmpty) {
+      nextLikeCounts.putIfAbsent(hydratedId, () => likeCount);
+      for (final assetId in merged.photoAssetIds) {
+        final a = assetId.trim();
+        if (a.isNotEmpty) nextLikeCounts.putIfAbsent(a, () => likeCount);
+      }
+    }
+    final nextViewCounts = Map<String, int>.from(state.photoViewCounts);
+    final viewCount = catalogProduct.viewCount;
+    if (viewCount != null && hydratedId.isNotEmpty) {
+      nextViewCounts.putIfAbsent(hydratedId, () => viewCount);
+      for (final assetId in merged.photoAssetIds) {
+        final a = assetId.trim();
+        if (a.isNotEmpty) nextViewCounts.putIfAbsent(a, () => viewCount);
+      }
+    }
+    if (hydratedId.isNotEmpty) _hydratedProductIds.add(hydratedId);
+    emit(
+      state.copyWith(
+        product: merged,
+        specifications: productSpec,
+        productSpecsById: {
+          ...state.productSpecsById,
+          if (hydratedId.isNotEmpty) hydratedId: productSpec,
+          for (final assetId in merged.photoAssetIds)
+            if (assetId.trim().isNotEmpty) assetId.trim(): productSpec,
+        },
+        precisionTag:
+            fromProduct.precisionTag.isNotEmpty
+                ? fromProduct.precisionTag
+                : state.precisionTag,
+        likedPhotoIds: likedIds,
+        photoLikeCounts: nextLikeCounts,
+        photoViewCounts: nextViewCounts,
+        isLoadingPhotos: false,
+        canEdit: resolvedCanEdit,
+        canDelete: resolvedCanDelete,
+        usesProductLike: true,
+        isWishlisted: wishlisted,
+        wishlistedProductIds: wishIds,
+        isContentLocked: catalogProduct.isLocked || merged.isLocked,
+      ),
+    );
+  }
+
+  /// Re-apply specs / wishlist chrome after a prior hydrate in this session.
+  bool _applyCachedJewelHydrate(
+    Emitter<ProductDetailsState> emit,
+    String productId,
+  ) {
+    final id = productId.trim();
+    if (id.isEmpty || !_hydratedProductIds.contains(id)) return false;
+    final spec = state.productSpecsById[id];
+    if (spec == null) return false;
+    final wishlisted = state.wishlistedProductIds.contains(id);
+    BeVerify.info(
+      'details hydrate from session cache',
+      detail: 'listing=${BeVerify.shortId(id)} wishlist=$wishlisted',
+    );
+    emit(
+      state.copyWith(
+        specifications: spec,
+        precisionTag:
+            state.product.precisionTag.isNotEmpty
+                ? state.product.precisionTag
+                : state.precisionTag,
+        isLoadingPhotos: false,
+        usesProductLike: true,
+        isWishlisted: wishlisted,
+        isContentLocked: state.product.isLocked || state.isContentLocked,
+      ),
+    );
+    return true;
   }
 
   /// Photo index in [updated] for a feed row whose product id is an embedded
@@ -304,9 +557,26 @@ class ProductDetailsBloc
     }
 
     final requestedListingId = state.product.id;
+    // Jewel (nested collage piece) has parent collectionId set — use
+    // GET /products/:id. Listing/grid cards keep collectionId empty and
+    // their id is the collection listing — skip product GET (often 404).
+    final preferCollectionDetail =
+        state.product.collectionId.trim().isEmpty;
+    if (!preferCollectionDetail) {
+      // Browse jewel rich seed — hydrate without GET. Thin / multi-image
+      // incomplete seeds fall through so gallery/single GET stays intact.
+      final seed = _usableFeedSeed(requestedListingId);
+      if (seed != null) {
+        _applyCatalogProductHydrate(emit, seed, source: 'feed_seed');
+        return;
+      }
+      if (_applyCachedJewelHydrate(emit, requestedListingId)) {
+        return;
+      }
+    }
     emit(state.copyWith(isLoadingPhotos: true));
     try {
-      // Jewel product id → GET /products/:id; else legacy collection detail.
+      if (!preferCollectionDetail) {
       try {
         final catalogProduct = await _collectionRepository.fetchProduct(
           productId: requestedListingId,
@@ -317,108 +587,10 @@ class ProductDetailsBloc
           return;
         }
         if (catalogProduct.id.trim().isNotEmpty) {
-          final fromProduct =
-              CatalogUiMapper.catalogProductToStoreProduct(catalogProduct);
-          final merged = state.product.copyWith(
-            title:
-                fromProduct.title.trim().isNotEmpty
-                    ? fromProduct.title
-                    : null,
-            imagePaths:
-                fromProduct.imagePaths.isNotEmpty
-                    ? fromProduct.imagePaths
-                    : null,
-            photoAssetIds:
-                fromProduct.photoAssetIds.isNotEmpty
-                    ? fromProduct.photoAssetIds
-                    : null,
-            imageThumbhashes:
-                fromProduct.imageThumbhashes.isNotEmpty
-                    ? fromProduct.imageThumbhashes
-                    : null,
-            isLocked: fromProduct.isLocked,
-            stockStatus: fromProduct.stockStatus,
-            mtoDays: fromProduct.mtoDays,
-            precisionTag:
-                fromProduct.precisionTag.isNotEmpty
-                    ? fromProduct.precisionTag
-                    : null,
-            collectionId:
-                fromProduct.collectionId.isNotEmpty
-                    ? fromProduct.collectionId
-                    : null,
-            likeCount: fromProduct.likeCount,
-            viewCount: fromProduct.viewCount,
-            importFlags: fromProduct.importFlags,
-            imageImportStatuses:
-                fromProduct.imageImportStatuses.isNotEmpty
-                    ? fromProduct.imageImportStatuses
-                    : null,
-            canEdit: state.isOwnStore || state.product.canEdit,
-            canDelete: state.isOwnStore || state.product.canDelete,
-          );
-          final likedIds = Set<String>.from(state.likedPhotoIds);
-          if (catalogProduct.liked == true) {
-            likedIds.add('product:${merged.id}');
-            final primaryAsset = merged.photoAssetIds.isNotEmpty
-                ? merged.photoAssetIds.first.trim()
-                : '';
-            if (primaryAsset.isNotEmpty) likedIds.add(primaryAsset);
-          }
-          // Prefer server wishlisted; else warm wishlist cache.
-          final fromServer = catalogProduct.wishlisted;
-          final fromCache =
-              fromServer == null
-                  ? WishlistPrefetcher.instance.containsTargetId(merged.id)
-                  : false;
-          final wishlisted =
-              fromServer ?? (fromCache || state.isWishlisted);
-          if (fromServer != null) {
-            BeVerify.ok(
-              'details hydrate from product GET',
-              detail:
-                  '${BeVerify.flag('liked', catalogProduct.liked)} '
-                  '${BeVerify.flag('wishlisted', fromServer)} '
-                  'like=${catalogProduct.liked == true} '
-                  'wishlist=$wishlisted',
-            );
-          } else {
-            BeVerify.fail(
-              'wishlisted omitted — using cache fallback',
-              detail:
-                  'cacheHit=$fromCache wishlist=$wishlisted '
-                  '${BeVerify.flag('liked', catalogProduct.liked)}',
-            );
-          }
-          final productSpec = ProductSpec.fromCatalogProductMap(
-            catalogProduct.toFlatSpecMap(),
-          );
-          final wishIds = Set<String>.from(state.wishlistedProductIds);
-          if (wishlisted && merged.id.trim().isNotEmpty) {
-            wishIds.add(merged.id.trim());
-          }
-          emit(
-            state.copyWith(
-              product: merged,
-              specifications: productSpec,
-              productSpecsById: {
-                if (merged.id.trim().isNotEmpty) merged.id.trim(): productSpec,
-                for (final id in merged.photoAssetIds)
-                  if (id.trim().isNotEmpty) id.trim(): productSpec,
-              },
-              precisionTag:
-                  fromProduct.precisionTag.isNotEmpty
-                      ? fromProduct.precisionTag
-                      : state.precisionTag,
-              likedPhotoIds: likedIds,
-              isLoadingPhotos: false,
-              canEdit: merged.canEdit,
-              canDelete: merged.canDelete,
-              usesProductLike: true,
-              isWishlisted: wishlisted,
-              wishlistedProductIds: wishIds,
-              isContentLocked: false,
-            ),
+          _applyCatalogProductHydrate(
+            emit,
+            catalogProduct,
+            source: 'product GET',
           );
           return;
         }
@@ -446,6 +618,14 @@ class ProductDetailsBloc
         BeVerify.info(
           'product GET → collection fallback',
           detail: 'listing=${BeVerify.shortId(requestedListingId)} non-api',
+        );
+      }
+      } else {
+        BeVerify.info(
+          'details hydrate collection-first',
+          detail:
+              'listing=${BeVerify.shortId(requestedListingId)} '
+              'empty collectionId',
         );
       }
 
@@ -611,6 +791,15 @@ class ProductDetailsBloc
         (event.storeId != null && event.storeId!.trim().isNotEmpty)
             ? event.storeId!.trim()
             : state.storeId;
+    final seed = _usableFeedSeed(event.product.id);
+    final canCache =
+        seed == null &&
+        _hydratedProductIds.contains(event.product.id.trim()) &&
+        state.productSpecsById.containsKey(event.product.id.trim());
+    final needsNetwork =
+        seed == null &&
+        !canCache &&
+        _canFetchPhotos(nextStoreId, event.product);
     emit(
       state.copyWith(
         product: event.product,
@@ -623,7 +812,7 @@ class ProductDetailsBloc
             (event.storeLink != null && event.storeLink!.trim().isNotEmpty)
                 ? event.storeLink!.trim()
                 : state.storeLink,
-        isLoadingPhotos: _canFetchPhotos(nextStoreId, event.product),
+        isLoadingPhotos: needsNetwork,
         apiTag: '',
         clearSpecifications: true,
         precisionTag: '',
@@ -639,7 +828,14 @@ class ProductDetailsBloc
         clearInfoMessage: true,
       ),
     );
-    if (_canFetchPhotos(nextStoreId, event.product)) {
+    if (seed != null) {
+      _applyCatalogProductHydrate(emit, seed, source: 'feed_seed');
+      return;
+    }
+    if (_applyCachedJewelHydrate(emit, event.product.id)) {
+      return;
+    }
+    if (needsNetwork) {
       add(const ProductDetailsLoadPhotos());
     }
   }
@@ -1155,6 +1351,7 @@ class ProductDetailsBloc
         photoLikeCounts: nextCounts,
         fallback: nextCount,
       );
+      ViewerProductFlags.instance.markLiked(id, liked: result.liked);
       BeVerify.ok(
         'like toggle',
         detail:
@@ -1258,6 +1455,11 @@ class ProductDetailsBloc
       } else {
         nextWish.remove(productId);
       }
+      // Survive browse seed hydrate on reopen / swipe (seed stays stale).
+      WishlistPrefetcher.instance.markWishlisted(
+        productId,
+        wishlisted: result.wishlisted,
+      );
       BeVerify.ok(
         'wishlist toggle',
         detail:

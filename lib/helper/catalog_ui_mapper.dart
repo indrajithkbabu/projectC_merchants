@@ -1,3 +1,4 @@
+import 'package:project_c/helper/product_image.dart';
 import 'package:project_c/models/catalog/catalog_product_models.dart';
 import 'package:project_c/models/catalog/catalog_store.dart';
 import 'package:project_c/models/catalog/collection_models.dart';
@@ -34,6 +35,7 @@ class CatalogUiMapper {
       isOwn: store.isOwn,
       relationship: store.relationship,
       followStatus: resolvedFollow,
+      canViewContent: store.resolvedCanViewContent,
       coverImageUrl: store.coverImageUrl,
       imageUrls: urls,
       phone: store.phone,
@@ -72,6 +74,7 @@ class CatalogUiMapper {
       mtoDays: summary.mtoDays,
       precisionTag: summary.precisionTag,
       importFlags: summary.importFlags,
+      albumItemCount: summary.photoCount,
       // Prefer listing `createdAt` (IST/UTC); else cover upload time; else ObjectId.
       createdAt: resolveCollectionCreatedAt(
         createdAt: summary.createdAt,
@@ -152,6 +155,76 @@ class CatalogUiMapper {
         createdAt: product.createdAt,
         id: product.id,
       ),
+    );
+  }
+
+  /// Thin [CatalogProduct] from a painted [StoreProduct] so product-details can
+  /// skip `GET /products/:id` when channel / gallery / search already have
+  /// displayable frames (API #16 residual). Specs may still be sparse.
+  static CatalogProduct? catalogSeedFromStoreProduct(
+    StoreProduct product, {
+    String storeId = '',
+  }) {
+    final id = product.id.trim();
+    if (id.isEmpty) return null;
+    final urls = <String>[
+      for (final p in product.imagePaths)
+        if (ProductImagePaths.isDisplayable(p)) p.trim(),
+    ];
+    if (urls.isEmpty) {
+      final primary = product.primaryImagePath?.trim() ?? '';
+      if (!ProductImagePaths.isDisplayable(primary)) return null;
+      urls.add(primary);
+    }
+    final thumbs = [
+      for (var i = 0; i < urls.length; i++)
+        i < product.imageThumbnailUrls.length
+            ? product.imageThumbnailUrls[i].trim()
+            : '',
+    ];
+    final details = [
+      for (var i = 0; i < urls.length; i++)
+        i < product.imageDetailUrls.length
+            ? product.imageDetailUrls[i].trim()
+            : '',
+    ];
+    final hashes = [
+      for (var i = 0; i < urls.length; i++)
+        i < product.imageThumbhashes.length
+            ? product.imageThumbhashes[i].trim()
+            : '',
+    ];
+    final ids = [
+      for (var i = 0; i < urls.length; i++)
+        i < product.photoAssetIds.length ? product.photoAssetIds[i].trim() : '',
+    ];
+    return CatalogProduct(
+      id: id,
+      storeId: storeId.trim(),
+      collectionId: product.collectionId.trim(),
+      kind:
+          urls.length > 1
+              ? CatalogProductKind.subCollection
+              : CatalogProductKind.single,
+      title: product.title,
+      primaryImageUrl: urls.first,
+      primaryImageThumbnailUrl: thumbs.isNotEmpty ? thumbs.first : '',
+      primaryImageDetailUrl: details.isNotEmpty ? details.first : '',
+      primaryImageId: ids.isNotEmpty ? ids.first : '',
+      primaryImageThumbhash: hashes.isNotEmpty ? hashes.first : '',
+      imageUrls: urls,
+      imageThumbnailUrls: thumbs,
+      imageDetailUrls: details,
+      imageIds: ids,
+      imageThumbhashes: hashes,
+      isLocked: product.isLocked,
+      stockStatus: product.stockStatus,
+      mtoDays: product.mtoDays,
+      precisionTag: product.precisionTag,
+      likeCount: product.likeCount,
+      viewCount: product.viewCount,
+      importFlags: product.importFlags,
+      createdAt: product.createdAt,
     );
   }
 
@@ -316,6 +389,10 @@ class CatalogUiMapper {
     // likes — badge uses the larger of listing vs sum of embedded products.
     final fromProducts = _sumCatalogProductCounts(products);
     final wishlistFromProducts = _wishlistCountFromProducts(products);
+    final albumCount =
+        summary.photoCount > orderedUrls.length
+            ? summary.photoCount
+            : orderedUrls.length;
     return cover.copyWith(
       imagePaths: orderedUrls,
       photoAssetIds: orderedIds,
@@ -325,14 +402,84 @@ class CatalogUiMapper {
       imageIsLocked: orderedLocks,
       imageStockStatuses: orderedStocks,
       imageImportStatuses: orderedImportStatuses,
+      albumItemCount: albumCount,
       tags: [
         if (summary.tag.isNotEmpty) summary.tag,
         if (summary.kind != null) summary.kind!,
-        if (orderedUrls.isNotEmpty) '${orderedUrls.length} pieces',
+        if (albumCount > 0) '$albumCount pieces',
       ],
       likeCount: _preferCount(cover.likeCount, fromProducts.likes),
       viewCount: _preferCount(cover.viewCount, fromProducts.views),
       wishlistCount: _preferCount(cover.wishlistCount, wishlistFromProducts),
+    );
+  }
+
+  /// Replace collage media on an existing card after lazy album expand.
+  ///
+  /// When [albumExhausted] is true the products page is the full set — use
+  /// loaded frame count instead of preserving a sticky overcount (stale cache
+  /// / inflated `albumItemCount` must not keep `needsAlbumExpand` forever).
+  /// When false (partial page / hasMore), keep the larger claimed total so
+  /// swipe can still show remaining pages.
+  static StoreProduct expandCollectionCard({
+    required StoreProduct card,
+    required List<CatalogProduct> products,
+    bool albumExhausted = false,
+  }) {
+    if (products.isEmpty) return card;
+    final coverUrl = card.primaryImagePath?.trim() ?? '';
+    // When exhausted, seed photoCount from products length so
+    // collectionCardFromProducts does not re-inflate from the sticky claim.
+    final claimed = albumExhausted
+        ? products.length
+        : card.displayAlbumItemCount;
+    final summary = CollectionSummary(
+      id: card.id,
+      name: card.title,
+      revision: 1,
+      photoCount: claimed,
+      cover: CatalogPhoto(
+        id: card.photoAssetIds.isNotEmpty ? card.photoAssetIds.first : null,
+        width: 0,
+        height: 0,
+        url: coverUrl,
+        thumbnailUrl:
+            card.imageThumbnailUrls.isNotEmpty
+                ? card.imageThumbnailUrls.first
+                : '',
+        detailUrl:
+            card.imageDetailUrls.isNotEmpty ? card.imageDetailUrls.first : '',
+        thumbhash: card.thumbhashAt(0),
+      ),
+      tag: card.tags.isNotEmpty ? card.tags.first : '',
+      description: card.description,
+      likeCount: card.likeCount,
+      viewCount: card.viewCount,
+      isLocked: card.isLocked,
+      stockStatus: card.stockStatus,
+      mtoDays: card.mtoDays,
+      precisionTag: card.precisionTag,
+      importFlags: card.importFlags,
+      createdAt: card.createdAt,
+    );
+    final expanded = collectionCardFromProducts(
+      summary: summary,
+      products: products,
+    );
+    final album = albumExhausted
+        ? expanded.displayAlbumItemCount
+        : (card.displayAlbumItemCount > expanded.displayAlbumItemCount
+            ? card.displayAlbumItemCount
+            : expanded.displayAlbumItemCount);
+    return expanded.copyWith(
+      title: card.title,
+      description: card.description,
+      canEdit: card.canEdit,
+      canDelete: card.canDelete,
+      toneIndex: card.toneIndex,
+      collectionId: card.collectionId,
+      albumItemCount: album,
+      createdAt: card.createdAt,
     );
   }
 
@@ -341,7 +488,7 @@ class CatalogUiMapper {
   /// Uses parallel [StoreProduct] media arrays written by
   /// [collectionCardFromProducts]. One tile per CatalogProduct id (album may
   /// expand to many paths — browse stays jewel one-tile-per-product). Empty
-  /// when fewer than two distinct product cells.
+  /// only when there are no displayable paths / product ids.
   static List<CatalogProduct> seedProductsFromCollectionCard(
     StoreProduct card, {
     required String storeId,
@@ -350,7 +497,7 @@ class CatalogUiMapper {
       for (final p in card.imagePaths)
         if (p.trim().isNotEmpty) p.trim(),
     ];
-    if (paths.length < 2) return const [];
+    if (paths.isEmpty) return const [];
     final collectionId = card.id.trim();
     final out = <CatalogProduct>[];
     final seenProductIds = <String>{};

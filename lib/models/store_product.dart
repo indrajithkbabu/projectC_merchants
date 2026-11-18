@@ -30,6 +30,7 @@ class StoreProduct extends Equatable {
     this.precisionTag = '',
     this.collectionId = '',
     this.importFlags = const ProductImportFlags(),
+    this.albumItemCount = 0,
     DateTime? createdAt,
   }) : createdAt = createdAt ?? DateTime.now();
 
@@ -40,6 +41,11 @@ class StoreProduct extends Equatable {
 
   /// Master / original CDN URLs (pinch-zoom identity).
   final List<String> imagePaths;
+
+  /// Authoritative album size from collection `productCount` / `photoCount`.
+  /// May be larger than [imagePaths] when profile enrich only hydrated the
+  /// first collage page (BE-2 `productsLimit=9`). `0` → use loaded paths.
+  final int albumItemCount;
 
   /// Parallel to [imagePaths] when the API returns member photo ids.
   /// Group collage cards store **CatalogProduct ids** (not img_* keys).
@@ -120,6 +126,18 @@ class StoreProduct extends Equatable {
   bool get hasLocalImage => imagePaths.isNotEmpty;
 
   String? get primaryImagePath => imagePaths.isEmpty ? null : imagePaths.first;
+
+  /// Badge / slider page math — never under-count vs browse.
+  int get displayAlbumItemCount {
+    final loaded =
+        imagePaths.where((p) => p.trim().isNotEmpty).length;
+    if (albumItemCount > loaded) return albumItemCount;
+    return loaded;
+  }
+
+  /// True when more album frames exist than the collage currently holds.
+  bool get needsAlbumExpand =>
+      displayAlbumItemCount > imagePaths.where((p) => p.trim().isNotEmpty).length;
 
   String? thumbhashAt(int index) {
     if (index < 0 || index >= imageThumbhashes.length) return null;
@@ -246,6 +264,7 @@ class StoreProduct extends Equatable {
     String? precisionTag,
     String? collectionId,
     ProductImportFlags? importFlags,
+    int? albumItemCount,
     DateTime? createdAt,
   }) {
     return StoreProduct(
@@ -278,6 +297,7 @@ class StoreProduct extends Equatable {
       precisionTag: precisionTag ?? this.precisionTag,
       collectionId: collectionId ?? this.collectionId,
       importFlags: importFlags ?? this.importFlags,
+      albumItemCount: albumItemCount ?? this.albumItemCount,
       createdAt: createdAt ?? this.createdAt,
     );
   }
@@ -308,6 +328,7 @@ class StoreProduct extends Equatable {
       if (mtoDays != null) 'mtoDays': mtoDays,
       if (precisionTag.isNotEmpty) 'precisionTag': precisionTag,
       if (collectionId.isNotEmpty) 'collectionId': collectionId,
+      if (albumItemCount > 0) 'albumItemCount': albumItemCount,
       if (importFlags.canImport != null) 'canImport': importFlags.canImport,
       if (importFlags.importRestrictionReason != null)
         'importRestrictionReason': importFlags.importRestrictionReason,
@@ -409,6 +430,7 @@ class StoreProduct extends Equatable {
       mtoDays: (map['mtoDays'] as num?)?.toInt(),
       precisionTag: (map['precisionTag'] as String?) ?? '',
       collectionId: (map['collectionId'] as String?) ?? '',
+      albumItemCount: (map['albumItemCount'] as num?)?.toInt() ?? 0,
       importFlags: ProductImportFlags.fromJson(
         Map<String, dynamic>.from(map),
       ),
@@ -504,6 +526,7 @@ class StoreProduct extends Equatable {
     precisionTag,
     collectionId,
     importFlags,
+    albumItemCount,
     createdAt,
   ];
 }

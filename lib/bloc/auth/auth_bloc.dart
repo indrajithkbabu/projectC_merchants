@@ -15,6 +15,7 @@ import 'package:project_c/session/catalog_session.dart';
 import 'package:project_c/webservice/cart/cart_repository.dart';
 import 'package:project_c/services/store_home_prefetcher.dart';
 import 'package:project_c/services/view_beacon.dart';
+import 'package:project_c/services/viewer_product_flags.dart';
 import 'package:project_c/services/wishlist_prefetcher.dart';
 import 'package:project_c/storage/store_home_cache.dart';
 import 'package:project_c/webservice/auth/auth_repository.dart';
@@ -477,6 +478,7 @@ class AuthBloc extends Bloc<AuthEvent, AuthState> {
     );
     StoreHomePrefetcher.instance.invalidate();
     WishlistPrefetcher.instance.invalidate();
+    ViewerProductFlags.instance.invalidate();
     ServiceLocator.get<CartStore>().clear();
     ViewBeacon.instance.reset();
     DeviceContactNames.invalidate();
@@ -549,6 +551,7 @@ class AuthBloc extends Bloc<AuthEvent, AuthState> {
     );
     StoreHomePrefetcher.instance.invalidate();
     WishlistPrefetcher.instance.invalidate();
+    ViewerProductFlags.instance.invalidate();
     ServiceLocator.get<CartStore>().clear();
     ViewBeacon.instance.reset();
     DeviceContactNames.invalidate();

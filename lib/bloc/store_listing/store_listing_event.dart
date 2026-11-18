@@ -35,3 +35,16 @@ class StoreListingClearMessage extends StoreListingEvent {
 class StoreListingClearAccountDeleted extends StoreListingEvent {
   const StoreListingClearAccountDeleted();
 }
+
+class StoreListingActivityUnreadUpdated extends StoreListingEvent {
+  const StoreListingActivityUnreadUpdated(this.count);
+
+  final int count;
+
+  @override
+  List<Object?> get props => [count];
+}
+
+class StoreListingActivityUnreadCleared extends StoreListingEvent {
+  const StoreListingActivityUnreadCleared();
+}

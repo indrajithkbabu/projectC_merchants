@@ -585,9 +585,11 @@ class ProfileContextBloc
     if (profile.isStore) {
       final id = profile.accountId.trim();
       if (id.isNotEmpty) {
+        // Disk/memory only — shell Ensure owns the collections network GET.
         StoreProductsPrefetcher.instance.prefetch(
           id,
           coverImageUrl: profile.effectiveAvatarUrl,
+          networkEnrich: false,
         );
       }
     }

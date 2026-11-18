@@ -548,8 +548,8 @@ class ProductDetailsState extends Equatable {
     if (id.isNotEmpty && photoLikeCounts.containsKey(id)) {
       return photoLikeCounts[id];
     }
-    // Single-product multi-photo: shared product likeCount.
-    if (usesProductLike && !hasEmbeddedProducts) {
+    // Product-like chrome (incl. jewel browse seed with productSpecsById).
+    if (usesProductLike) {
       return product.likeCount;
     }
     return photoLikeCounts[id];
@@ -557,8 +557,18 @@ class ProductDetailsState extends Equatable {
 
   int? viewCountForPhoto(int imageIndex) {
     final id = photoIdAt(imageIndex);
-    if (id.isEmpty) return null;
-    return photoViewCounts[id];
+    if (id.isNotEmpty && photoViewCounts.containsKey(id)) {
+      return photoViewCounts[id];
+    }
+    final target = catalogProductIdForPhoto(imageIndex);
+    if (target.isNotEmpty && photoViewCounts.containsKey(target)) {
+      return photoViewCounts[target];
+    }
+    // Jewel seed: list row viewCount when maps not yet keyed by photo id.
+    if (usesProductLike) {
+      return product.viewCount;
+    }
+    return null;
   }
 
   /// Sub-group id owning the photo at [imageIndex], if any.

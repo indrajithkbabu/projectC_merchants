@@ -3,8 +3,10 @@ import 'package:flutter/material.dart';
 /// Telegram-style pinch host for Gallery mosaics (same 2…9 ladder as channel Media).
 ///
 /// Uses pointer tracking (not [ScaleGestureRecognizer]) so nested scroll views
-/// do not steal the gesture. [builder] receives continuous columns while
-/// pinching; they snap to an int on release.
+/// do not steal the gesture. Continuous columns update via [ValueNotifier] so
+/// only [ListenableBuilder] listeners rebuild — not an ancestor [setState].
+/// [onColumnsChanged] fires when the **integer** count settles (pinch end /
+/// snap), not on every mid-pinch tick (avoids warm/role storms).
 class GalleryPinchHost extends StatefulWidget {
   const GalleryPinchHost({
     super.key,
@@ -26,7 +28,7 @@ class GalleryPinchHost extends StatefulWidget {
   final double minColumns;
   final double maxColumns;
 
-  /// Fired when the integer column count changes (pinch update / snap end).
+  /// Fired when the integer column count **settles** (pinch release / snap).
   final ValueChanged<int>? onColumnsChanged;
 
   @override
@@ -36,21 +38,23 @@ class GalleryPinchHost extends StatefulWidget {
 class _GalleryPinchHostState extends State<GalleryPinchHost>
     with SingleTickerProviderStateMixin {
   late final AnimationController _snap;
+  late final ValueNotifier<double> _columns;
+  late final ValueNotifier<bool> _pinching;
   final Map<int, Offset> _pointers = <int, Offset>{};
   double? _startDistance;
-  late double _columns;
   double _pinchBaseColumns = 4;
-  bool _pinching = false;
   int _lastReportedCols = 0;
 
   @override
   void initState() {
     super.initState();
-    _columns = widget.initialColumns.clamp(
+    final initial = widget.initialColumns.clamp(
       widget.minColumns,
       widget.maxColumns,
     );
-    _lastReportedCols = _columns.round();
+    _columns = ValueNotifier<double>(initial);
+    _pinching = ValueNotifier<bool>(false);
+    _lastReportedCols = initial.round();
     _snap = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 180),
@@ -60,10 +64,12 @@ class _GalleryPinchHostState extends State<GalleryPinchHost>
   @override
   void dispose() {
     _snap.dispose();
+    _columns.dispose();
+    _pinching.dispose();
     super.dispose();
   }
 
-  void _reportColumns(int cols) {
+  void _reportSettledColumns(int cols) {
     if (cols == _lastReportedCols) return;
     _lastReportedCols = cols;
     widget.onColumnsChanged?.call(cols);
@@ -77,14 +83,12 @@ class _GalleryPinchHostState extends State<GalleryPinchHost>
 
   void _onPointerDown(PointerDownEvent event) {
     _pointers[event.pointer] = event.position;
-    if (_pointers.length == 2 && !_pinching) {
+    if (_pointers.length == 2 && !_pinching.value) {
       _startDistance = _fingerDistance();
       if (_startDistance != null && _startDistance! >= 12) {
         _snap.stop();
-        setState(() {
-          _pinching = true;
-          _pinchBaseColumns = _columns;
-        });
+        _pinchBaseColumns = _columns.value;
+        _pinching.value = true;
       }
     }
   }
@@ -92,7 +96,7 @@ class _GalleryPinchHostState extends State<GalleryPinchHost>
   void _onPointerMove(PointerMoveEvent event) {
     if (!_pointers.containsKey(event.pointer)) return;
     _pointers[event.pointer] = event.position;
-    if (!_pinching || _pointers.length < 2) return;
+    if (!_pinching.value || _pointers.length < 2) return;
     final start = _startDistance;
     final now = _fingerDistance();
     if (start == null || now == null || start < 12) return;
@@ -102,25 +106,24 @@ class _GalleryPinchHostState extends State<GalleryPinchHost>
       widget.minColumns,
       widget.maxColumns,
     );
-    if ((next - _columns).abs() < 0.008) return;
-    setState(() => _columns = next);
-    _reportColumns(next.round());
+    if ((next - _columns.value).abs() < 0.008) return;
+    _columns.value = next;
   }
 
   void _onPointerEnd(PointerEvent event) {
     _pointers.remove(event.pointer);
-    if (!_pinching || _pointers.length >= 2) return;
+    if (!_pinching.value || _pointers.length >= 2) return;
     _startDistance = null;
-    final from = _columns;
+    final from = _columns.value;
     final to =
         from
             .round()
             .clamp(widget.minColumns.toInt(), widget.maxColumns.toInt())
             .toDouble();
-    setState(() => _pinching = false);
-    _reportColumns(to.toInt());
+    _pinching.value = false;
+    _reportSettledColumns(to.toInt());
     if ((from - to).abs() < 0.02) {
-      if (from != to) setState(() => _columns = to);
+      if (from != to) _columns.value = to;
       return;
     }
     final anim = Tween<double>(begin: from, end: to).animate(
@@ -128,14 +131,14 @@ class _GalleryPinchHostState extends State<GalleryPinchHost>
     );
     void tick() {
       if (!mounted) return;
-      setState(() => _columns = anim.value);
+      _columns.value = anim.value;
     }
 
     anim.addListener(tick);
     _snap.forward(from: 0).whenComplete(() {
       anim.removeListener(tick);
       if (!mounted) return;
-      setState(() => _columns = to);
+      _columns.value = to;
     });
   }
 
@@ -147,7 +150,12 @@ class _GalleryPinchHostState extends State<GalleryPinchHost>
       onPointerMove: _onPointerMove,
       onPointerUp: _onPointerEnd,
       onPointerCancel: _onPointerEnd,
-      child: widget.builder(context, _columns, _pinching),
+      child: ListenableBuilder(
+        listenable: Listenable.merge([_columns, _pinching]),
+        builder: (context, _) {
+          return widget.builder(context, _columns.value, _pinching.value);
+        },
+      ),
     );
   }
 }

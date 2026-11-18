@@ -37,6 +37,7 @@ Each numbered file is **one issue**. Open that file for request/response example
 | 13 | Every collection photo must have a stable `id` | Confirm | [13](./13-collection-photo-id.md) |
 | 14 | R2 display URLs: CDN variants + public GET + cover thumbhash | **Verify** | [14](./14-r2-responsive-display-urls.md) |
 | 15 | Collection list `cover.thumbhash` still null after #14 | **Blocker** | [15](./15-collection-cover-thumbhash.md) |
+| 17 | One-call collections with embedded `products[]` (kill N+1) | **Done** | [17](./17-collections-include-products.md) |
 
 ---
 
@@ -44,9 +45,10 @@ Each numbered file is **one issue**. Open that file for request/response example
 
 1. **15** — collection cover thumbhash on `GET …/collections` (blocker)
 2. **07** — wishlist `product: null` (blocker)
-3. **08** — re-test multi-product likes in one collection
-4. **09** — re-test wishlist batch
-5. **14** — finish device verify of media URLs
-6. Then confirm **01, 02, 05, 06, 12, 13** when convenient
+3. **17** — `GET …/collections?include=products` (store profile N+1)
+4. **08** — re-test multi-product likes in one collection
+5. **09** — re-test wishlist batch
+6. **14** — finish device verify of media URLs
+7. Then confirm **01, 02, 05, 06, 12, 13** when convenient
 
 

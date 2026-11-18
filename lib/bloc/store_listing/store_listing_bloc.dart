@@ -8,6 +8,7 @@ import 'package:project_c/helper/catalog_ui_mapper.dart';
 import 'package:project_c/helper/device_contact_names.dart';
 import 'package:project_c/helper/phone_normalize.dart';
 import 'package:project_c/helper/product_image.dart';
+import 'package:project_c/helper/store_warm_qa.dart';
 import 'package:project_c/models/catalog/catalog_page.dart';
 import 'package:project_c/models/catalog/catalog_store.dart';
 import 'package:project_c/models/store_channel.dart';
@@ -44,6 +45,8 @@ class StoreListingBloc extends Bloc<StoreListingEvent, StoreListingState> {
     on<StoreListingDeleteAccountRequested>(_onDeleteAccountRequested);
     on<StoreListingClearMessage>(_onClearMessage);
     on<StoreListingClearAccountDeleted>(_onClearAccountDeleted);
+    on<StoreListingActivityUnreadUpdated>(_onActivityUnreadUpdated);
+    on<StoreListingActivityUnreadCleared>(_onActivityUnreadCleared);
     add(const StoreListingRefreshed());
   }
 
@@ -64,14 +67,10 @@ class StoreListingBloc extends Bloc<StoreListingEvent, StoreListingState> {
   /// when rows were seeded from disk.
   bool _initialFetchPending = true;
 
-  /// Frame 0: memory cache with resolvable subtitles; else shimmer until enrich.
+  /// Frame 0: memory cache immediately (phone ok until contact names land).
   static StoreListingState _initialState() {
     final page = StoreHomeCache.instance.readMemory();
     if (page == null || page.items.isEmpty) {
-      return const StoreListingState(isLoading: true);
-    }
-    if (!_canSeedSubtitles(page)) {
-      // Avoid painting nameless rows then swapping in contacts a few seconds later.
       return const StoreListingState(isLoading: true);
     }
     final stores = [
@@ -79,23 +78,13 @@ class StoreListingBloc extends Bloc<StoreListingEvent, StoreListingState> {
         CatalogUiMapper.storeToChannel(
           page.items[i],
           avatarColor: _avatarPalette[i % _avatarPalette.length],
-        ).copyWith(
-          contactName: _resolvedContactName(page.items[i].phone),
-        ),
+        ).copyWith(contactName: _resolvedContactName(page.items[i].phone)),
     ];
     return StoreListingState(
       isLoading: false,
       allStores: stores,
       nextCursor: page.nextCursor,
     );
-  }
-
-  /// Sidecar names, live contacts index, or no phones → safe to seed.
-  static bool _canSeedSubtitles(CatalogPage<CatalogStore> page) {
-    final needsPhone = page.items.any((s) => s.phone.trim().isNotEmpty);
-    if (!needsPhone) return true;
-    if (DeviceContactNames.isReady) return true;
-    return StoreHomeCache.instance.hasContactNames;
   }
 
   static String _resolvedContactName(String phone) {
@@ -120,8 +109,7 @@ class StoreListingBloc extends Bloc<StoreListingEvent, StoreListingState> {
     final hadVisible = state.allStores.isNotEmpty;
 
     if (!hadVisible) {
-      // Only paint cache when subtitles are already resolvable; otherwise shimmer
-      // until home + contact enrich finish (single coherent land).
+      // Cache-first: paint rows immediately when disk/memory has home.
       final painted = await _tryPaintCachedHome(emit);
       if (!painted) {
         emit(
@@ -147,7 +135,10 @@ class StoreListingBloc extends Bloc<StoreListingEvent, StoreListingState> {
       // One coherent emit: owned-first order + contact names together.
       final stores = await _mapAndEnrich(page.items);
 
-      AppLog.d(_tag, 'Loaded ${stores.length} stores (enriched, ready to land)');
+      AppLog.d(
+        _tag,
+        'Loaded ${stores.length} stores (enriched, ready to land)',
+      );
       emit(
         state.copyWith(
           isLoading: false,
@@ -199,26 +190,23 @@ class StoreListingBloc extends Bloc<StoreListingEvent, StoreListingState> {
     }
   }
 
-  /// Cache paint only when names/phones can be shown without a later swap.
+  /// Cache-first home paint — show rows now; contact names enrich in a later emit.
   Future<bool> _tryPaintCachedHome(Emitter<StoreListingState> emit) async {
     final page =
         StoreHomeCache.instance.readMemory() ??
         await StoreHomeCache.instance.read();
     if (page == null || page.items.isEmpty) return false;
 
+    // Best-effort names without blocking first paint on contacts permission.
     final needsPhone = page.items.any((s) => s.phone.trim().isNotEmpty);
     if (needsPhone &&
         !StoreHomeCache.instance.hasContactNames &&
         !DeviceContactNames.isReady) {
-      // Let the network+enrich path own the first paint.
-      return false;
-    }
-
-    // If sidecar is thin but contacts are in flight / ready, finish index first.
-    if (needsPhone && !StoreHomeCache.instance.hasContactNames) {
-      try {
-        await DeviceContactNames.load();
-      } catch (_) {}
+      unawaited(
+        DeviceContactNames.load().then((_) {
+          // Names land via the ensuing home ensure/refresh emit.
+        }),
+      );
     }
 
     final stores = _applyCachedContactNames(_mapStores(page.items));
@@ -254,9 +242,7 @@ class StoreListingBloc extends Bloc<StoreListingEvent, StoreListingState> {
     for (final store in mapped) {
       final resolved = _resolvedContactName(store.phone);
       out.add(
-        resolved.isNotEmpty
-            ? store.copyWith(contactName: resolved)
-            : store,
+        resolved.isNotEmpty ? store.copyWith(contactName: resolved) : store,
       );
     }
     return out;
@@ -272,24 +258,20 @@ class StoreListingBloc extends Bloc<StoreListingEvent, StoreListingState> {
     unawaited(CatalogImageCache.warmAvatars(covers));
   }
 
-  void _afterHomePaint(
-    List<StoreChannel> stores,
-    List<CatalogStore> raw,
-  ) {
-    StoreProductsPrefetcher.instance.prefetchVisible([
+  void _afterHomePaint(List<StoreChannel> stores, List<CatalogStore> raw) {
+    StoreWarmQa.event('HOME_LIST_READY', {'stores': stores.length});
+    // Batch I2: catalog seed only — viewport visibility drives enrich, not
+    // list order. VisibilityDetector on tiles reports actual on-screen rows.
+    StoreProductsPrefetcher.instance.setListingCatalog([
       for (final s in stores) (id: s.id, coverImageUrl: s.coverImageUrl),
     ]);
     // Avatar-sized decode for visible covers (same key as CatalogNetworkAvatar).
     unawaited(
-      CatalogImageCache.warmAvatars([
-        for (final s in stores) s.coverImageUrl,
-      ]),
+      CatalogImageCache.warmAvatars([for (final s in stores) s.coverImageUrl]),
     );
     // Disk-warm remaining showcase URLs (preview) — no full decode.
     unawaited(
-      CatalogImageCache.precacheUrls([
-        for (final s in stores) ...s.imageUrls,
-      ]),
+      CatalogImageCache.precacheUrls([for (final s in stores) ...s.imageUrls]),
     );
     for (final s in raw) {
       // Seed relationship/followStatus so open-from-home never flashes Follow.
@@ -384,13 +366,11 @@ class StoreListingBloc extends Bloc<StoreListingEvent, StoreListingState> {
       AppLog.d(
         'TEST_COLD_START',
         'DELETE /me success → session cleared\n'
-        '  next: AuthLoggedOut + auth_phone_route\n'
-        '  then kill+launch → expect RESULT=UNSIGNED (A1/A4 helper)',
+            '  next: AuthLoggedOut + auth_phone_route\n'
+            '  then kill+launch → expect RESULT=UNSIGNED (A1/A4 helper)',
       );
       AppLog.d(_tag, 'Catalog account deleted');
-      emit(
-        state.copyWith(isDeletingAccount: false, accountDeleted: true),
-      );
+      emit(state.copyWith(isDeletingAccount: false, accountDeleted: true));
     } catch (e) {
       AppLog.e(_tag, 'Account delete failed', e);
       emit(
@@ -414,6 +394,23 @@ class StoreListingBloc extends Bloc<StoreListingEvent, StoreListingState> {
     Emitter<StoreListingState> emit,
   ) {
     emit(state.copyWith(clearAccountDeleted: true));
+  }
+
+  void _onActivityUnreadUpdated(
+    StoreListingActivityUnreadUpdated event,
+    Emitter<StoreListingState> emit,
+  ) {
+    final next = event.count < 0 ? 0 : event.count;
+    if (next == state.activityUnread) return;
+    emit(state.copyWith(activityUnread: next));
+  }
+
+  void _onActivityUnreadCleared(
+    StoreListingActivityUnreadCleared event,
+    Emitter<StoreListingState> emit,
+  ) {
+    if (state.activityUnread == 0) return;
+    emit(state.copyWith(activityUnread: 0));
   }
 
   List<StoreChannel> _mapStores(

@@ -20,6 +20,7 @@ import 'package:project_c/presentation/search/search_widgets/search_shimmers.dar
 import 'package:project_c/presentation/search/search_widgets/search_suggestion_list.dart';
 import 'package:project_c/presentation/search/search_widgets/search_store_privacy_row.dart';
 import 'package:project_c/services/search_recent_preferences.dart';
+import 'package:project_c/services/store_products_prefetcher.dart';
 import 'package:project_c/webservice/catalog_error_mapper.dart';
 import 'package:project_c/webservice/search/search_repository.dart';
 import 'package:project_c/webservice/store/store_repository.dart';
@@ -577,6 +578,7 @@ class _GlobalSearchRouteState extends State<GlobalSearchRoute> {
     }
     _rememberStore(name: storeName, storeId: storeId, slug: storeSlug);
     _hideKeyboard();
+    StoreProductsPrefetcher.instance.prefetch(storeId);
     Navigator.of(context).pushNamed(
       Routes.storeProfileRoute,
       arguments: <String, Object?>{

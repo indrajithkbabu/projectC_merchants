@@ -4,6 +4,7 @@ import 'package:project_c/helper/profile_switching_log.dart';
 import 'package:project_c/models/catalog/catalog_profile.dart';
 import 'package:project_c/models/catalog/catalog_tokens.dart';
 import 'package:project_c/models/catalog/profile_context.dart';
+import 'package:project_c/services/store_products_prefetcher.dart';
 import 'package:project_c/storage/session_storage.dart';
 import 'package:project_c/storage/store_home_cache.dart';
 import 'package:project_c/storage/store_meta_cache.dart';
@@ -203,6 +204,7 @@ class CatalogSession {
       StoreMetaCache.instance.clearAll(),
       CatalogImageCache.clearAll(),
     ]);
+    StoreProductsPrefetcher.instance.invalidateAll();
     AppLog.d(_tag, 'Session cleared');
   }
 

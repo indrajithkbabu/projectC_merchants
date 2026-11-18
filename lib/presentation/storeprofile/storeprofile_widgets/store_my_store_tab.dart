@@ -250,7 +250,11 @@ class StoreMyStoreTab extends StatelessWidget {
             itemCount: 12,
           )
         else if (!state.productsResolved && photoCells.isEmpty)
-          const SliverToBoxAdapter(child: SizedBox.shrink())
+          const StoreProductGridShimmer(
+            viewMode: ProductViewMode.gallery,
+            galleryColumns: 3,
+            itemCount: 12,
+          )
         else if (state.showProductGridEmpty)
           SliverToBoxAdapter(
             child: Padding(

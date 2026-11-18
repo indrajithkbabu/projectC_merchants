@@ -1,16 +1,21 @@
 import 'dart:async';
+import 'dart:collection';
 import 'dart:io';
 
 import 'package:bloc/bloc.dart';
 import 'package:equatable/equatable.dart';
+import 'package:flutter/foundation.dart';
 import 'package:project_c/bloc/team/team_bloc.dart';
+import 'package:stream_transform/stream_transform.dart';
 import 'package:project_c/di/service_locator.dart';
 import 'package:project_c/helper/app_log.dart';
+import 'package:project_c/helper/catalog_api_call_log.dart';
 import 'package:project_c/helper/catalog_ui_mapper.dart';
 import 'package:project_c/helper/device_contact_names.dart';
 import 'package:project_c/helper/import_qa.dart';
 import 'package:project_c/helper/owner_item_delete.dart';
 import 'package:project_c/helper/product_image.dart';
+import 'package:project_c/helper/store_warm_qa.dart';
 import 'package:project_c/models/catalog/catalog_store.dart';
 import 'package:project_c/models/catalog/collection_models.dart';
 import 'package:project_c/models/catalog/follow_api_models.dart';
@@ -27,7 +32,6 @@ import 'package:project_c/storage/store_products_cache.dart';
 import 'package:project_c/webservice/catalog_api_exception.dart';
 import 'package:project_c/webservice/catalog_error_mapper.dart';
 import 'package:project_c/webservice/collection/collection_repository.dart';
-import 'package:project_c/webservice/import/import_repository.dart';
 import 'package:project_c/webservice/store/store_repository.dart';
 import 'package:project_c/webservice/store/store_request.dart';
 
@@ -44,115 +48,119 @@ class StoreProfileBloc extends Bloc<StoreProfileEvent, StoreProfileState> {
     String? storeLink,
     String? coverImageUrl,
     int avatarColor = 0xFF2AABEE,
+
     /// Seeded from home/detail so owner/member never flash visitor Follow.
     StoreFollowStatus? initialFollowStatus,
+
+    /// From home [CatalogStore.resolvedCanViewContent] — unlock grid on tap
+    /// without waiting for GET store (private stays false on listing).
+    bool? initialCanViewContent,
+
+    /// Shell mounts this bloc on Stores home — wait for Profile tab / ensure.
+    bool deferInitialCatalogLoads = false,
     CollectionRepository? collectionRepository,
     StoreRepository? storeRepository,
-    ImportRepository? importRepository,
     CatalogSession? session,
     ProductUploadCoordinator? uploadCoordinator,
   }) : _collectionRepository =
-           collectionRepository ??
-           ServiceLocator.get<CollectionRepository>(),
+           collectionRepository ?? ServiceLocator.get<CollectionRepository>(),
        _storeRepository =
            storeRepository ?? ServiceLocator.get<StoreRepository>(),
-       _importRepository =
-           importRepository ?? ServiceLocator.get<ImportRepository>(),
        _session = session ?? ServiceLocator.get<CatalogSession>(),
        _uploadCoordinator =
            uploadCoordinator ?? ServiceLocator.get<ProductUploadCoordinator>(),
-       super(
-         () {
-           final id = storeId ?? (isOwnStore ? 'my_store' : 'other_store');
-           final cachedProducts =
-               StoreProductsCache.instance.readMemory(id) ??
-               products ??
-               const <StoreProduct>[];
-           final cachedMeta = StoreMetaCache.instance.readMemory(id);
-           final argCover = coverImageUrl?.trim() ?? '';
-           final cachedCover = cachedMeta?.coverImageUrl.trim() ?? '';
-           final cover =
-               argCover.isNotEmpty
-                   ? argCover
-                   : (cachedCover.isNotEmpty ? cachedCover : '');
-           final argName =
-               storeName.trim().isEmpty ? 'Your Store' : storeName.trim();
-           final cachedName = cachedMeta?.storeName.trim() ?? '';
-           final cachedLink = cachedMeta?.storeLink.trim() ?? '';
-           final own = isOwnStore;
-           final seededFollow =
-               own
-                   ? StoreFollowStatus.self
-                   : (initialFollowStatus ??
-                       cachedMeta?.followStatus ??
-                       StoreFollowStatus.none);
-           // Visitors without cached meta stay locked until GET store resolves.
-           final initialCanView =
-               own || (cachedMeta?.canViewContent ?? false);
-           final coord =
-               uploadCoordinator ??
-               ServiceLocator.get<ProductUploadCoordinator>();
-           final activeUploads = coord.pendingForStore(id);
-           final hidden = coord.inFlightListingIdsForStore(id);
-           final visibleCached = List<StoreProduct>.from(
-             hidden.isEmpty
-                 ? cachedProducts
-                 : [
-                   for (final p in cachedProducts)
-                     if (!hidden.contains(p.id)) p,
-                 ],
-           )..sort((a, b) => b.id.compareTo(a.id));
-           final gatedProducts =
-               initialCanView ? visibleCached : const <StoreProduct>[];
-           // When gated, keep a count from warm/cache products if the GET
-           // store payload omits productCount (common for private visitors).
-           final seedProductCount =
-               cachedMeta?.productCount ??
-               (cachedProducts.isNotEmpty ? cachedProducts.length : null);
-           return StoreProfileState(
-             storeName: cachedName.isNotEmpty ? cachedName : argName,
-             members: members,
-             products: gatedProducts,
-             productsDetailed: gatedProducts,
-             isOwnStore: own,
-             viewerHasOwnStore: _hasOwnStoreId(
-               session ?? ServiceLocator.get<CatalogSession>(),
-             ),
-             storeId: id,
-             avatarColor: avatarColor,
-             overrideStoreLink:
-                 cachedLink.isNotEmpty ? cachedLink : storeLink,
-             coverImageUrl: cover,
-             storeImages: cachedMeta?.storeImages ?? const [],
-             city: cachedMeta?.city ?? '',
-             privacy: cachedMeta?.privacy ?? StorePrivacyMode.public,
-             followerCount: cachedMeta?.followerCount ?? 0,
-             followingCount: cachedMeta?.followingCount ?? 0,
-             apiProductCount: seedProductCount,
-             pendingFollowRequestCount:
-                 own ? (cachedMeta?.pendingRequestsCount ?? 0) : 0,
-             canViewContent: initialCanView,
-             followStatus: seededFollow,
-             currentUserId:
-                 (session ?? ServiceLocator.get<CatalogSession>()).profile?.id,
-             // Do not assume cold shimmer on process restart — memory is empty
-             // but disk may still have the grid. LoadCollections sets shimmer
-             // only after a confirmed disk+warm miss (clear-data / first open).
-             isLoadingProducts: false,
-             productsResolved:
-                 gatedProducts.isNotEmpty || activeUploads.isNotEmpty,
-             // Members API is owner-only; staff uses isOwnStore shell but must
-             // not spin a members loader (avoids OWNER_REQUIRED toast on switch).
-             isLoadingMembers:
-                 own &&
-                 (session ?? ServiceLocator.get<CatalogSession>())
-                     .isActingAsOwner,
-             isLoadingStoreMeta: cachedMeta == null,
-             // Survive leave/return while create upload is still in flight.
-             pendingUploads: own ? activeUploads : const [],
-           );
-         }(),
-       ) {
+       _deferInitialCatalogLoads = deferInitialCatalogLoads,
+       super(() {
+         final id = storeId ?? (isOwnStore ? 'my_store' : 'other_store');
+         final cachedProducts =
+             StoreProductsCache.instance.readMemory(id) ??
+             products ??
+             const <StoreProduct>[];
+         final cachedMeta = StoreMetaCache.instance.readMemory(id);
+         final argCover = coverImageUrl?.trim() ?? '';
+         final cachedCover = cachedMeta?.coverImageUrl.trim() ?? '';
+         final cover =
+             argCover.isNotEmpty
+                 ? argCover
+                 : (cachedCover.isNotEmpty ? cachedCover : '');
+         final argName =
+             storeName.trim().isEmpty ? 'Your Store' : storeName.trim();
+         final cachedName = cachedMeta?.storeName.trim() ?? '';
+         final cachedLink = cachedMeta?.storeLink.trim() ?? '';
+         final own = isOwnStore;
+         final seededFollow =
+             own
+                 ? StoreFollowStatus.self
+                 : (initialFollowStatus ??
+                     cachedMeta?.followStatus ??
+                     StoreFollowStatus.none);
+         // Unlock when meta/home already says viewable, or follow is
+         // following/self/member. Private + pending stays locked until GET.
+         final initialCanView =
+             own ||
+             (cachedMeta?.canViewContent ?? false) ||
+             (initialCanViewContent ?? false) ||
+             seededFollow.isFollowing;
+         // Reuse ctor-injected coordinator — avoid a second ServiceLocator hit.
+         final coord =
+             uploadCoordinator ??
+             ServiceLocator.get<ProductUploadCoordinator>();
+         final catalogSession = session ?? ServiceLocator.get<CatalogSession>();
+         final activeUploads = coord.pendingForStore(id);
+         final hidden = coord.inFlightListingIdsForStore(id);
+         // Skip List.from + sort when cache is already newest-first and
+         // nothing is hidden (Batch 1 — route construction stays light).
+         final visibleCached = _visibleProductsForInitialState(
+           cachedProducts,
+           hidden,
+         );
+         final gatedProducts =
+             initialCanView ? visibleCached : const <StoreProduct>[];
+         // When gated, keep a count from warm/cache products if the GET
+         // store payload omits productCount (common for private visitors).
+         final seedProductCount =
+             cachedMeta?.productCount ??
+             (cachedProducts.isNotEmpty ? cachedProducts.length : null);
+         return StoreProfileState(
+           storeName: cachedName.isNotEmpty ? cachedName : argName,
+           members: members,
+           products: gatedProducts,
+           productsDetailed: gatedProducts,
+           isOwnStore: own,
+           viewerHasOwnStore: _hasOwnStoreId(catalogSession),
+           storeId: id,
+           avatarColor: avatarColor,
+           overrideStoreLink: cachedLink.isNotEmpty ? cachedLink : storeLink,
+           coverImageUrl: cover,
+           storeImages: cachedMeta?.storeImages ?? const [],
+           city: cachedMeta?.city ?? '',
+           privacy: cachedMeta?.privacy ?? StorePrivacyMode.public,
+           followerCount: cachedMeta?.followerCount ?? 0,
+           followingCount: cachedMeta?.followingCount ?? 0,
+           apiProductCount: seedProductCount,
+           pendingFollowRequestCount:
+               own ? (cachedMeta?.pendingRequestsCount ?? 0) : 0,
+           canViewContent: initialCanView,
+           followStatus: seededFollow,
+           currentUserId: catalogSession.profile?.id,
+           // Do not assume cold shimmer on process restart — memory is empty
+           // but disk may still have the grid. LoadCollections sets shimmer
+           // only after a confirmed disk+warm miss (clear-data / first open).
+           isLoadingProducts: false,
+           productsResolved:
+               gatedProducts.isNotEmpty || activeUploads.isNotEmpty,
+           // Members API is owner-only; staff uses isOwnStore shell but must
+           // not spin a members loader (avoids OWNER_REQUIRED toast on switch).
+           isLoadingMembers:
+               own &&
+               !deferInitialCatalogLoads &&
+               catalogSession.isActingAsOwner,
+           isLoadingStoreMeta:
+               deferInitialCatalogLoads ? false : cachedMeta == null,
+           // Survive leave/return while create upload is still in flight.
+           pendingUploads: own ? activeUploads : const [],
+         );
+       }()) {
     on<StoreProfileAddProductsPressed>(_onAddProductsPressed);
     on<StoreProfileProductPublished>(_onProductPublished);
     on<StoreProfileProductUpdated>(_onProductUpdated);
@@ -185,24 +193,54 @@ class StoreProfileBloc extends Bloc<StoreProfileEvent, StoreProfileState> {
     on<StoreProfileUnfollowPressed>(_onUnfollowPressed);
     on<StoreProfileToggleNotifyUploads>(_onToggleNotifyUploads);
     on<StoreProfileLoadFollowRequestPreviews>(_onLoadFollowRequestPreviews);
+    on<StoreProfileExpandAlbumCollage>(_onExpandAlbumCollage);
+    on<StoreProfileExpandAlbumBatch>(_onExpandAlbumBatch);
+    on<StoreProfileEnsureInitialCatalogLoads>(_onEnsureInitialCatalogLoads);
+    // Concurrent so a slow disk/isolate decode does not block Ensure / meta /
+    // network events queued on the same bloc (Batch I3 race safety).
+    on<StoreProfileHydrateDiskCache>(
+      _onHydrateDiskCache,
+      transformer: (events, mapper) => events.concurrentAsyncExpand(mapper),
+    );
     _uploadSub = _uploadCoordinator.events.listen(_onUploadCoordinatorEvent);
-    add(const StoreProfileLoadStoreMeta());
-    // Own store: load collections immediately. Visitors wait until meta
-    // resolves canViewContent (private gate).
-    if (isOwnStore) {
-      add(const StoreProfileLoadCollections());
-      // Staff also mounts with isOwnStore=true for product chrome; members /
-      // follow-request admin APIs are owner-only — skip for staff.
-      if (_session.isActingAsOwner) {
-        add(const StoreProfileLoadMembers());
+    if (StoreWarmQa.enabled) {
+      final id = state.storeId.trim();
+      // Avoid shell remount metrics stealing an in-flight Discover open session.
+      final correlates =
+          StoreWarmQa.openStoreId == null || StoreWarmQa.openStoreId == id;
+      if (correlates) {
+        final mem = StoreProductsCache.instance.readMemory(id);
+        if (mem != null && mem.isNotEmpty) {
+          StoreWarmQa.event('PROFILE_MEMORY_CACHE_HIT', {
+            'store': id,
+            'products': mem.length,
+            'beforeFirstFrame': !StoreWarmQa.firstFrameSeen,
+          });
+          StoreWarmQa.observeShimmer(show: false, reason: 'cachedProducts');
+          StoreWarmQa.noteFirstProductsReady(
+            count: mem.length,
+            source: 'memory',
+          );
+        } else {
+          StoreWarmQa.event('PROFILE_MEMORY_CACHE_MISS', {
+            'store': id,
+            'productsResolved': state.productsResolved,
+          });
+          if (state.products.isEmpty && !state.productsResolved) {
+            StoreWarmQa.observeShimmer(show: true, reason: 'unresolved');
+          }
+        }
+        StoreWarmQa.event('PROFILE_BLOC_CREATED', {
+          'store': id,
+          'products': state.products.length,
+          'productsResolved': state.productsResolved,
+          'isLoadingProducts': state.isLoadingProducts,
+          'canView': state.canViewContent,
+        });
       }
-      // TODO(backend): re-enable when GET …/import-requests is live (404 today).
-      // add(const StoreProfileLoadImportRequestCount());
-    } else if (StoreMetaCache.instance.readMemory(
-          storeId ?? 'other_store',
-        )?.canViewContent ==
-        true) {
-      add(const StoreProfileLoadCollections());
+    }
+    if (!_deferInitialCatalogLoads) {
+      _startInitialCatalogLoads(storeId: storeId, isOwnStore: isOwnStore);
     }
   }
 
@@ -211,11 +249,207 @@ class StoreProfileBloc extends Bloc<StoreProfileEvent, StoreProfileState> {
 
   final CollectionRepository _collectionRepository;
   final StoreRepository _storeRepository;
-  final ImportRepository _importRepository;
   final CatalogSession _session;
   final ProductUploadCoordinator _uploadCoordinator;
+  final bool _deferInitialCatalogLoads;
+  bool _initialCatalogLoadsStarted = false;
+
+  /// Coalesce open-path [StoreProfileLoadCollections] (memory / disk / network
+  /// meta can each try to kick collections once canView flips).
+  bool _initialCollectionsRequested = false;
+
+  /// Batch I3 — at most one early disk hydrate per bloc instance.
+  bool _earlyDiskHydrateStarted = false;
+
+  /// Test hook: delay after eligibility checks, before the async disk read.
+  @visibleForTesting
+  static Future<void> Function()? debugBeforeDiskHydrateRead;
+
   StreamSubscription<ProductUploadEvent>? _uploadSub;
   final Set<String> _finishedUploadIds = <String>{};
+  final Set<String> _expandingAlbumIds = <String>{};
+
+  /// Albums that already ran one expand attempt this session (doc §4:
+  /// same album won't expand twice). Cleared on cold collections load.
+  final Set<String> _expandedAlbumIds = <String>{};
+
+  /// Background expand queue — deferred after first grid paint so open does
+  /// not race large collections decode / image warm (doc §4).
+  final LinkedHashSet<String> _pendingAlbumExpandIds = LinkedHashSet<String>();
+  Timer? _albumExpandPumpTimer;
+  bool _albumExpandIdleGatePassed = false;
+
+  /// Let open transition + first collage paint settle before expand waves
+  /// (was 80ms — fought landing jank / skipped frames).
+  static const Duration _albumExpandStartDelay = Duration(milliseconds: 420);
+
+  /// Gap between parallel waves — keep light while user may be scrolling.
+  static const Duration _albumExpandBetweenDelay = Duration(milliseconds: 120);
+
+  /// Parallel product-list fetches per wave (lower = less mid-scroll rebuild).
+  static const int _albumExpandMaxConcurrent = 2;
+
+  /// Auto-expand only the first N albums after open (≈ viewport + buffer).
+  /// Further albums expand on swipe via [StoreProfileExpandAlbumCollage].
+  static const int _maxAutoExpandAlbums = 8;
+
+  /// Authoritative warm lease for this profile session (Batch 7A).
+  /// Cancelled only from [close] — route dispose must not cancel peers.
+  final CatalogWarmOwner _imageWarmOwner = CatalogImageCache.createWarmOwner(
+    debugLabel: 'storeProfile',
+  );
+
+  /// Shared across bloc instances so open remounts do not double GET store.
+  static final Map<String, Future<CatalogStore>> _storeMetaInFlight = {};
+  static final Map<String, DateTime> _storeMetaNetworkAt = {};
+  static const Duration _storeMetaQuietTtl = Duration(seconds: 45);
+
+  /// Shared members fetch — remount / double Ensure must not 2× GET members.
+  static final Map<String, Future<List<TeamMember>>> _storeMembersInFlight = {};
+  static final Map<String, List<TeamMember>> _storeMembersMemory = {};
+  static final Map<String, DateTime> _storeMembersNetworkAt = {};
+  static const Duration _storeMembersQuietTtl = Duration(seconds: 45);
+
+  void _startInitialCatalogLoads({
+    required String? storeId,
+    required bool isOwnStore,
+  }) {
+    if (_initialCatalogLoadsStarted) return;
+    _initialCatalogLoadsStarted = true;
+    // Debug: attribute ApiCallCount to this profile open.
+    final scopedId = (storeId ?? state.storeId).trim();
+    if (scopedId.isNotEmpty &&
+        scopedId != 'my_store' &&
+        scopedId != 'other_store') {
+      CatalogApiCallLog.beginStoreProfileScope(scopedId);
+      // Clear post-close collage-warm suppress (deep link may skip prefetch).
+      StoreProductsPrefetcher.instance.noteProfileOpened(scopedId);
+    }
+    add(const StoreProfileLoadStoreMeta());
+    // Own store: load collections immediately. Visitors: as soon as canView
+    // is known (meta memory, or following seed) — do not wait on GET store.
+    if (isOwnStore) {
+      _requestInitialCollections();
+      // Staff also mounts with isOwnStore=true for product chrome; members /
+      // follow-request admin APIs are owner-only — skip for staff.
+      if (_session.isActingAsOwner) {
+        add(const StoreProfileLoadMembers());
+      }
+      // TODO(backend): re-enable when GET …/import-requests is live (404 today).
+      // add(const StoreProfileLoadImportRequestCount());
+    } else {
+      _requestInitialCollections();
+    }
+  }
+
+  /// One open-path collections load once [canViewContent] is true.
+  /// Follow/unlock mutation paths still `add(LoadCollections)` directly.
+  void _requestInitialCollections({bool allowAfterUnlock = false}) {
+    if (!state.isOwnStore && !state.canViewContent) return;
+    if (_initialCollectionsRequested && !allowAfterUnlock) return;
+    _initialCollectionsRequested = true;
+    add(const StoreProfileLoadCollections());
+  }
+
+  void _onEnsureInitialCatalogLoads(
+    StoreProfileEnsureInitialCatalogLoads event,
+    Emitter<StoreProfileState> emit,
+  ) {
+    _startInitialCatalogLoads(
+      storeId: state.storeId,
+      isOwnStore: state.isOwnStore,
+    );
+  }
+
+  /// Batch I3 — async disk hydrate after first frame (not behind Ensure delay).
+  Future<void> _onHydrateDiskCache(
+    StoreProfileHydrateDiskCache event,
+    Emitter<StoreProfileState> emit,
+  ) async {
+    if (_earlyDiskHydrateStarted) return;
+    _earlyDiskHydrateStarted = true;
+
+    final storeId = state.storeId.trim();
+    if (storeId.isEmpty || storeId == 'my_store' || storeId == 'other_store') {
+      return;
+    }
+    // Private visitor lock — do not probe disk or mark resolved.
+    if (!state.isOwnStore && !state.canViewContent) return;
+
+    // Memory already painted usable products — skip disk I/O.
+    if (state.products.isNotEmpty && state.productsResolved) return;
+    final mem = StoreProductsCache.instance.readMemory(storeId);
+    if (mem != null && mem.isNotEmpty) return;
+
+    final beforeRead = debugBeforeDiskHydrateRead;
+    if (beforeRead != null) {
+      await beforeRead();
+      if (isClosed || emit.isDone) return;
+      if (state.storeId.trim() != storeId) return;
+    }
+
+    StoreWarmQa.event('PROFILE_EARLY_DISK_START', {
+      'store': storeId,
+      'beforeFirstFrame': !StoreWarmQa.firstFrameSeen,
+    });
+    final diskSw = Stopwatch()..start();
+    final disk = await StoreProductsCache.instance.read(storeId);
+    diskSw.stop();
+    if (isClosed || emit.isDone) return;
+    if (state.storeId.trim() != storeId) return;
+
+    // Network / Ensure already painted — never overwrite with stale disk.
+    if (state.products.isNotEmpty && state.productsResolved) {
+      StoreWarmQa.event('PROFILE_EARLY_DISK_SKIP', {
+        'store': storeId,
+        'reason': 'networkWon',
+        'ms': diskSw.elapsedMilliseconds,
+      });
+      return;
+    }
+
+    if (disk == null || disk.isEmpty) {
+      // Empty disk = miss — keep unresolved until collections resolve.
+      StoreWarmQa.event('PROFILE_EARLY_DISK_MISS', {
+        'store': storeId,
+        'ms': diskSw.elapsedMilliseconds,
+      });
+      // Batch I5 — start collections immediately after confirmed miss so cold
+      // opens do not wait for the Ensure delay (~280–320 ms). Coalesced with
+      // Ensure via [_initialCollectionsRequested].
+      StoreWarmQa.event('COLD_COLLECTIONS_KICK', {
+        'store': storeId,
+        'reason': 'earlyDiskMiss',
+      });
+      _requestInitialCollections();
+      return;
+    }
+
+    StoreWarmQa.event('PROFILE_EARLY_DISK_HIT', {
+      'store': storeId,
+      'products': disk.length,
+      'ms': diskSw.elapsedMilliseconds,
+      'beforeFirstFrame': !StoreWarmQa.firstFrameSeen,
+    });
+    await _emitProductsFromCache(
+      emit,
+      storeId,
+      isLoadingProducts: false,
+      productsResolved: true,
+    );
+    if (isClosed || emit.isDone) return;
+    StoreWarmQa.observeShimmer(show: false, reason: 'cachedProducts');
+    StoreWarmQa.noteFirstProductsReady(count: disk.length, source: 'earlyDisk');
+  }
+
+  /// Open-path soft refresh — one network per [quietRefreshTtl], not per remount.
+  void _queueQuietCollectionsRefreshIfStale(String storeId) {
+    if (StoreProductsPrefetcher.instance.isFresh(storeId)) {
+      AppLog.d(_tag, 'Skip quiet collections refresh store=$storeId (fresh)');
+      return;
+    }
+    add(const StoreProfileQuietRefreshCollections(force: false));
+  }
 
   /// Commit succeeded — product held until pending collage finishes tick reveal.
   final Map<String, ({StoreProduct product, String? partialMessage})>
@@ -283,6 +517,32 @@ class StoreProfileBloc extends Bloc<StoreProfileEvent, StoreProfileState> {
         );
     }
   }
+
+  /// Seed grid products without always copying + sorting the full list.
+  /// Prefetch/cache already keep newest-first by id; reuse that reference.
+  static List<StoreProduct> _visibleProductsForInitialState(
+    List<StoreProduct> cachedProducts,
+    Set<String> hidden,
+  ) {
+    if (cachedProducts.isEmpty) return const <StoreProduct>[];
+    if (hidden.isEmpty) {
+      if (_isNewestFirstById(cachedProducts)) return cachedProducts;
+      return List<StoreProduct>.from(cachedProducts)
+        ..sort((a, b) => b.id.compareTo(a.id));
+    }
+    return [
+      for (final p in cachedProducts)
+        if (!hidden.contains(p.id)) p,
+    ]..sort((a, b) => b.id.compareTo(a.id));
+  }
+
+  static bool _isNewestFirstById(List<StoreProduct> products) {
+    for (var i = 1; i < products.length; i++) {
+      if (products[i - 1].id.compareTo(products[i].id) < 0) return false;
+    }
+    return true;
+  }
+
   /// Viewer can import into active store (owner/staff) or an owned store.
   static bool _hasOwnStoreId(CatalogSession session) {
     return session.hasImportDestination;
@@ -305,9 +565,7 @@ class StoreProfileBloc extends Bloc<StoreProfileEvent, StoreProfileState> {
   ) async {
     final storeId = state.storeId;
     if (storeId.isEmpty || storeId == 'my_store' || storeId == 'other_store') {
-      emit(
-        state.copyWith(isLoadingProducts: false, productsResolved: true),
-      );
+      emit(state.copyWith(isLoadingProducts: false, productsResolved: true));
       return;
     }
     if (!state.isOwnStore && !state.canViewContent) {
@@ -322,25 +580,65 @@ class StoreProfileBloc extends Bloc<StoreProfileEvent, StoreProfileState> {
       return;
     }
 
+    // Batch I3 — early disk already painted usable products; keep grid and
+    // only quiet-refresh. Do not clear expand sets or re-read disk.
+    if (state.products.isNotEmpty && state.productsResolved) {
+      _queueQuietCollectionsRefreshIfStale(storeId);
+      return;
+    }
+
+    // Fresh cold load may need expand again (album grew / cache rebuilt).
+    _expandedAlbumIds.clear();
+    _expandingAlbumIds.clear();
+    _clearAlbumExpandQueue(resetIdleGate: true);
+
     // Disk/memory first — restart paints from disk without shimmer.
     // Do not set isLoadingProducts until disk+warm both miss (true cold).
+    StoreWarmQa.event('PROFILE_DISK_CACHE_START', {
+      'store': storeId,
+      'beforeFirstFrame': !StoreWarmQa.firstFrameSeen,
+    });
+    final diskSw = Stopwatch()..start();
     final disk = await StoreProductsCache.instance.read(storeId);
+    diskSw.stop();
     if (emit.isDone) return;
     if (disk != null && disk.isNotEmpty) {
+      StoreWarmQa.event('PROFILE_DISK_CACHE_HIT', {
+        'store': storeId,
+        'products': disk.length,
+        'ms': diskSw.elapsedMilliseconds,
+        'beforeFirstFrame': !StoreWarmQa.firstFrameSeen,
+      });
+      StoreWarmQa.event('PROFILE_DISK_CACHE_COMPLETE', {
+        'store': storeId,
+        'source': 'hit',
+        'ms': diskSw.elapsedMilliseconds,
+      });
       await _emitProductsFromCache(
         emit,
         storeId,
         isLoadingProducts: false,
         productsResolved: true,
       );
-      if (!state.isOwnStore && state.canImport) {
-        add(const StoreProfileProbeImportAvailability());
-      }
-      add(const StoreProfileQuietRefreshCollections());
+      StoreWarmQa.observeShimmer(show: false, reason: 'cachedProducts');
+      StoreWarmQa.noteFirstProductsReady(count: disk.length, source: 'disk');
+      // Soft quiet refresh — skipped if prefetcher just enriched (TTL).
+      _queueQuietCollectionsRefreshIfStale(storeId);
       return;
     }
 
-    // Prefer warm data started on store tap / listing prefetch.
+    StoreWarmQa.event('PROFILE_DISK_CACHE_MISS', {
+      'store': storeId,
+      'ms': diskSw.elapsedMilliseconds,
+      'beforeFirstFrame': !StoreWarmQa.firstFrameSeen,
+    });
+    StoreWarmQa.event('PROFILE_DISK_CACHE_COMPLETE', {
+      'store': storeId,
+      'source': 'miss',
+      'ms': diskSw.elapsedMilliseconds,
+    });
+
+    // Prefer warm data started on store tap / listing prefetch (shared loader).
     final warm = await StoreProductsPrefetcher.instance.ensure(storeId);
     if (emit.isDone) return;
 
@@ -352,14 +650,32 @@ class StoreProfileBloc extends Bloc<StoreProfileEvent, StoreProfileState> {
         isLoadingProducts: false,
         productsResolved: true,
       );
-      if (!state.isOwnStore && state.canImport) {
-        add(const StoreProfileProbeImportAvailability());
-      }
-      add(const StoreProfileQuietRefreshCollections());
+      StoreWarmQa.observeShimmer(show: false, reason: 'cachedProducts');
+      StoreWarmQa.noteFirstProductsReady(count: warm.length, source: 'ensure');
+      _queueQuietCollectionsRefreshIfStale(storeId);
       return;
     }
 
-    // True cold path (clear data / first open) — view-mode shimmer once.
+    // Empty store: [ensure] already GETs collections (and stamps TTL). Do not
+    // fall through to force:true refresh — that was the empty-store 2× bug.
+    if (StoreProductsPrefetcher.instance.isFresh(storeId)) {
+      await _commitProducts(
+        emit,
+        storeId,
+        const [],
+        isLoadingProducts: false,
+        productsResolved: true,
+      );
+      StoreWarmQa.observeShimmer(show: false, reason: 'none');
+      StoreWarmQa.noteEmptyResolved(source: 'ensureFreshEmpty');
+      AppLog.d(_tag, 'Empty collections after ensure — skip second GET');
+      return;
+    }
+
+    // True cold path (clear data / first open) — restrained section loader (I5).
+    StoreWarmQa.observeShimmer(show: true, reason: 'loading');
+    StoreWarmQa.event('COLD_LOAD_START', {'store': storeId});
+    final coldSw = Stopwatch()..start();
     emit(
       state.copyWith(
         isLoadingProducts: true,
@@ -368,8 +684,13 @@ class StoreProfileBloc extends Bloc<StoreProfileEvent, StoreProfileState> {
       ),
     );
     try {
-      final products = await _fetchEnrichedProducts(storeId);
+      // Same loader as prefetch / quiet refresh (API-2).
+      final products = await StoreProductsPrefetcher.instance.refresh(
+        storeId,
+        force: true,
+      );
       if (emit.isDone) return;
+      final commitSw = Stopwatch()..start();
       await _commitProducts(
         emit,
         storeId,
@@ -377,12 +698,32 @@ class StoreProfileBloc extends Bloc<StoreProfileEvent, StoreProfileState> {
         isLoadingProducts: false,
         productsResolved: true,
       );
-      AppLog.d(_tag, 'Loaded ${products.length} collections (cold load)');
-      if (!state.isOwnStore && state.canImport) {
-        add(const StoreProfileProbeImportAvailability());
+      commitSw.stop();
+      coldSw.stop();
+      StoreWarmQa.event('COLD_LOAD_COMMIT', {
+        'store': storeId,
+        'products': products.length,
+        'commitMs': commitSw.elapsedMilliseconds,
+        'totalMs': coldSw.elapsedMilliseconds,
+      });
+      if (products.isEmpty) {
+        StoreWarmQa.observeShimmer(show: false, reason: 'none');
+        StoreWarmQa.noteEmptyResolved(source: 'coldRefresh');
+      } else {
+        StoreWarmQa.observeShimmer(show: false, reason: 'cachedProducts');
+        StoreWarmQa.noteFirstProductsReady(
+          count: products.length,
+          source: 'coldRefresh',
+        );
       }
+      AppLog.d(_tag, 'Loaded ${products.length} collections (cold load)');
     } catch (e) {
       AppLog.e(_tag, 'Collections load failed', e);
+      coldSw.stop();
+      StoreWarmQa.event('COLD_LOAD_FAIL', {
+        'store': storeId,
+        'ms': coldSw.elapsedMilliseconds,
+      });
       if (e is CatalogApiException && e.code == 'STORE_PRIVATE') {
         emit(
           state.copyWith(
@@ -394,6 +735,7 @@ class StoreProfileBloc extends Bloc<StoreProfileEvent, StoreProfileState> {
             clearError: true,
           ),
         );
+        StoreWarmQa.observeShimmer(show: false, reason: 'none');
         return;
       }
       emit(
@@ -403,6 +745,7 @@ class StoreProfileBloc extends Bloc<StoreProfileEvent, StoreProfileState> {
           errorMessage: CatalogErrorMapper.toUserMessage(e),
         ),
       );
+      StoreWarmQa.observeShimmer(show: false, reason: 'none');
     }
   }
 
@@ -415,9 +758,20 @@ class StoreProfileBloc extends Bloc<StoreProfileEvent, StoreProfileState> {
       return;
     }
     if (!state.isOwnStore && !state.canViewContent) return;
+    // Forced refresh (upload/delete) — allow expand again for grown albums.
+    if (event.force) {
+      _expandedAlbumIds.clear();
+      // Re-discover from merged grid; keep idle gate (screen already painted).
+      _clearAlbumExpandQueue(resetIdleGate: false);
+    }
     try {
-      final products = await _fetchEnrichedProducts(storeId);
-      if (emit.isDone) return;
+      // Single enrich path via prefetcher (no duplicate bloc 1+N).
+      final products = await StoreProductsPrefetcher.instance.refresh(
+        storeId,
+        force: event.force,
+      );
+      if (isClosed || emit.isDone) return;
+      if (state.storeId.trim() != storeId) return;
       final previous = state.products;
       // Drop cover-only empties that slipped through enrich (no displayable
       // frames) so item-delete cannot resurrect ghost tiles after refresh.
@@ -425,62 +779,170 @@ class StoreProfileBloc extends Bloc<StoreProfileEvent, StoreProfileState> {
         for (final p in _withoutInFlightUploads(products))
           if (p.imagePaths.any(ProductImagePaths.isDisplayable)) p,
       ];
-      await StoreProductsCache.instance.write(storeId, visible);
-      final cached =
-          StoreProductsCache.instance.readMemory(storeId) ?? visible;
-      if (_sameGridVisual(previous, cached)) return;
+      // Keep already-expanded collage frames (20) — prefetcher only holds
+      // productsLimit=9 and must not wipe swipe pages back to preview.
+      final merged = _mergePreservingExpandedAlbums(previous, visible);
+      // Prefetcher already wrote cache on network; keep memory in sync for
+      // TTL-skipped returns that only read cache.
+      await StoreProductsCache.instance.write(storeId, merged);
+      final cached = StoreProductsCache.instance.readMemory(storeId) ?? merged;
+      if (_sameGridVisual(previous, cached) &&
+          _sameListingAvailability(state.listingAvailability, cached)) {
+        _queueNeededAlbumExpands(cached);
+        return;
+      }
       emit(
         state.copyWith(
           products: cached,
           productsDetailed: cached,
+          listingAvailability: _listingAvailabilityFromProducts(cached),
         ),
       );
+      _queueNeededAlbumExpands(cached);
     } catch (e) {
       AppLog.e(_tag, 'Quiet collections refresh failed', e);
     }
   }
 
-  Future<List<StoreProduct>> _fetchEnrichedProducts(String storeId) async {
-    // Storefront landing: collections grid (not a flat dump of all products).
-    // Tap → collection browse (legacy collection detail until product docs land).
-    final page = await _collectionRepository.listCollections(
-      storeId: storeId,
-      limit: 50,
-    );
-    // Skip mid-upload listings so partial photo grids never enter cache/UI.
-    final hidden = _uploadCoordinator.inFlightListingIdsForStore(storeId);
-    final summaries = [
-      for (final summary in page.items)
-        if (!hidden.contains(summary.id)) summary,
+  /// Prefer local expanded media when quiet refresh returns BE-2 preview only.
+  List<StoreProduct> _mergePreservingExpandedAlbums(
+    List<StoreProduct> previous,
+    List<StoreProduct> incoming,
+  ) {
+    if (previous.isEmpty) return incoming;
+    final prevById = <String, StoreProduct>{for (final p in previous) p.id: p};
+    return [
+      for (final next in incoming)
+        () {
+          final old = prevById[next.id];
+          if (old == null) return next;
+          final oldN = old.imagePaths.where((p) => p.trim().isNotEmpty).length;
+          final newN = next.imagePaths.where((p) => p.trim().isNotEmpty).length;
+          if (oldN <= newN) return next;
+          final album =
+              next.albumItemCount > old.albumItemCount
+                  ? next.albumItemCount
+                  : old.albumItemCount;
+          // Keep expanded paths; refresh badge / lock metadata from network.
+          return old.copyWith(
+            title: next.title,
+            description: next.description,
+            likeCount: next.likeCount,
+            viewCount: next.viewCount,
+            wishlistCount: next.wishlistCount,
+            isLocked: next.isLocked,
+            stockStatus: next.stockStatus,
+            mtoDays: next.mtoDays,
+            importFlags: next.importFlags,
+            albumItemCount: album,
+            tags: next.tags,
+            precisionTag: next.precisionTag,
+            createdAt: next.createdAt ?? old.createdAt,
+          );
+        }(),
     ];
-    // Cap parallel detail GETs so cover-image downloads are not starved.
-    const concurrency = 4;
-    final products = <StoreProduct>[];
-    for (var i = 0; i < summaries.length; i += concurrency) {
-      final end =
-          i + concurrency > summaries.length
-              ? summaries.length
-              : i + concurrency;
-      final chunk = summaries.sublist(i, end);
-      final chunkProducts = await Future.wait([
-        for (final summary in chunk)
-          _productFromSummary(storeId: storeId, summary: summary),
-      ]);
-      for (final product in chunkProducts) {
-        if (product != null) products.add(product);
-      }
-    }
-    // listCollections is oldest-first; grid must show newest upload first.
-    final ordered = _newestFirst(products);
-    await _precacheGridTiles(ordered);
-    return ordered;
   }
 
-  /// Newest listing first (Mongo-style ids are time-sortable).
-  List<StoreProduct> _newestFirst(List<StoreProduct> products) {
-    if (products.length <= 1) return products;
-    return List<StoreProduct>.from(products)
-      ..sort((a, b) => b.id.compareTo(a.id));
+  /// Background-fill albums larger than BE-2 preview so swipe / browse /
+  /// channel are ready without a loading wait (fast-APK parallel fan-out).
+  ///
+  /// One attempt per album (§4). Waves of [_albumExpandMaxConcurrent] run
+  /// after a short idle gate. Swipe still dispatches a single
+  /// [StoreProfileExpandAlbumCollage] immediately.
+  void _queueNeededAlbumExpands(List<StoreProduct> products) {
+    var enqueued = false;
+    var autoCount = 0;
+    for (final p in products) {
+      // Batch 6: do not auto-expand the whole catalog — prioritise visible.
+      if (autoCount >= _maxAutoExpandAlbums) break;
+      if (!p.needsAlbumExpand) continue;
+      final id = p.id.trim();
+      if (id.isEmpty) continue;
+      if (_expandingAlbumIds.contains(id) || _expandedAlbumIds.contains(id)) {
+        continue;
+      }
+      if (_pendingAlbumExpandIds.add(id)) {
+        enqueued = true;
+        autoCount++;
+      }
+    }
+    if (enqueued) {
+      _scheduleAlbumExpandPump();
+    }
+  }
+
+  void _clearAlbumExpandQueue({required bool resetIdleGate}) {
+    _albumExpandPumpTimer?.cancel();
+    _albumExpandPumpTimer = null;
+    _pendingAlbumExpandIds.clear();
+    if (resetIdleGate) {
+      _albumExpandIdleGatePassed = false;
+    }
+  }
+
+  /// Start / continue the deferred expand pump. [afterExpand] short-circuits
+  /// the open idle gate and replaces any longer pending timer.
+  void _scheduleAlbumExpandPump({bool afterExpand = false}) {
+    if (isClosed) return;
+    if (_pendingAlbumExpandIds.isEmpty) return;
+
+    if (afterExpand) {
+      _albumExpandIdleGatePassed = true;
+      _albumExpandPumpTimer?.cancel();
+      _albumExpandPumpTimer = null;
+    } else {
+      if (_albumExpandPumpTimer?.isActive ?? false) return;
+      if (_expandingAlbumIds.isNotEmpty) return;
+    }
+
+    final delay =
+        _albumExpandIdleGatePassed
+            ? _albumExpandBetweenDelay
+            : _albumExpandStartDelay;
+    _albumExpandPumpTimer = Timer(delay, () {
+      _albumExpandPumpTimer = null;
+      _albumExpandIdleGatePassed = true;
+      _pumpNextAlbumExpand();
+    });
+  }
+
+  void _pumpNextAlbumExpand() {
+    if (isClosed) return;
+    // Wait for in-flight single/batch expand to finish (bloc is sequential).
+    if (_expandingAlbumIds.isNotEmpty) return;
+
+    final batch = <String>[];
+    while (batch.length < _albumExpandMaxConcurrent &&
+        _pendingAlbumExpandIds.isNotEmpty) {
+      final id = _pendingAlbumExpandIds.first;
+      _pendingAlbumExpandIds.remove(id);
+      if (_expandingAlbumIds.contains(id) || _expandedAlbumIds.contains(id)) {
+        continue;
+      }
+      final stillNeeds = state.productsForMedia.any(
+        (p) => p.id == id && p.needsAlbumExpand,
+      );
+      if (!stillNeeds) continue;
+      batch.add(id);
+    }
+    if (batch.isEmpty) return;
+    if (batch.length == 1) {
+      add(StoreProfileExpandAlbumCollage(batch.first));
+      return;
+    }
+    add(StoreProfileExpandAlbumBatch(batch));
+  }
+
+  /// When products API returned the full set, drop inflated album counts so
+  /// `needsAlbumExpand` clears (stale cache / overcount must not loop).
+  StoreProduct _clampAlbumCountIfExhausted(
+    StoreProduct card, {
+    required bool exhausted,
+  }) {
+    if (!exhausted) return card;
+    final loaded = card.imagePaths.where((p) => p.trim().isNotEmpty).length;
+    if (card.albumItemCount <= loaded) return card;
+    return card.copyWith(albumItemCount: loaded);
   }
 
   /// Drop collections still receiving append batches (pending shimmer covers them).
@@ -493,37 +955,114 @@ class StoreProfileBloc extends Bloc<StoreProfileEvent, StoreProfileState> {
     ];
   }
 
+  /// First ~2 Group rows (2×2) — decode these before the rest of the grid.
+  static const int _firstPaintAlbumWarmCount = 4;
+
+  /// Delay so warm does not fight the Cupertino push (Plan A1).
+  static const Duration _gridDecodeWarmDelay = Duration(milliseconds: 360);
+
+  /// Gap before warming albums below the first viewport.
+  static const Duration _gridDecodeRestDelay = Duration(milliseconds: 220);
+
   List<String> _gridTileUrls(List<StoreProduct> products) => [
     // Album frames use up to 9 cells per listing on the first collage page.
     for (final product in products) ...product.imagePaths.take(9),
   ];
 
-  /// Full disk + decode warm (prefetch / cold fetch — may hit network).
-  Future<void> _precacheGridTiles(List<StoreProduct> products) {
-    CatalogImageCache.ensureCatalogMemoryBudget();
-    return CatalogImageCache.precacheUrls(
-      _gridTileUrls(products),
+  Future<void> _warmGridUrlBatch(
+    List<String> urls, {
+    required int maxDecode,
+    required int warmEpoch,
+    int concurrency = 8,
+  }) async {
+    if (urls.isEmpty || maxDecode <= 0) return;
+    if (isClosed || !_imageWarmOwner.allows(warmEpoch)) {
+      StoreWarmQa.log(
+        'PROFILE_WARM_SKIP batch store=${state.storeId} '
+        'reason=${isClosed ? 'blocClosed' : 'ownerInactive'} epoch=$warmEpoch',
+      );
+      return;
+    }
+    // Match StoreProductGrid collage paint keys (Batch 2).
+    final cacheWidth = CatalogImageCache.collageCellCacheWidth();
+    StoreWarmQa.log(
+      'PROFILE_WARM_RUN batch store=${state.storeId} urls=${urls.length} '
+      'maxDecode=$maxDecode concurrency=$concurrency epoch=$warmEpoch',
+    );
+    await CatalogImageCache.warmDiskHits(
+      urls,
+      maxDecode: maxDecode,
+      cacheWidth: cacheWidth,
+      owner: _imageWarmOwner,
+    );
+    if (isClosed || !_imageWarmOwner.allows(warmEpoch)) {
+      StoreWarmQa.log(
+        'PROFILE_WARM_ABORT afterDisk store=${state.storeId} '
+        'reason=${isClosed ? 'blocClosed' : 'ownerInactive'}',
+      );
+      return;
+    }
+    await CatalogImageCache.precacheUrls(
+      urls,
       decode: true,
-      maxDecode: CatalogImageCache.defaultMaxDecode,
-      cacheWidth: CatalogImageCache.gridCacheWidth(),
+      maxDecode: maxDecode,
+      cacheWidth: cacheWidth,
+      concurrency: concurrency,
+      owner: _imageWarmOwner,
     );
   }
 
-  /// Reopen-safe: decode only CacheManager hits, then background-fill misses.
+  /// Reopen-safe: visible albums first, then the rest — never blocks emit.
   Future<void> _warmGridTilesBeforePaint(List<StoreProduct> products) async {
-    final urls = _gridTileUrls(products);
-    if (urls.isEmpty) return;
-    await CatalogImageCache.warmDiskHits(
-      urls,
-      maxDecode: CatalogImageCache.defaultMaxDecode,
-      cacheWidth: CatalogImageCache.gridCacheWidth(),
+    if (products.isEmpty || isClosed) return;
+    final warmEpoch = _imageWarmOwner.epoch;
+    final storeId = state.storeId.trim();
+    StoreWarmQa.step(
+      'PROFILE_WARM_START',
+      detail:
+          'store=$storeId products=${products.length} '
+          'owner=${_imageWarmOwner.debugLabel} epoch=$warmEpoch',
     );
+    final first =
+        products.length <= _firstPaintAlbumWarmCount
+            ? products
+            : products.sublist(0, _firstPaintAlbumWarmCount);
+    final rest =
+        products.length <= _firstPaintAlbumWarmCount
+            ? const <StoreProduct>[]
+            : products.sublist(_firstPaintAlbumWarmCount);
+
+    final firstUrls = _gridTileUrls(first);
+    // ~first page tiles for 4 albums; keep under defaultMaxDecode.
+    await _warmGridUrlBatch(
+      firstUrls,
+      maxDecode: firstUrls.length.clamp(1, 36),
+      warmEpoch: warmEpoch,
+    );
+    if (isClosed || rest.isEmpty) return;
+    if (state.storeId.trim() != storeId) return;
+    if (!_imageWarmOwner.allows(warmEpoch)) {
+      StoreWarmQa.log(
+        'PROFILE_WARM_SKIP rest store=$storeId reason=ownerInactive',
+      );
+      return;
+    }
+
+    await Future<void>.delayed(_gridDecodeRestDelay);
+    if (isClosed || state.storeId.trim() != storeId) return;
+    if (!_imageWarmOwner.allows(warmEpoch)) {
+      StoreWarmQa.log(
+        'PROFILE_WARM_SKIP restAfterDelay store=$storeId reason=ownerInactive',
+      );
+      return;
+    }
+    final restUrls = _gridTileUrls(rest);
     unawaited(
-      CatalogImageCache.precacheUrls(
-        urls,
-        decode: true,
+      _warmGridUrlBatch(
+        restUrls,
         maxDecode: CatalogImageCache.defaultMaxDecode,
-        cacheWidth: CatalogImageCache.gridCacheWidth(),
+        warmEpoch: warmEpoch,
+        concurrency: 4,
       ),
     );
   }
@@ -537,7 +1076,8 @@ class StoreProfileBloc extends Bloc<StoreProfileEvent, StoreProfileState> {
           a[i].viewCount != b[i].viewCount ||
           a[i].isLocked != b[i].isLocked ||
           a[i].stockStatus != b[i].stockStatus ||
-          a[i].mtoDays != b[i].mtoDays) {
+          a[i].mtoDays != b[i].mtoDays ||
+          a[i].albumItemCount != b[i].albumItemCount) {
         return false;
       }
       final ap = a[i].imagePaths;
@@ -548,101 +1088,6 @@ class StoreProfileBloc extends Bloc<StoreProfileEvent, StoreProfileState> {
       }
     }
     return true;
-  }
-
-  /// Null = omit from grid (empty collection after item delete — no cover ghost).
-  Future<StoreProduct?> _productFromSummary({
-    required String storeId,
-    required CollectionSummary summary,
-  }) async {
-    final cover = CatalogUiMapper.summaryToProduct(summary);
-    try {
-      // Always probe products?collectionId=. Collection list `productCount`
-      // is often live-only (e.g. 1) while pending imports still appear in
-      // /products — skipping when photoCount==1 hid Pending tags + collage.
-      try {
-        final page = await _collectionRepository.listStoreProducts(
-          storeId: storeId,
-          collectionId: summary.id,
-          limit: 100,
-        );
-        if (page.items.isNotEmpty) {
-          return CatalogUiMapper.collectionCardFromProducts(
-            summary: summary,
-            products: page.items,
-          );
-        }
-        // No first-class products — fall through to collection detail.
-        // Do not return cover-only here: stale photoCount after deleting the
-        // last item would resurrect a ghost tile in My Store / Discover.
-        if (summary.photoCount <= 0) {
-          AppLog.d(
-            _tag,
-            'Skip empty collection ${summary.id} (products=0 photoCount=0)',
-          );
-          return null;
-        }
-      } catch (e) {
-        AppLog.d(
-          _tag,
-          'products?collectionId enrich miss id=${summary.id} err=$e',
-        );
-        if (summary.photoCount <= 0) return null;
-      }
-
-      final detail = await _collectionRepository.fetchCollection(
-        storeId: storeId,
-        listingId: summary.id,
-      );
-      final detailed = CatalogUiMapper.detailToProduct(detail);
-      // Empty detail (and no embedded products) → omit cover ghost.
-      final hasDisplayable = detailed.imagePaths.any(
-        (p) => ProductImagePaths.isDisplayable(p),
-      );
-      if (!hasDisplayable) {
-        AppLog.d(
-          _tag,
-          'Skip empty collection ${summary.id} (detail has no displayable photos)',
-        );
-        return null;
-      }
-      // Keep list-cover URL first so primary tile stays cache-stable.
-      // Rotate all parallel photo arrays together (paths/ids/hashes/quality).
-      final coverUrl = cover.primaryImagePath?.trim() ?? '';
-      final withListCreated = detailed.copyWith(
-        createdAt: summary.createdAt ?? detailed.createdAt,
-        likeCount:
-            detailed.likeCount ??
-            summary.likeCount ??
-            summary.cover.likeCount ??
-            cover.likeCount,
-      );
-      if (coverUrl.isEmpty) return withListCreated;
-      final coverIndex = withListCreated.imagePaths.indexWhere(
-        (p) => p.trim() == coverUrl,
-      );
-      if (coverIndex <= 0) return withListCreated;
-      List<T> coverFirst<T>(List<T> list) {
-        if (coverIndex >= list.length) return list;
-        return [
-          list[coverIndex],
-          ...list.sublist(0, coverIndex),
-          ...list.sublist(coverIndex + 1),
-        ];
-      }
-
-      return withListCreated.copyWith(
-        imagePaths: coverFirst(withListCreated.imagePaths),
-        photoAssetIds: coverFirst(withListCreated.photoAssetIds),
-        imageThumbhashes: coverFirst(withListCreated.imageThumbhashes),
-        imageQualities: coverFirst(withListCreated.imageQualities),
-        createdAt: summary.createdAt ?? withListCreated.createdAt,
-      );
-    } catch (e) {
-      AppLog.e(_tag, 'Collection detail enrich failed id=${summary.id}', e);
-      if (summary.photoCount <= 0) return null;
-      return cover;
-    }
   }
 
   /// Write API products → cache, then emit only what cache holds.
@@ -689,12 +1134,46 @@ class StoreProfileBloc extends Bloc<StoreProfileEvent, StoreProfileState> {
     final visible = List<StoreProduct>.from(_withoutInFlightUploads(cached))
       ..sort((a, b) => b.id.compareTo(a.id));
     if (emit.isDone) return;
-    // Probe+decode disk hits before emit so reopen doesn't flash ThumbHash
-    // when CacheManager already has the files (session maps clear on kill).
-    if (visible.isNotEmpty) {
-      await _warmGridTilesBeforePaint(visible);
-      if (emit.isDone) return;
+    final resolvedFlag = productsResolved ?? state.productsResolved;
+    final nextPending = pendingUploads ?? state.pendingUploads;
+    final nextAvailability = _listingAvailabilityFromProducts(visible);
+    // Batch 4: skip no-op product emits (disk + warm / quiet overlap).
+    if (infoMessage == null &&
+        !clearDeletingProductId &&
+        !clearError &&
+        state.isLoadingProducts == isLoadingProducts &&
+        state.productsResolved == resolvedFlag &&
+        identical(state.pendingUploads, nextPending) &&
+        state.listingAvailability == nextAvailability &&
+        _sameGridVisual(state.products, visible) &&
+        _sameGridVisual(state.productsForMedia, visible)) {
+      if (visible.isNotEmpty) {
+        final warmEpoch = _imageWarmOwner.epoch;
+        StoreWarmQa.log(
+          'PROFILE_WARM_SCHEDULE store=${state.storeId} '
+          'products=${visible.length} epoch=$warmEpoch path=noopEmit',
+        );
+        unawaited(
+          Future<void>.delayed(_gridDecodeWarmDelay, () {
+            if (isClosed || !_imageWarmOwner.allows(warmEpoch)) {
+              StoreWarmQa.log(
+                'PROFILE_WARM_SKIP delayedStart store=${state.storeId} '
+                'reason=${isClosed ? 'blocClosed' : 'ownerInactive'} '
+                'path=noopEmit',
+              );
+              return;
+            }
+            unawaited(_warmGridTilesBeforePaint(visible));
+          }),
+        );
+      }
+      if (resolvedFlag || !isLoadingProducts) {
+        _queueNeededAlbumExpands(visible);
+      }
+      return;
     }
+    // Paint cache first (ThumbHash/blur OK). Warm decode in background so
+    // reopen is not blocked on disk probe — matches tap→instant APK feel.
     emit(
       state.copyWith(
         products: visible,
@@ -705,11 +1184,67 @@ class StoreProfileBloc extends Bloc<StoreProfileEvent, StoreProfileState> {
         clearDeletingProductId: clearDeletingProductId,
         clearError: clearError,
         pendingUploads: pendingUploads,
+        listingAvailability: nextAvailability,
         apiProductCount:
             state.apiProductCount ??
             (visible.isNotEmpty ? visible.length : null),
       ),
     );
+    if (visible.isNotEmpty) {
+      // Delay decode warm so it does not fight the store-open transition.
+      final warmEpoch = _imageWarmOwner.epoch;
+      StoreWarmQa.log(
+        'PROFILE_WARM_SCHEDULE store=${state.storeId} '
+        'products=${visible.length} epoch=$warmEpoch path=emit',
+      );
+      unawaited(
+        Future<void>.delayed(_gridDecodeWarmDelay, () {
+          if (isClosed || !_imageWarmOwner.allows(warmEpoch)) {
+            StoreWarmQa.log(
+              'PROFILE_WARM_SKIP delayedStart store=${state.storeId} '
+              'reason=${isClosed ? 'blocClosed' : 'ownerInactive'} path=emit',
+            );
+            return;
+          }
+          unawaited(_warmGridTilesBeforePaint(visible));
+        }),
+      );
+    }
+    // After first paint / cache emit — hydrate >9 albums in background.
+    if (productsResolved == true || !isLoadingProducts) {
+      _queueNeededAlbumExpands(visible);
+    }
+  }
+
+  /// Derive Added/Pending badges from list/product import flags — no N×
+  /// `/import-targets` fan-out (legacy stubs often 404).
+  Map<String, ListingImportAvailability> _listingAvailabilityFromProducts(
+    List<StoreProduct> products,
+  ) {
+    if (state.isOwnStore || !state.canImport) return const {};
+    final out = <String, ListingImportAvailability>{};
+    for (final p in products) {
+      final id = p.id.trim();
+      if (id.isEmpty) continue;
+      if (p.isAlreadyImported) {
+        out[id] = ListingImportAvailability.alreadyAdded;
+      } else if (p.isImportPending) {
+        out[id] = ListingImportAvailability.pending;
+      }
+    }
+    return out;
+  }
+
+  bool _sameListingAvailability(
+    Map<String, ListingImportAvailability> previous,
+    List<StoreProduct> products,
+  ) {
+    final next = _listingAvailabilityFromProducts(products);
+    if (previous.length != next.length) return false;
+    for (final e in next.entries) {
+      if (previous[e.key] != e.value) return false;
+    }
+    return true;
   }
 
   /// Write store meta → cache, then emit only what cache holds.
@@ -757,9 +1292,7 @@ class StoreProfileBloc extends Bloc<StoreProfileEvent, StoreProfileState> {
     // false empty). Shimmer only after LoadCollections confirms disk+warm miss.
     final newlyUnlocked = canView && !state.canViewContent;
     final unlockingEmpty =
-        newlyUnlocked &&
-        state.products.isEmpty &&
-        state.pendingUploads.isEmpty;
+        newlyUnlocked && state.products.isEmpty && state.pendingUploads.isEmpty;
     final isLoadingProducts = !canView ? false : state.isLoadingProducts;
     final productsResolved =
         !canView
@@ -801,9 +1334,28 @@ class StoreProfileBloc extends Bloc<StoreProfileEvent, StoreProfileState> {
       emit(state.copyWith(isLoadingMembers: false));
       return;
     }
-    final storeId = state.storeId;
+    final storeId = state.storeId.trim();
     if (storeId.isEmpty || storeId == 'my_store' || storeId == 'other_store') {
       emit(state.copyWith(isLoadingMembers: false));
+      return;
+    }
+
+    final cached = _storeMembersMemory[storeId];
+    final lastAt = _storeMembersNetworkAt[storeId];
+    final fresh =
+        cached != null &&
+        lastAt != null &&
+        DateTime.now().difference(lastAt) < _storeMembersQuietTtl;
+    if (fresh) {
+      emit(
+        state.copyWith(
+          members: List<TeamMember>.from(cached),
+          isLoadingMembers: false,
+          currentUserId: _session.profile?.id ?? state.currentUserId,
+        ),
+      );
+      AppLog.d(_tag, 'Skip members network store=$storeId (quiet TTL)');
+      CatalogApiCallLog.markStoreProfileMilestone(reason: 'store_members_ttl');
       return;
     }
 
@@ -815,21 +1367,8 @@ class StoreProfileBloc extends Bloc<StoreProfileEvent, StoreProfileState> {
       ),
     );
     try {
-      final all = <StoreMember>[];
-      String? cursor;
-      do {
-        final page = await _storeRepository.fetchMembers(
-          storeId: storeId,
-          limit: 50,
-          cursor: cursor,
-        );
-        all.addAll(page.items);
-        cursor = page.nextCursor;
-      } while (cursor != null && cursor.isNotEmpty);
-
-      final mapped = [
-        for (var i = 0; i < all.length; i++) _mapMember(all[i], i),
-      ];
+      final mapped = await _fetchStoreMembersCoalesced(storeId);
+      if (emit.isDone) return;
       AppLog.d(_tag, 'Loaded ${mapped.length} store members');
       emit(
         state.copyWith(
@@ -838,20 +1377,7 @@ class StoreProfileBloc extends Bloc<StoreProfileEvent, StoreProfileState> {
           currentUserId: _session.profile?.id ?? state.currentUserId,
         ),
       );
-
-      // Quietly fill missing names from device contacts (no loader).
-      final enrichedApi = await DeviceContactNames.enrichMembers(all);
-      if (emit.isDone) return;
-      final enrichedMapped = [
-        for (var i = 0; i < enrichedApi.length; i++)
-          _mapMember(enrichedApi[i], i),
-      ];
-      emit(
-        state.copyWith(
-          members: enrichedMapped,
-          currentUserId: _session.profile?.id ?? state.currentUserId,
-        ),
-      );
+      CatalogApiCallLog.markStoreProfileMilestone(reason: 'store_members');
     } catch (e) {
       AppLog.e(_tag, 'Members load failed', e);
       // Staff / non-owner must not see OWNER_REQUIRED as a switch toast.
@@ -868,119 +1394,317 @@ class StoreProfileBloc extends Bloc<StoreProfileEvent, StoreProfileState> {
     }
   }
 
+  /// One in-flight members list per store across bloc remounts.
+  Future<List<TeamMember>> _fetchStoreMembersCoalesced(String storeId) {
+    final id = storeId.trim();
+    final existing = _storeMembersInFlight[id];
+    if (existing != null) return existing;
+
+    final future = _fetchStoreMembersNetwork(id);
+    _storeMembersInFlight[id] = future;
+    future
+        .then((mapped) {
+          _storeMembersMemory[id] = mapped;
+          _storeMembersNetworkAt[id] = DateTime.now();
+        }, onError: (_) {})
+        .whenComplete(() {
+          if (identical(_storeMembersInFlight[id], future)) {
+            _storeMembersInFlight.remove(id);
+          }
+        });
+    return future;
+  }
+
+  Future<List<TeamMember>> _fetchStoreMembersNetwork(String storeId) async {
+    // Batch 5: first page only on profile open — full cursor walk blocked
+    // first paint for large teams. Remaining pages fill memory in background.
+    final first = await _storeRepository.fetchMembers(
+      storeId: storeId,
+      limit: 50,
+    );
+    final all = List<StoreMember>.from(first.items);
+    final mapped = await _mapEnrichedMembers(all);
+
+    final next = first.nextCursor?.trim() ?? '';
+    if (next.isNotEmpty) {
+      unawaited(_fetchRemainingStoreMembers(storeId, seed: all, cursor: next));
+    }
+    return mapped;
+  }
+
+  Future<List<TeamMember>> _mapEnrichedMembers(List<StoreMember> all) async {
+    final mapped = [for (var i = 0; i < all.length; i++) _mapMember(all[i], i)];
+    try {
+      final enrichedApi = await DeviceContactNames.enrichMembers(all);
+      return [
+        for (var i = 0; i < enrichedApi.length; i++)
+          _mapMember(enrichedApi[i], i),
+      ];
+    } catch (_) {
+      return mapped;
+    }
+  }
+
+  Future<void> _fetchRemainingStoreMembers(
+    String storeId, {
+    required List<StoreMember> seed,
+    required String cursor,
+  }) async {
+    try {
+      final all = List<StoreMember>.from(seed);
+      var next = cursor;
+      while (next.isNotEmpty) {
+        final page = await _storeRepository.fetchMembers(
+          storeId: storeId,
+          limit: 50,
+          cursor: next,
+        );
+        all.addAll(page.items);
+        next = page.nextCursor?.trim() ?? '';
+      }
+      final mapped = await _mapEnrichedMembers(all);
+      _storeMembersMemory[storeId] = mapped;
+      _storeMembersNetworkAt[storeId] = DateTime.now();
+      if (isClosed || state.storeId.trim() != storeId) return;
+      if (mapped.length <= state.members.length) return;
+      // Soft UI refresh when still on this store (header/team chrome).
+      if (state.isOwnStore && _canLoadOwnerAdminData) {
+        add(const StoreProfileLoadMembers());
+      }
+    } catch (e) {
+      AppLog.d(_tag, 'Background members pages failed store=$storeId err=$e');
+    }
+  }
+
   Future<void> _onLoadImportRequestCount(
     StoreProfileLoadImportRequestCount event,
     Emitter<StoreProfileState> emit,
   ) async {
-    // TODO(backend): re-enable when GET …/stores/:id/import-requests is live.
-    // Endpoint currently 404s after store create / home (CatalogApi ERROR noise).
-    // if (!state.isOwnStore) return;
-    // final storeId = state.storeId;
-    // if (storeId.isEmpty || storeId == 'my_store' || storeId == 'other_store') {
-    //   return;
-    // }
-    // try {
-    //   var pending = 0;
-    //   String? cursor;
-    //   do {
-    //     final page = await _importRepository.listStoreRequests(
-    //       storeId: storeId,
-    //       direction: 'incoming',
-    //       limit: 50,
-    //       cursor: cursor,
-    //     );
-    //     pending += page.items.where((r) => r.isPending).length;
-    //     cursor = page.nextCursor;
-    //   } while (cursor != null && cursor.isNotEmpty);
-    //   if (emit.isDone) return;
-    //   AppLog.d(_tag, 'Pending incoming import requests=$pending');
-    //   emit(state.copyWith(pendingImportRequestCount: pending));
-    // } catch (e) {
-    //   AppLog.e(_tag, 'Import request count failed', e);
-    // }
+    // TODO(backend): re-enable when GET …/stores/:id/import-requests is live
+    // (ImportRepository.listStoreRequests). Endpoint 404s today.
+  }
+
+  Future<void> _onExpandAlbumCollage(
+    StoreProfileExpandAlbumCollage event,
+    Emitter<StoreProfileState> emit,
+  ) async {
+    final listingId = event.listingId.trim();
+    final storeId = state.storeId.trim();
+    if (listingId.isEmpty ||
+        storeId.isEmpty ||
+        storeId == 'my_store' ||
+        storeId == 'other_store') {
+      return;
+    }
+    // One-shot per album (§4). Failed attempts stay retryable (not marked).
+    if (_expandingAlbumIds.contains(listingId) ||
+        _expandedAlbumIds.contains(listingId)) {
+      return;
+    }
+
+    // Swipe or pump claimed this id — drop from deferred queue.
+    _pendingAlbumExpandIds.remove(listingId);
+
+    StoreProduct? card;
+    for (final p in state.productsForMedia) {
+      if (p.id == listingId) {
+        card = p;
+        break;
+      }
+    }
+    if (card == null || !card.needsAlbumExpand) {
+      _scheduleAlbumExpandPump(afterExpand: true);
+      return;
+    }
+
+    _expandingAlbumIds.add(listingId);
+    try {
+      final expanded = await _fetchExpandedAlbum(storeId: storeId, card: card);
+      if (emit.isDone) return;
+      if (expanded == null) return;
+
+      _expandedAlbumIds.add(listingId);
+      final pathsChanged = _pathsChanged(card.imagePaths, expanded.imagePaths);
+      final countChanged = expanded.albumItemCount != card.albumItemCount;
+      if (!pathsChanged && !countChanged) return;
+
+      final next = [
+        for (final p in state.productsForMedia)
+          if (p.id == listingId) expanded else p,
+      ];
+      await _commitProducts(
+        emit,
+        storeId,
+        next,
+        isLoadingProducts: false,
+        productsResolved: true,
+      );
+      AppLog.d(
+        _tag,
+        'Expanded album collage id=$listingId '
+        'frames=${expanded.imagePaths.length}/'
+        '${expanded.displayAlbumItemCount}',
+      );
+    } catch (e) {
+      AppLog.e(_tag, 'Expand album collage failed id=$listingId', e);
+    } finally {
+      _expandingAlbumIds.remove(listingId);
+      _scheduleAlbumExpandPump(afterExpand: true);
+    }
+  }
+
+  Future<void> _onExpandAlbumBatch(
+    StoreProfileExpandAlbumBatch event,
+    Emitter<StoreProfileState> emit,
+  ) async {
+    final storeId = state.storeId.trim();
+    if (storeId.isEmpty || storeId == 'my_store' || storeId == 'other_store') {
+      return;
+    }
+
+    final cards = <String, StoreProduct>{};
+    for (final rawId in event.listingIds) {
+      final listingId = rawId.trim();
+      if (listingId.isEmpty) continue;
+      if (_expandingAlbumIds.contains(listingId) ||
+          _expandedAlbumIds.contains(listingId)) {
+        continue;
+      }
+      _pendingAlbumExpandIds.remove(listingId);
+      StoreProduct? card;
+      for (final p in state.productsForMedia) {
+        if (p.id == listingId) {
+          card = p;
+          break;
+        }
+      }
+      if (card == null || !card.needsAlbumExpand) continue;
+      cards[listingId] = card;
+      _expandingAlbumIds.add(listingId);
+    }
+
+    if (cards.isEmpty) {
+      _scheduleAlbumExpandPump(afterExpand: true);
+      return;
+    }
+
+    try {
+      final results = await Future.wait([
+        for (final entry in cards.entries)
+          _fetchExpandedAlbum(storeId: storeId, card: entry.value).then(
+            (expanded) => (
+              id: entry.key,
+              card: entry.value,
+              expanded: expanded,
+            ),
+          ),
+      ]);
+      if (emit.isDone) return;
+
+      var next = List<StoreProduct>.from(state.productsForMedia);
+      var changed = false;
+      for (final r in results) {
+        final expanded = r.expanded;
+        if (expanded == null) continue;
+        _expandedAlbumIds.add(r.id);
+        final idx = next.indexWhere((p) => p.id == r.id);
+        if (idx < 0) continue;
+        if (expanded.albumItemCount == next[idx].albumItemCount &&
+            !_pathsChanged(next[idx].imagePaths, expanded.imagePaths)) {
+          continue;
+        }
+        next[idx] = expanded;
+        changed = true;
+        AppLog.d(
+          _tag,
+          'Expanded album collage id=${r.id} '
+          'frames=${expanded.imagePaths.length}/'
+          '${expanded.displayAlbumItemCount} (batch)',
+        );
+      }
+      if (changed) {
+        await _commitProducts(
+          emit,
+          storeId,
+          next,
+          isLoadingProducts: false,
+          productsResolved: true,
+        );
+      }
+    } catch (e) {
+      AppLog.e(_tag, 'Expand album batch failed', e);
+    } finally {
+      for (final id in cards.keys) {
+        _expandingAlbumIds.remove(id);
+      }
+      _scheduleAlbumExpandPump(afterExpand: true);
+    }
+  }
+
+  bool _pathsChanged(List<String> a, List<String> b) {
+    if (a.length != b.length) return true;
+    for (var i = 0; i < a.length; i++) {
+      if (a[i] != b[i]) return true;
+    }
+    return false;
+  }
+
+  /// Returns updated card, or null on failure. Marks nothing — caller owns sets.
+  Future<StoreProduct?> _fetchExpandedAlbum({
+    required String storeId,
+    required StoreProduct card,
+  }) async {
+    final listingId = card.id.trim();
+    try {
+      final limit =
+          card.displayAlbumItemCount > 100
+              ? 100
+              : (card.displayAlbumItemCount < 9
+                  ? 9
+                  : card.displayAlbumItemCount);
+      final page = await _collectionRepository.listStoreProducts(
+        storeId: storeId,
+        collectionId: listingId,
+        limit: limit,
+      );
+
+      final exhausted =
+          page.items.isEmpty || !page.hasMore || page.items.length < limit;
+
+      if (page.items.isEmpty) {
+        return _clampAlbumCountIfExhausted(card, exhausted: true);
+      }
+
+      var expanded = CatalogUiMapper.expandCollectionCard(
+        card: card,
+        products: page.items,
+        albumExhausted: exhausted,
+      );
+      return _clampAlbumCountIfExhausted(expanded, exhausted: exhausted);
+    } catch (e) {
+      AppLog.e(_tag, 'Expand album fetch failed id=$listingId', e);
+      return null;
+    }
   }
 
   Future<void> _onProbeImportAvailability(
     StoreProfileProbeImportAvailability event,
     Emitter<StoreProfileState> emit,
   ) async {
+    // Legacy N× GET /import-targets removed (often 404 stubs). Badges come
+    // from list/product import flags via _listingAvailabilityFromProducts.
     if (state.isOwnStore || !state.canImport) return;
     final products = state.products;
     if (products.isEmpty) return;
-
-    try {
-      // Let store meta + tile image downloads claim the connection pool first.
-      // Fan-out of N /import-targets was starving image decode on open.
-      await Future<void>.delayed(const Duration(milliseconds: 450));
-      if (emit.isDone) return;
-
-      ImportQa.step(
-        'Source products (visitor)',
-        detail:
-            'store=${state.storeId} follow=${state.followStatus.name} '
-            'cards=${products.length} '
-            '${[
-              for (final p in products)
-                if (p.imageIsLocked.isNotEmpty)
-                  for (var i = 0; i < p.imageIsLocked.length; i++)
-                    '${p.sourceProductIdAt(i)}='
-                    '${p.stockStatusAt(i)?.apiValue ?? 'null'}/'
-                    'L=${p.isLockedAt(i)}'
-                else
-                  '${p.id}=${p.stockStatus?.apiValue ?? 'null'}/L=${p.isLocked}',
-            ].join(' ')}',
-      );
-
-      final availability = <String, ListingImportAvailability>{};
-      const concurrency = 3;
-      var stub404 = 0;
-      for (var i = 0; i < products.length; i += concurrency) {
-        if (emit.isDone) return;
-        final end =
-            i + concurrency > products.length
-                ? products.length
-                : i + concurrency;
-        final chunk = products.sublist(i, end);
-        final results = await Future.wait([
-          for (final product in chunk)
-            _importRepository
-                .fetchTargets(listingId: product.id, limit: 50)
-                .then<(String, List<ImportTarget>)>(
-                  (page) => (product.id, page.items),
-                )
-                .catchError((Object e) {
-                  // Legacy /import-targets may 404 — Quick Import does not
-                  // depend on it. Treat as empty so one stub failure does not
-                  // abort the whole probe.
-                  if (e is CatalogApiException &&
-                      (e.statusCode == 404 || e.code == 'NOT_FOUND')) {
-                    stub404++;
-                    return (product.id, const <ImportTarget>[]);
-                  }
-                  throw e;
-                }),
-        ]);
-        for (final (listingId, targets) in results) {
-          availability[listingId] = listingAvailabilityFor(targets);
-        }
-      }
-      if (emit.isDone) return;
-      if (stub404 > 0) {
-        ImportQa.step(
-          'import-targets stub',
-          detail: '404 treated as empty for $stub404 listing(s)',
-        );
-      }
-      AppLog.d(
-        _tag,
-        'Import availability probed for ${availability.length} listings',
-      );
-      emit(state.copyWith(listingAvailability: availability));
-    } catch (e) {
-      // Badges are secondary — never block profile.
-      AppLog.e(_tag, 'Import availability probe failed', e);
-      ImportQa.step('import-targets probe failed', detail: '$e');
-    }
+    final availability = _listingAvailabilityFromProducts(products);
+    ImportQa.step(
+      'Source products (visitor flags)',
+      detail:
+          'store=${state.storeId} cards=${products.length} '
+          'flagBadges=${availability.length}',
+    );
+    if (emit.isDone) return;
+    emit(state.copyWith(listingAvailability: availability));
   }
 
   Future<void> _onLoadStoreMeta(
@@ -1007,6 +1731,11 @@ class StoreProfileBloc extends Bloc<StoreProfileEvent, StoreProfileState> {
         fallback: cached,
         isLoadingStoreMeta: false,
       );
+      // Disk unlock must not wait for GET store — start collections now so
+      // reopen paints from products cache during the meta network round-trip.
+      if (!state.isOwnStore) {
+        _requestInitialCollections();
+      }
     } else if (state.coverImageUrl.trim().isNotEmpty) {
       unawaited(CatalogImageCache.precacheUrls([state.coverImageUrl]));
       emit(state.copyWith(isLoadingStoreMeta: true, clearError: true));
@@ -1014,9 +1743,24 @@ class StoreProfileBloc extends Bloc<StoreProfileEvent, StoreProfileState> {
       emit(state.copyWith(isLoadingStoreMeta: true, clearError: true));
     }
 
+    // Soft open path: skip duplicate GET /stores/:id within TTL (remount /
+    // double Ensure). Mutations pass force: true.
+    if (!event.force) {
+      final last = _storeMetaNetworkAt[storeId];
+      if (last != null &&
+          DateTime.now().difference(last) < _storeMetaQuietTtl) {
+        AppLog.d(_tag, 'Skip store meta network store=$storeId (quiet TTL)');
+        emit(state.copyWith(isLoadingStoreMeta: false));
+        CatalogApiCallLog.markStoreProfileMilestone(
+          reason: 'store_meta_ttl_skip',
+        );
+        return;
+      }
+    }
+
     try {
       final previousFollow = state.followStatus;
-      final store = await _storeRepository.fetchStore(storeId);
+      final store = await _fetchStoreMetaCoalesced(storeId, force: event.force);
       if (emit.isDone) return;
       AppLog.d(
         _tag,
@@ -1037,8 +1781,7 @@ class StoreProfileBloc extends Bloc<StoreProfileEvent, StoreProfileState> {
       final promoteToCatalogue =
           !state.isOwnStore &&
           actingAsThisStore &&
-          (store.isOwn ||
-              store.relationship == StoreRelationship.member);
+          (store.isOwn || store.relationship == StoreRelationship.member);
       if (promoteToCatalogue) {
         emit(
           state.copyWith(
@@ -1068,8 +1811,11 @@ class StoreProfileBloc extends Bloc<StoreProfileEvent, StoreProfileState> {
       }
       if (!state.isOwnStore) {
         if (state.canViewContent) {
-          if (!previouslyCouldView || state.products.isEmpty) {
-            add(const StoreProfileLoadCollections());
+          // First unlock after cold meta, or still empty after disk kick.
+          if (!previouslyCouldView) {
+            _requestInitialCollections(allowAfterUnlock: true);
+          } else if (state.products.isEmpty) {
+            _requestInitialCollections();
           }
         }
       } else if (_canLoadOwnerAdminData &&
@@ -1077,9 +1823,44 @@ class StoreProfileBloc extends Bloc<StoreProfileEvent, StoreProfileState> {
           state.pendingFollowRequestCount > 0) {
         add(const StoreProfileLoadFollowRequestPreviews());
       }
+      CatalogApiCallLog.markStoreProfileMilestone(reason: 'store_meta');
     } catch (e) {
       AppLog.e(_tag, 'Load store meta failed', e);
       emit(state.copyWith(isLoadingStoreMeta: false));
+      CatalogApiCallLog.markStoreProfileMilestone(reason: 'store_meta_error');
+    }
+  }
+
+  /// Soft opens share one in-flight `GET /stores/:id` across bloc remounts.
+  ///
+  /// Batch 5: soft joins in-flight. [force] awaits any in-flight GET then
+  /// starts a fresh one (no parallel duplicate; follow/privacy still see
+  /// post-mutation meta).
+  Future<CatalogStore> _fetchStoreMetaCoalesced(
+    String storeId, {
+    bool force = false,
+  }) async {
+    final id = storeId.trim();
+    final existing = _storeMetaInFlight[id];
+    if (existing != null) {
+      if (!force) return existing;
+      try {
+        await existing;
+      } catch (_) {}
+      final again = _storeMetaInFlight[id];
+      if (again != null) return again;
+    }
+
+    final future = _storeRepository.fetchStore(id);
+    _storeMetaInFlight[id] = future;
+    try {
+      final store = await future;
+      _storeMetaNetworkAt[id] = DateTime.now();
+      return store;
+    } finally {
+      if (identical(_storeMetaInFlight[id], future)) {
+        _storeMetaInFlight.remove(id);
+      }
     }
   }
 
@@ -1094,7 +1875,8 @@ class StoreProfileBloc extends Bloc<StoreProfileEvent, StoreProfileState> {
     if (remaining <= 0) {
       emit(
         state.copyWith(
-          errorMessage: 'A store can have at most ${StoreRequest.maxStoreImages} showcase images.',
+          errorMessage:
+              'A store can have at most ${StoreRequest.maxStoreImages} showcase images.',
         ),
       );
       return;
@@ -1203,7 +1985,7 @@ class StoreProfileBloc extends Bloc<StoreProfileEvent, StoreProfileState> {
         await _enableNotifyUploads(storeId, emit);
       }
       // Quiet refresh for accurate counts / canView from GET store.
-      add(const StoreProfileLoadStoreMeta());
+      add(const StoreProfileLoadStoreMeta(force: true));
       if (canView) {
         add(const StoreProfileLoadCollections());
       }
@@ -1257,8 +2039,7 @@ class StoreProfileBloc extends Bloc<StoreProfileEvent, StoreProfileState> {
     try {
       await _storeRepository.unfollowStore(storeId);
       if (emit.isDone) return;
-      final canView =
-          state.privacy == StorePrivacyMode.private ? false : true;
+      final canView = state.privacy == StorePrivacyMode.private ? false : true;
       final snap = StoreMetaSnapshot(
         storeName: state.storeName,
         storeLink: state.overrideStoreLink ?? state.storeLink,
@@ -1275,7 +2056,7 @@ class StoreProfileBloc extends Bloc<StoreProfileEvent, StoreProfileState> {
       await _commitStoreMeta(emit, storeId, snap, isLoadingStoreMeta: false);
       if (emit.isDone) return;
       emit(state.copyWith(isFollowBusy: false));
-      add(const StoreProfileLoadStoreMeta());
+      add(const StoreProfileLoadStoreMeta(force: true));
       if (canView && state.products.isEmpty) {
         add(const StoreProfileLoadCollections());
       }
@@ -1329,7 +2110,7 @@ class StoreProfileBloc extends Bloc<StoreProfileEvent, StoreProfileState> {
     await _commitStoreMeta(emit, storeId, snap, isLoadingStoreMeta: false);
     if (emit.isDone) return;
     emit(state.copyWith(isFollowBusy: false));
-    add(const StoreProfileLoadStoreMeta());
+    add(const StoreProfileLoadStoreMeta(force: true));
     if (canView) add(const StoreProfileLoadCollections());
   }
 
@@ -1353,8 +2134,10 @@ class StoreProfileBloc extends Bloc<StoreProfileEvent, StoreProfileState> {
       emit(
         state.copyWith(
           pendingFollowRequestCount: pending.length,
-          followRequestPreviewNames:
-              pending.take(2).map((e) => e.name).toList(growable: false),
+          followRequestPreviewNames: pending
+              .take(2)
+              .map((e) => e.name)
+              .toList(growable: false),
         ),
       );
     } catch (e) {
@@ -1441,19 +2224,10 @@ class StoreProfileBloc extends Bloc<StoreProfileEvent, StoreProfileState> {
     final next = [published, ...state.products];
     final storeId = state.storeId;
     if (storeId.isEmpty || storeId == 'my_store' || storeId == 'other_store') {
-      emit(
-        state.copyWith(
-          products: next,
-          productsDetailed: next,
-        ),
-      );
+      emit(state.copyWith(products: next, productsDetailed: next));
       return;
     }
-    await _commitProducts(
-      emit,
-      storeId,
-      next,
-    );
+    await _commitProducts(emit, storeId, next);
     add(const StoreProfileQuietRefreshCollections());
   }
 
@@ -1525,8 +2299,7 @@ class StoreProfileBloc extends Bloc<StoreProfileEvent, StoreProfileState> {
     final wasNested =
         nestedStripped.length != state.products.length ||
         !_sameProductIds(nestedStripped, state.products);
-    final isListing =
-        state.products.any((p) => p.id.trim() == productId);
+    final isListing = state.products.any((p) => p.id.trim() == productId);
 
     List<StoreProduct> withoutListing(List<StoreProduct> source) =>
         source.where((p) => p.id != productId).toList();
@@ -1561,11 +2334,9 @@ class StoreProfileBloc extends Bloc<StoreProfileEvent, StoreProfileState> {
         }
         // Last item in a collage → remove the empty parent collection.
         for (final parent in state.products) {
-          final had =
-              parent.photoAssetIds.any((id) => id.trim() == productId);
+          final had = parent.photoAssetIds.any((id) => id.trim() == productId);
           if (!had) continue;
-          final still =
-              nestedStripped.any((p) => p.id == parent.id);
+          final still = nestedStripped.any((p) => p.id == parent.id);
           if (still) continue;
           try {
             await _collectionRepository.deleteCollection(
@@ -1725,9 +2496,7 @@ class StoreProfileBloc extends Bloc<StoreProfileEvent, StoreProfileState> {
       emit(
         state.copyWith(
           infoMessage:
-              deleted == 1
-                  ? 'Product deleted.'
-                  : '$deleted products deleted.',
+              deleted == 1 ? 'Product deleted.' : '$deleted products deleted.',
         ),
       );
       add(const StoreProfileQuietRefreshCollections());
@@ -1749,16 +2518,14 @@ class StoreProfileBloc extends Bloc<StoreProfileEvent, StoreProfileState> {
     Emitter<StoreProfileState> emit,
   ) async {
     final keys =
-        event.photoKeys
-            .map((e) => e.trim())
-            .where((e) => e.isNotEmpty)
-            .toSet();
+        event.photoKeys.map((e) => e.trim()).where((e) => e.isNotEmpty).toSet();
     if (keys.isEmpty || state.deletingProductId != null) return;
 
     final storeId = state.storeId;
-    final products = state.productsForMedia.isNotEmpty
-        ? state.productsForMedia
-        : state.products;
+    final products =
+        state.productsForMedia.isNotEmpty
+            ? state.productsForMedia
+            : state.products;
 
     Map<String, String> targets;
     try {
@@ -1770,19 +2537,11 @@ class StoreProfileBloc extends Bloc<StoreProfileEvent, StoreProfileState> {
       );
     } catch (e) {
       AppLog.e(_tag, 'Resolve item delete targets failed', e);
-      emit(
-        state.copyWith(
-          errorMessage: CatalogErrorMapper.toUserMessage(e),
-        ),
-      );
+      emit(state.copyWith(errorMessage: CatalogErrorMapper.toUserMessage(e)));
       return;
     }
     if (targets.isEmpty) {
-      emit(
-        state.copyWith(
-          errorMessage: 'Could not resolve selected items.',
-        ),
-      );
+      emit(state.copyWith(errorMessage: 'Could not resolve selected items.'));
       return;
     }
 
@@ -1912,10 +2671,11 @@ class StoreProfileBloc extends Bloc<StoreProfileEvent, StoreProfileState> {
       final card = byId[listingId];
       if (card == null) continue;
       final emptied = OwnerItemDelete.isListingEmptied(card, deletedIds);
-      final strippedAway = !OwnerItemDelete.stripDeletedIds(
-        products: [card],
-        deletedIds: deletedIds,
-      ).any((p) => p.id == listingId);
+      final strippedAway =
+          !OwnerItemDelete.stripDeletedIds(
+            products: [card],
+            deletedIds: deletedIds,
+          ).any((p) => p.id == listingId);
       if (!emptied && !strippedAway) continue;
 
       emit(state.copyWith(deletingProductId: listingId, clearError: true));
@@ -2117,10 +2877,7 @@ class StoreProfileBloc extends Bloc<StoreProfileEvent, StoreProfileState> {
 
     final nextPending = [
       for (final p in state.pendingUploads)
-        if (p.id == event.pendingId)
-          p.copyWith(listingId: listingId)
-        else
-          p,
+        if (p.id == event.pendingId) p.copyWith(listingId: listingId) else p,
     ];
     final nextProducts =
         state.products.where((p) => p.id != listingId).toList();
@@ -2209,7 +2966,9 @@ class StoreProfileBloc extends Bloc<StoreProfileEvent, StoreProfileState> {
     // Success is silent (product appears in grid). Only surface partial
     // upload failures (e.g. some photos failed).
     final partial =
-        partialMessage?.trim().isNotEmpty == true ? partialMessage!.trim() : null;
+        partialMessage?.trim().isNotEmpty == true
+            ? partialMessage!.trim()
+            : null;
 
     final storeId = state.storeId;
     if (storeId.isEmpty || storeId == 'my_store' || storeId == 'other_store') {
@@ -2242,10 +3001,11 @@ class StoreProfileBloc extends Bloc<StoreProfileEvent, StoreProfileState> {
     final index = state.pendingUploads.indexWhere(
       (p) => p.id == event.pendingId,
     );
-    final fromCoord = _uploadCoordinator
-        .pendingForStore(state.storeId)
-        .where((p) => p.id == event.pendingId)
-        .toList();
+    final fromCoord =
+        _uploadCoordinator
+            .pendingForStore(state.storeId)
+            .where((p) => p.id == event.pendingId)
+            .toList();
     final failed =
         fromCoord.isNotEmpty
             ? fromCoord.first
@@ -2271,12 +3031,7 @@ class StoreProfileBloc extends Bloc<StoreProfileEvent, StoreProfileState> {
     } else {
       next.insert(0, failed);
     }
-    emit(
-      state.copyWith(
-        pendingUploads: next,
-        errorMessage: event.message,
-      ),
-    );
+    emit(state.copyWith(pendingUploads: next, errorMessage: event.message));
   }
 
   void _onPendingUploadRetry(
@@ -2318,6 +3073,18 @@ class StoreProfileBloc extends Bloc<StoreProfileEvent, StoreProfileState> {
 
   @override
   Future<void> close() {
+    _clearAlbumExpandQueue(resetIdleGate: true);
+    StoreWarmQa.step(
+      'PROFILE_CLOSE',
+      detail: 'store=${state.storeId} owner=${_imageWarmOwner.debugLabel}',
+    );
+    // Batch 7A: only this profile's warm lease — route dispose does not cancel.
+    CatalogImageCache.cancelOffscreenWarm(
+      _imageWarmOwner,
+      reason: 'storeProfileBlocClose',
+    );
+    StoreProductsPrefetcher.instance.cancelCollageWarmForStore(state.storeId);
+    StoreWarmQa.endOpenSession(reason: 'profileClose');
     unawaited(_uploadSub?.cancel() ?? Future<void>.value());
     return super.close();
   }

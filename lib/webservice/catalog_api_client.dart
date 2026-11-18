@@ -2,9 +2,11 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:project_c/flavor/flavor_variables.dart';
 import 'package:project_c/helper/app_log.dart';
+import 'package:project_c/helper/catalog_api_call_log.dart';
 import 'package:project_c/helper/catalog_media_debug.dart';
 import 'package:project_c/helper/catalog_upload_story.dart';
 import 'package:project_c/helper/profile_switching_log.dart';
@@ -50,6 +52,11 @@ class CatalogApiClient {
   static const profileHeader = 'X-Catalog-Profile';
   static const deviceHeader = 'X-Catalog-Device-Id';
 
+  /// Bodies at or above this size decode on a worker isolate so large catalog
+  /// lists (home, collections, search, wishlist) do not block the UI thread.
+  /// Smaller bodies stay on the UI isolate (isolate spawn cost is not worth it).
+  static const _largeJsonIsolateBytes = 32 * 1024;
+
   /// Keys whose values are replaced in debug logs.
   static const _redactKeys = <String>{
     'accessToken',
@@ -72,7 +79,10 @@ class CatalogApiClient {
     return raw.endsWith('/') ? raw.substring(0, raw.length - 1) : raw;
   }
 
-  void bumpSessionEpoch() => _sessionEpoch++;
+  void bumpSessionEpoch() {
+    _sessionEpoch++;
+    CatalogApiCallLog.reset(reason: 'session_epoch');
+  }
 
   Future<Map<String, dynamic>?> sendJson({
     required HttpMethod method,
@@ -117,10 +127,18 @@ class CatalogApiClient {
         profileIdOverride: profileIdOverride,
         timeout: timeout,
       );
-      return _decodeOrThrow(retry, path);
+      return await _decodeOrThrow(
+        retry,
+        path,
+        method: method.name.toUpperCase(),
+      );
     }
 
-    return _decodeOrThrow(response, path);
+    return await _decodeOrThrow(
+      response,
+      path,
+      method: method.name.toUpperCase(),
+    );
   }
 
   /// Multipart POST/PATCH/PUT (profile, store images, collections). Do not set Content-Type.
@@ -139,6 +157,11 @@ class CatalogApiClient {
       HttpMethod.patch => HttpMethod.patch,
       HttpMethod.put => HttpMethod.put,
       _ => HttpMethod.post,
+    };
+    final methodLabel = switch (httpMethod) {
+      HttpMethod.patch => 'PATCH',
+      HttpMethod.put => 'PUT',
+      _ => 'POST',
     };
     final response = await _executeMultipart(
       method: httpMethod,
@@ -164,10 +187,10 @@ class CatalogApiClient {
         profileIdOverride: profileIdOverride,
         timeout: timeout,
       );
-      return _decodeOrThrow(retry, path);
+      return await _decodeOrThrow(retry, path, method: methodLabel);
     }
 
-    return _decodeOrThrow(response, path);
+    return await _decodeOrThrow(response, path, method: methodLabel);
   }
 
   /// Authenticated binary GET. Used for chat photos, which are WebP bytes.
@@ -247,10 +270,20 @@ class CatalogApiClient {
     if (response.statusCode < 200 || response.statusCode >= 300) {
       await _sessionStorage.clear();
       bumpSessionEpoch();
-      throw _parseError(response);
+      throw _parseError(
+        response,
+        path: Endpoints.refreshToken,
+        method: 'POST',
+      );
     }
 
     final map = _decodeMap(response.body);
+    _logDecodedResponse(
+      path: Endpoints.refreshToken,
+      method: 'POST',
+      statusCode: response.statusCode,
+      decoded: map,
+    );
     final next = CatalogTokens.fromJson(map);
     await _sessionStorage.saveTokens(next);
     AppLog.d(_tag, 'Refresh succeeded');
@@ -351,20 +384,16 @@ class CatalogApiClient {
     }
 
     final fullUrl = uri.toString();
-    AppLog.d(_tag, '──────── REQUEST ────────');
-    AppLog.d(_tag, '$methodLabel $fullUrl (multipart)');
-    AppLog.d(_tag, 'baseUrl=$_baseUrl | endpoint=$path');
-    AppLog.d(
-      _tag,
-      'requestBody={fields: $fields, files: ${files.map((f) => f.filename).toList()}}',
+    CatalogApiCallLog.record(method: methodLabel, path: path);
+    _logOutgoingMultipartRequest(
+      methodLabel: methodLabel,
+      fullUrl: fullUrl,
+      path: path,
+      fields: fields,
+      fileNames: [for (final f in files) f.filename],
     );
-    if (CatalogMediaDebug.isMediaApiPath(path)) {
-      CatalogMediaDebug.api(
-        'REQUEST $methodLabel $path multipart '
-        'files=${files.map((f) => f.filename).toList()}',
-      );
-    }
-    if (CatalogUploadStory.isUploadApiPath(path, method: methodLabel)) {
+    if (kDebugMode &&
+        CatalogUploadStory.isUploadApiPath(path, method: methodLabel)) {
       CatalogUploadStory.note(
         'Legacy multipart $methodLabel $path (prefer Direct-to-S3). '
         'files=${files.length}',
@@ -374,12 +403,6 @@ class CatalogApiClient {
     try {
       final streamed = await _http.send(request).timeout(timeout);
       final response = await http.Response.fromStream(streamed);
-      _logResponse(
-        fullUrl: fullUrl,
-        response: response,
-        path: path,
-        method: methodLabel,
-      );
       return response;
     } on TimeoutException {
       AppLog.e(_tag, 'Timeout on $fullUrl');
@@ -462,19 +485,17 @@ class CatalogApiClient {
 
     final methodLabel = method.name.toUpperCase();
     final fullUrl = uri.toString();
-    AppLog.d(_tag, '──────── REQUEST ────────');
-    AppLog.d(_tag, '$methodLabel $fullUrl');
-    AppLog.d(_tag, 'baseUrl=$_baseUrl | endpoint=$path');
-    AppLog.d(
-      _tag,
-      'requestBody=${body == null ? '(none)' : _sanitizeForLog(body)}',
+    CatalogApiCallLog.record(
+      method: methodLabel,
+      path: path,
+      query: query,
     );
-    if (CatalogMediaDebug.isMediaApiPath(path)) {
-      CatalogMediaDebug.api(
-        'REQUEST $methodLabel $path '
-        'body=${CatalogMediaDebug.requestBodyHint(body)}',
-      );
-    }
+    _logOutgoingJsonRequest(
+      methodLabel: methodLabel,
+      fullUrl: fullUrl,
+      path: path,
+      body: body,
+    );
     CatalogUploadStory.apiRequest(
       method: methodLabel,
       path: path,
@@ -507,12 +528,6 @@ class CatalogApiClient {
               .timeout(effectiveTimeout);
       }
 
-      _logResponse(
-        fullUrl: fullUrl,
-        response: response,
-        path: path,
-        method: methodLabel,
-      );
       return response;
     } on TimeoutException {
       AppLog.e(_tag, 'Timeout on $fullUrl');
@@ -531,63 +546,90 @@ class CatalogApiClient {
     }
   }
 
-  void _logResponse({
+  /// Debug-only request log. Never sanitize/encode bodies outside [kDebugMode].
+  void _logOutgoingJsonRequest({
+    required String methodLabel,
     required String fullUrl,
-    required http.Response response,
-    String path = '',
-    String method = '',
+    required String path,
+    Map<String, dynamic>? body,
   }) {
-    AppLog.d(_tag, '──────── RESPONSE ────────');
-    AppLog.d(_tag, 'url=$fullUrl');
-    AppLog.d(_tag, 'statusCode=${response.statusCode}');
-    final type = (response.headers['content-type'] ?? '').toLowerCase();
-    if (type.contains('image/')) {
-      AppLog.d(_tag, 'responseBody=(image ${response.bodyBytes.length} bytes)');
-      return;
-    }
-    final body = response.body;
-    if (body.isEmpty) {
-      AppLog.d(_tag, 'responseBody=(empty)');
-      if (CatalogMediaDebug.isMediaApiPath(path)) {
-        CatalogMediaDebug.api(
-          'RESPONSE ${response.statusCode} $path body=(empty)',
-        );
-      }
-      return;
-    }
-    try {
-      final decoded = jsonDecode(body);
-      if (decoded is Map<String, dynamic>) {
-        AppLog.full(_tag, 'responseBody', _redactMap(decoded));
-      } else {
-        AppLog.full(_tag, 'responseBody', decoded);
-      }
-      if (CatalogMediaDebug.isMediaApiPath(path)) {
-        CatalogMediaDebug.api(
-          'RESPONSE ${response.statusCode} $path '
-          '${CatalogMediaDebug.summarizeMediaJson(decoded)}',
-        );
-        final summary = CatalogMediaDebug.summarizeMediaJson(decoded);
-        if (summary.contains('GAP_THUMBHASH_NULL')) {
-          CatalogMediaDebug.gap(
-            'API thumbhash missing in $path status=${response.statusCode}',
-          );
-        }
-      }
-      CatalogUploadStory.apiResponse(
-        method: method,
-        path: path,
-        statusCode: response.statusCode,
-        decoded: decoded,
+    if (!kDebugMode) return;
+    AppLog.d(_tag, '──────── REQUEST ────────');
+    AppLog.d(_tag, '$methodLabel $fullUrl');
+    AppLog.d(_tag, 'baseUrl=$_baseUrl | endpoint=$path');
+    AppLog.d(
+      _tag,
+      'requestBody=${body == null ? '(none)' : _sanitizeForLog(body)}',
+    );
+    if (CatalogMediaDebug.isMediaApiPath(path)) {
+      CatalogMediaDebug.api(
+        'REQUEST $methodLabel $path '
+        'body=${CatalogMediaDebug.requestBodyHint(body)}',
       );
-    } catch (_) {
-      AppLog.full(_tag, 'responseBody', body);
+    }
+  }
+
+  /// Debug-only multipart request log.
+  void _logOutgoingMultipartRequest({
+    required String methodLabel,
+    required String fullUrl,
+    required String path,
+    required Map<String, String> fields,
+    required List<String> fileNames,
+  }) {
+    if (!kDebugMode) return;
+    AppLog.d(_tag, '──────── REQUEST ────────');
+    AppLog.d(_tag, '$methodLabel $fullUrl (multipart)');
+    AppLog.d(_tag, 'baseUrl=$_baseUrl | endpoint=$path');
+    AppLog.d(
+      _tag,
+      'requestBody={fields: $fields, files: $fileNames}',
+    );
+    if (CatalogMediaDebug.isMediaApiPath(path)) {
+      CatalogMediaDebug.api(
+        'REQUEST $methodLabel $path multipart files=$fileNames',
+      );
+    }
+  }
+
+  /// Debug-only response log using an already-decoded body (no second jsonDecode).
+  void _logDecodedResponse({
+    required String path,
+    required String method,
+    required int statusCode,
+    required Object? decoded,
+  }) {
+    if (!kDebugMode) return;
+    AppLog.d(_tag, '──────── RESPONSE ────────');
+    AppLog.d(_tag, 'endpoint=$path');
+    AppLog.d(_tag, 'statusCode=$statusCode');
+    if (decoded == null) {
+      AppLog.d(_tag, 'responseBody=(empty/204)');
       if (CatalogMediaDebug.isMediaApiPath(path)) {
-        CatalogMediaDebug.api(
-          'RESPONSE ${response.statusCode} $path body=(non-json len=${body.length})',
+        CatalogMediaDebug.api('RESPONSE $statusCode $path body=(empty)');
+      }
+      return;
+    }
+    if (decoded is Map<String, dynamic>) {
+      AppLog.full(_tag, 'responseBody', _redactMap(decoded));
+    } else {
+      AppLog.full(_tag, 'responseBody', decoded);
+    }
+    if (CatalogMediaDebug.isMediaApiPath(path)) {
+      final summary = CatalogMediaDebug.summarizeMediaJson(decoded);
+      CatalogMediaDebug.api('RESPONSE $statusCode $path $summary');
+      if (summary.contains('GAP_THUMBHASH_NULL')) {
+        CatalogMediaDebug.gap(
+          'API thumbhash missing in $path status=$statusCode',
         );
       }
     }
+    CatalogUploadStory.apiResponse(
+      method: method,
+      path: path,
+      statusCode: statusCode,
+      decoded: decoded,
+    );
   }
 
   String _sanitizeForLog(Map<String, dynamic> map) {
@@ -628,26 +670,76 @@ class CatalogApiClient {
     return false;
   }
 
-  Map<String, dynamic>? _decodeOrThrow(http.Response response, String path) {
+  /// Decode JSON text. Large bodies use [compute] so the UI isolate stays free.
+  Future<dynamic> _decodeJsonBody(String body) async {
+    if (body.length < _largeJsonIsolateBytes) {
+      return jsonDecode(body);
+    }
+    AppLog.d(
+      _tag,
+      'Large JSON (${body.length} bytes) — decode via compute()',
+    );
+    // [jsonDecode] is a top-level tear-off — safe for [compute].
+    return compute(jsonDecode, body);
+  }
+
+  Map<String, dynamic> _requireJsonObject(dynamic decoded, int statusCode) {
+    if (decoded is Map<String, dynamic>) return decoded;
+    if (decoded is Map) {
+      return Map<String, dynamic>.from(decoded);
+    }
+    throw CatalogApiException(
+      statusCode: statusCode,
+      code: 'UNEXPECTED_RESPONSE',
+      message: 'Unexpected response format',
+    );
+  }
+
+  /// Single jsonDecode for success bodies; debug logs reuse that result.
+  Future<Map<String, dynamic>?> _decodeOrThrow(
+    http.Response response,
+    String path, {
+    String method = '',
+  }) async {
     if (response.statusCode == 204) {
+      _logDecodedResponse(
+        path: path,
+        method: method,
+        statusCode: response.statusCode,
+        decoded: null,
+      );
       return null;
     }
 
     if (response.statusCode >= 200 && response.statusCode < 300) {
-      if (response.body.isEmpty) return <String, dynamic>{};
-      final decoded = jsonDecode(response.body);
-      if (decoded is Map<String, dynamic>) return decoded;
-      throw CatalogApiException(
+      if (response.body.isEmpty) {
+        _logDecodedResponse(
+          path: path,
+          method: method,
+          statusCode: response.statusCode,
+          decoded: null,
+        );
+        return <String, dynamic>{};
+      }
+      final decoded = await _decodeJsonBody(response.body);
+      final map = _requireJsonObject(decoded, response.statusCode);
+      _logDecodedResponse(
+        path: path,
+        method: method,
         statusCode: response.statusCode,
-        code: 'UNEXPECTED_RESPONSE',
-        message: 'Unexpected response format',
+        decoded: map,
       );
+      return map;
     }
 
-    throw _parseError(response);
+    throw _parseError(response, path: path, method: method);
   }
 
-  CatalogApiException _parseError(http.Response response) {
+  CatalogApiException _parseError(
+    http.Response response, {
+    String path = '',
+    String method = '',
+  }) {
     var code = 'HTTP_${response.statusCode}';
     var message = 'Request failed';
     var details = <dynamic>[];
@@ -662,6 +754,13 @@ class CatalogApiClient {
     try {
       if (response.body.isNotEmpty) {
         final map = _decodeMap(response.body);
+        // One decode for error handling; reuse for debug logs (no second parse).
+        _logDecodedResponse(
+          path: path.isEmpty ? '(error)' : path,
+          method: method,
+          statusCode: response.statusCode,
+          decoded: map,
+        );
         final error = map['error'];
         if (error is Map<String, dynamic>) {
           code = error['code'] as String? ?? code;
@@ -679,9 +778,19 @@ class CatalogApiClient {
         } else if (map['message'] is String) {
           message = map['message'] as String;
         }
+      } else {
+        _logDecodedResponse(
+          path: path.isEmpty ? '(error)' : path,
+          method: method,
+          statusCode: response.statusCode,
+          decoded: null,
+        );
       }
     } catch (_) {
       // Keep defaults when body is not catalog JSON.
+      if (kDebugMode && response.body.isNotEmpty) {
+        AppLog.full(_tag, 'responseBody', response.body);
+      }
     }
 
     AppLog.e(_tag, 'API error $code (${response.statusCode})');

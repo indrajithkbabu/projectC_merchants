@@ -7,9 +7,13 @@ import 'package:project_c/session/catalog_session.dart';
 import 'package:project_c/webservice/profile/profile_request.dart';
 
 abstract class ProfileRepository {
-  Future<CatalogProfile> fetchMe();
+  /// Person + optional bootstrap. Concurrent callers share one in-flight GET.
+  /// [force] true after mutations (image upload/delete) bypasses the short TTL.
+  Future<CatalogProfile> fetchMe({bool force = false});
 
-  Future<ProfileBootstrap> fetchProfiles();
+  /// Profile switcher bootstrap. Reuses a fresh / in-flight [fetchMe] bootstrap
+  /// when present so cold start does not also hit `GET /me/profiles`.
+  Future<ProfileBootstrap> fetchProfiles({bool force = false});
 
   Future<ProfileBootstrap> selectActiveProfile(String profileId);
 
@@ -43,8 +47,15 @@ class ProfileRepositoryImpl implements ProfileRepository {
 
   static const _tag = 'ProfileRepository';
 
+  /// Auth + AccountProfile both call /me on shell mount — share one request.
+  static const _meReuseTtl = Duration(seconds: 5);
+
   final ProfileRequest _request;
   final CatalogSession _session;
+
+  Future<CatalogProfile>? _inFlightMe;
+  Future<ProfileBootstrap>? _inFlightProfiles;
+  DateTime? _lastMeAt;
 
   /// Persist [profile] then return the session snapshot (UI source of truth).
   Future<CatalogProfile> _commit(CatalogProfile profile) async {
@@ -57,19 +68,89 @@ class ProfileRepositoryImpl implements ProfileRepository {
     return _session.bootstrap ?? bootstrap;
   }
 
+  bool _bootstrapReusable(ProfileBootstrap? boot) =>
+      boot != null && boot.profiles.isNotEmpty;
+
   @override
-  Future<CatalogProfile> fetchMe() async {
+  Future<CatalogProfile> fetchMe({bool force = false}) async {
+    if (!force) {
+      final inFlight = _inFlightMe;
+      if (inFlight != null) return inFlight;
+      final last = _lastMeAt;
+      final cached = _session.profile;
+      if (last != null &&
+          cached != null &&
+          DateTime.now().difference(last) < _meReuseTtl) {
+        AppLog.d(_tag, 'fetchMe reuse session (TTL ${_meReuseTtl.inSeconds}s)');
+        return cached;
+      }
+    }
+
+    final future = _fetchMeNetwork();
+    _inFlightMe = future;
+    try {
+      return await future;
+    } finally {
+      if (identical(_inFlightMe, future)) _inFlightMe = null;
+    }
+  }
+
+  Future<CatalogProfile> _fetchMeNetwork() async {
     AppLog.d(_tag, 'fetchMe (with bootstrap when present)');
     final result = await _request.fetchMeWithBootstrap();
     if (result.bootstrap != null) {
       await _commitBootstrap(result.bootstrap!);
     }
-    return _commit(result.profile);
+    final committed = await _commit(result.profile);
+    _lastMeAt = DateTime.now();
+    return committed;
   }
 
   @override
-  Future<ProfileBootstrap> fetchProfiles() async {
-    AppLog.d(_tag, 'fetchProfiles');
+  Future<ProfileBootstrap> fetchProfiles({bool force = false}) async {
+    if (!force) {
+      // Prefer sharing Auth/AccountProfile GET /me (same bootstrap payload).
+      final me = _inFlightMe;
+      if (me != null) {
+        await me;
+        final boot = _session.bootstrap;
+        if (_bootstrapReusable(boot)) {
+          AppLog.d(_tag, 'fetchProfiles reuse in-flight /me bootstrap');
+          return boot!;
+        }
+      }
+      final last = _lastMeAt;
+      final boot = _session.bootstrap;
+      if (last != null &&
+          _bootstrapReusable(boot) &&
+          DateTime.now().difference(last) < _meReuseTtl) {
+        AppLog.d(_tag, 'fetchProfiles reuse recent /me bootstrap');
+        return boot!;
+      }
+    }
+
+    // One endpoint: /me already carries activeProfile + profiles + invites.
+    await fetchMe(force: force);
+    final fromMe = _session.bootstrap;
+    if (_bootstrapReusable(fromMe)) {
+      AppLog.d(_tag, 'fetchProfiles via /me bootstrap');
+      return fromMe!;
+    }
+
+    // Legacy fallback when /me omits profiles[].
+    final inFlight = _inFlightProfiles;
+    if (inFlight != null) return inFlight;
+    final future = _fetchProfilesNetwork();
+    _inFlightProfiles = future;
+    try {
+      return await future;
+    } finally {
+      if (identical(_inFlightProfiles, future)) _inFlightProfiles = null;
+    }
+  }
+
+  Future<ProfileBootstrap> _fetchProfilesNetwork() async {
+    AppLog.d(_tag, 'fetchProfiles network GET /me/profiles');
     final bootstrap = await _request.fetchProfiles();
     return _commitBootstrap(bootstrap);
   }
@@ -117,7 +198,7 @@ class ProfileRepositoryImpl implements ProfileRepository {
     final result = await _request.uploadProfileImage(file);
     try {
       // Canonical GET after mutate → cache → return cache.
-      return await fetchMe();
+      return await fetchMe(force: true);
     } catch (e) {
       AppLog.e(_tag, 'POST image ok but GET /me failed; merging locally', e);
       final current = _session.profile;
@@ -136,7 +217,7 @@ class ProfileRepositoryImpl implements ProfileRepository {
     AppLog.d(_tag, 'deleteProfileImage');
     await _request.deleteProfileImage();
     try {
-      return await fetchMe();
+      return await fetchMe(force: true);
     } catch (e) {
       AppLog.e(_tag, 'DELETE image ok but GET /me failed; clearing locally', e);
       final current = _session.profile;

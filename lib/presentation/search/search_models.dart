@@ -1,6 +1,8 @@
 import 'package:equatable/equatable.dart';
 import 'package:flutter/material.dart';
+import 'package:project_c/helper/catalog_ui_mapper.dart';
 import 'package:project_c/helper/colors.dart';
+import 'package:project_c/models/catalog/catalog_product_models.dart';
 import 'package:project_c/models/catalog/search_models.dart' as api;
 import 'package:project_c/models/product_details_feed_item.dart';
 import 'package:project_c/models/store_product.dart';
@@ -590,6 +592,53 @@ class SearchProductResult extends Equatable {
     final sid =
         storeId.trim().isNotEmpty ? storeId.trim() : storeIdFallback.trim();
     final slug = storeSlug.trim();
+    final base = CatalogUiMapper.catalogSeedFromStoreProduct(
+      product,
+      storeId: sid,
+    );
+    final metal = metals.isNotEmpty ? metals.first.trim() : '';
+    // Enrich thin store seed with search hit fields when present.
+    final seed =
+        base == null
+            ? null
+            : CatalogProduct(
+              id: base.id,
+              storeId: base.storeId,
+              collectionId:
+                  collectionId.trim().isNotEmpty
+                      ? collectionId.trim()
+                      : base.collectionId,
+              kind: base.kind,
+              title: title.trim().isNotEmpty ? title.trim() : base.title,
+              metal: metal.isNotEmpty ? metal : base.metal,
+              purity: purity.trim().isNotEmpty ? purity.trim() : base.purity,
+              netMin: netWeight ?? base.netMin,
+              netMax: netWeight ?? base.netMax,
+              wastagePct: wastage ?? base.wastagePct,
+              category:
+                  category.trim().isNotEmpty ? category.trim() : base.category,
+              precisionTag:
+                  precisionTag.trim().isNotEmpty
+                      ? precisionTag.trim()
+                      : base.precisionTag,
+              primaryImageUrl: base.primaryImageUrl,
+              primaryImageThumbnailUrl: base.primaryImageThumbnailUrl,
+              primaryImageDetailUrl: base.primaryImageDetailUrl,
+              primaryImageId: base.primaryImageId,
+              primaryImageThumbhash: base.primaryImageThumbhash,
+              imageUrls: base.imageUrls,
+              imageThumbnailUrls: base.imageThumbnailUrls,
+              imageDetailUrls: base.imageDetailUrls,
+              imageIds: base.imageIds,
+              imageThumbhashes: base.imageThumbhashes,
+              viewCount: viewCount ?? base.viewCount,
+              likeCount: base.likeCount,
+              isLocked: base.isLocked,
+              stockStatus: base.stockStatus,
+              mtoDays: base.mtoDays,
+              importFlags: base.importFlags,
+              createdAt: base.createdAt,
+            );
     return ProductDetailsFeedItem(
       product: product,
       imageIndex: 0,
@@ -598,6 +647,7 @@ class SearchProductResult extends Equatable {
       storeName: storeName.trim().isEmpty ? null : storeName.trim(),
       storeLink: slug.isEmpty ? null : '$slug.jewelflow.app',
       seedCategory: category.trim().isEmpty ? null : category.trim(),
+      seedCatalog: seed,
     );
   }
 

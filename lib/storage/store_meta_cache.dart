@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:equatable/equatable.dart';
+import 'package:flutter/foundation.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:project_c/helper/app_log.dart';
@@ -57,8 +58,7 @@ class StoreMetaSnapshot extends Equatable {
       followingCount: store.followingCount,
       productCount: store.productCount,
       pendingRequestsCount: store.pendingRequestsCount,
-      canViewContent:
-          isOwnerOrMember ? true : store.resolvedCanViewContent,
+      canViewContent: isOwnerOrMember ? true : store.resolvedCanViewContent,
       followStatus: follow,
     );
   }
@@ -67,9 +67,7 @@ class StoreMetaSnapshot extends Equatable {
     'storeName': storeName,
     'storeLink': storeLink,
     'coverImageUrl': coverImageUrl,
-    'storeImages': [
-      for (final photo in storeImages) photo.toJson(),
-    ],
+    'storeImages': [for (final photo in storeImages) photo.toJson()],
     'city': city,
     'privacy': privacy.apiValue,
     'followerCount': followerCount,
@@ -133,8 +131,7 @@ class StoreMetaSnapshot extends Equatable {
       followerCount: followerCount ?? this.followerCount,
       followingCount: followingCount ?? this.followingCount,
       productCount: productCount ?? this.productCount,
-      pendingRequestsCount:
-          pendingRequestsCount ?? this.pendingRequestsCount,
+      pendingRequestsCount: pendingRequestsCount ?? this.pendingRequestsCount,
       canViewContent: canViewContent ?? this.canViewContent,
       followStatus: followStatus ?? this.followStatus,
     );
@@ -158,6 +155,9 @@ class StoreMetaSnapshot extends Equatable {
 }
 
 /// Memory + disk cache for store meta. UI paints from cache; API writes cache.
+///
+/// Batch 3: large showcase JSON uses [compute]; writes are chained per store
+/// and written atomically (temp → rename).
 class StoreMetaCache {
   StoreMetaCache._();
 
@@ -166,7 +166,12 @@ class StoreMetaCache {
   static const _tag = 'StoreMetaCache';
   static const _dirName = 'store_meta_cache';
 
+  /// Match products / API client large-body isolate threshold.
+  static const isolateJsonBytes = 32 * 1024;
+
   final Map<String, StoreMetaSnapshot> _memory = {};
+  final Map<String, Future<StoreMetaSnapshot?>> _readsInFlight = {};
+  final Map<String, Future<void>> _writesInFlight = {};
 
   StoreMetaSnapshot? readMemory(String storeId) {
     final id = storeId.trim();
@@ -184,15 +189,31 @@ class StoreMetaCache {
     if (id.isEmpty) return null;
     final mem = readMemory(id);
     if (mem != null) return mem;
+
+    final existing = _readsInFlight[id];
+    if (existing != null) return existing;
+
+    final future = _readDisk(id);
+    _readsInFlight[id] = future;
+    try {
+      return await future;
+    } finally {
+      if (identical(_readsInFlight[id], future)) {
+        _readsInFlight.remove(id);
+      }
+    }
+  }
+
+  Future<StoreMetaSnapshot?> _readDisk(String id) async {
     try {
       final file = await _fileFor(id);
       if (!await file.exists()) return null;
       final raw = await file.readAsString();
-      final decoded = jsonDecode(raw);
-      if (decoded is! Map) return null;
-      final snap = StoreMetaSnapshot.fromJson(
-        Map<String, dynamic>.from(decoded),
-      );
+      final map = await _decodeMetaMap(raw);
+      if (map == null) return null;
+      final snap = StoreMetaSnapshot.fromJson(map);
+      final newer = _memory[id];
+      if (newer != null) return newer;
       _memory[id] = snap;
       return snap;
     } catch (e) {
@@ -205,31 +226,67 @@ class StoreMetaCache {
     final id = storeId.trim();
     if (id.isEmpty) return;
     _memory[id] = snapshot;
+
+    final prev = _writesInFlight[id] ?? Future<void>.value();
+    late final Future<void> chained;
+    chained = () async {
+      try {
+        await prev;
+      } catch (_) {}
+      await _persistDisk(id, snapshot);
+    }();
+    _writesInFlight[id] = chained;
     try {
+      await chained;
+    } finally {
+      if (identical(_writesInFlight[id], chained)) {
+        _writesInFlight.remove(id);
+      }
+    }
+  }
+
+  Future<void> _persistDisk(String id, StoreMetaSnapshot snapshot) async {
+    try {
+      if (!identical(_memory[id], snapshot)) return;
+      final payload = await _encodeMetaJson(snapshot.toJson());
+      if (!identical(_memory[id], snapshot)) return;
       final file = await _fileFor(id);
       await file.parent.create(recursive: true);
-      await file.writeAsString(jsonEncode(snapshot.toJson()), flush: true);
+      await _atomicWriteMetaString(file, payload);
     } catch (e) {
       AppLog.e(_tag, 'write failed store=$id', e);
     }
   }
 
   /// Convenience when only the cover URL is known (e.g. from listing).
+  ///
+  /// Cover-only stubs must not claim [StoreMetaSnapshot.canViewContent] —
+  /// default `true` would unlock private stores before GET store / home meta.
   Future<void> writeCover(String storeId, String coverImageUrl) async {
     final id = storeId.trim();
     final cover = coverImageUrl.trim();
     if (id.isEmpty) return;
     final prev = await read(id);
+    if (prev != null) {
+      await write(id, prev.copyWith(coverImageUrl: cover));
+      return;
+    }
     await write(
       id,
-      (prev ?? const StoreMetaSnapshot()).copyWith(coverImageUrl: cover),
+      StoreMetaSnapshot(coverImageUrl: cover, canViewContent: false),
     );
   }
 
   /// Clears memory + disk meta caches (logout / delete account).
   Future<void> clearAll() async {
     _memory.clear();
+    _readsInFlight.clear();
     try {
+      final pending = List<Future<void>>.from(_writesInFlight.values);
+      _writesInFlight.clear();
+      if (pending.isNotEmpty) {
+        await Future.wait(pending.map((f) => f.catchError((_) {})));
+      }
       final root = await getApplicationDocumentsDirectory();
       final dir = Directory(p.join(root.path, _dirName));
       if (await dir.exists()) {
@@ -246,4 +303,50 @@ class StoreMetaCache {
     final safe = storeId.replaceAll(RegExp(r'[^a-zA-Z0-9_-]'), '_');
     return File(p.join(root.path, _dirName, '$safe.json'));
   }
+
+  static Future<Map<String, dynamic>?> _decodeMetaMap(String raw) async {
+    if (raw.length < isolateJsonBytes) {
+      return decodeStoreMetaJson(raw);
+    }
+    AppLog.d(_tag, 'Large meta JSON (${raw.length} bytes) — compute()');
+    return compute(decodeStoreMetaJson, raw);
+  }
+
+  static Future<String> _encodeMetaJson(Map<String, Object?> json) async {
+    // Showcase image lists can be large; isolate when map is heavy.
+    final imageCount =
+        (json['storeImages'] is List)
+            ? (json['storeImages'] as List).length
+            : 0;
+    if (imageCount < 24) {
+      return encodeStoreMetaJson(json);
+    }
+    AppLog.d(_tag, 'Large meta encode (images=$imageCount) — compute()');
+    return compute(encodeStoreMetaJson, json);
+  }
+}
+
+/// Top-level for [compute] — decode meta JSON map (null if invalid).
+Map<String, dynamic>? decodeStoreMetaJson(String raw) {
+  try {
+    final decoded = jsonDecode(raw);
+    if (decoded is! Map) return null;
+    return Map<String, dynamic>.from(decoded);
+  } catch (_) {
+    return null;
+  }
+}
+
+/// Top-level for [compute] — encode meta JSON.
+String encodeStoreMetaJson(Map<String, Object?> json) {
+  return jsonEncode(json);
+}
+
+Future<void> _atomicWriteMetaString(File file, String payload) async {
+  final tmp = File('${file.path}.tmp');
+  await tmp.writeAsString(payload, flush: true);
+  if (await file.exists()) {
+    await file.delete();
+  }
+  await tmp.rename(file.path);
 }

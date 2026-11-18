@@ -144,9 +144,15 @@ class StoreProfileState extends Equatable {
   /// Visitor cannot see product photos / details.
   bool get isContentLocked => !isOwnStore && !canViewContent;
 
-  /// Confirmed cold load — view-mode shimmer (not disk hydrate after restart).
+  /// Cold load or disk hydrate — never leave an empty blank grid.
+  ///
+  /// Batch I5 — locked private visitors use the private gate, not product
+  /// section loading (do not advertise a fake product shimmer while locked).
   bool get showProductGridShimmer =>
-      isLoadingProducts && products.isEmpty && pendingUploads.isEmpty;
+      !isContentLocked &&
+      products.isEmpty &&
+      pendingUploads.isEmpty &&
+      (isLoadingProducts || !productsResolved);
 
   /// Truly empty after cache/network resolve — never during disk hydrate.
   bool get showProductGridEmpty =>

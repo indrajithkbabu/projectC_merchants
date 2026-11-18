@@ -12,8 +12,10 @@ This file defines what to follow for UI and logic inside `lib/presentation/boots
 - **Signed-in kill+reopen / restart:** paint the **real** Stores home chrome —
   `ShellTabTitleBar` (“Stores”) + activity bell (when own store) + the same
   search `TextField` look as `StoreListingRoute` + real `FloatingBottomNavBar`
-  (Stores selected; no-store vs own-store tab set from session profile). Do
-  **not** shimmer/blur the search bar, bell, or bottom nav.
+  matching main shell (**Stores · Message · Wishlist · Profile**, Stores
+  selected; Profile slot uses session/active avatar or initials). Do
+  **not** shimmer/blur the search bar, bell, or bottom nav — tab labels/icons
+  must match `MainShellRoute` so bootstrap → shell does not flicker.
 - **Listing body:** paint rows from `StoreHomeCache` via `StoreListingTile` when
   cache has items; otherwise list-only `StoreListingShimmer` (same as home with
   no cache). Interactions are disabled (`IgnorePointer`) until the real shell

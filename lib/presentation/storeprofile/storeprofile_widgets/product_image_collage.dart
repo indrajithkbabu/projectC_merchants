@@ -1,4 +1,6 @@
-﻿import 'package:flutter/material.dart';
+import 'dart:ui' show ImageFilter;
+
+import 'package:flutter/material.dart';
 import 'package:project_c/di/service_locator.dart';
 import 'package:project_c/helper/colors.dart';
 import 'package:project_c/helper/telegram_collage_geometry.dart';
@@ -36,6 +38,7 @@ class ProductImageCollage extends StatelessWidget {
     this.onImageTap,
     this.onImageLongPress,
     this.onAlbumPageChanged,
+    this.expectedImageCount = 0,
     this.selectionMode = false,
     this.selectedIndexes = const <int>{},
     this.showImportStatus = false,
@@ -48,6 +51,7 @@ class ProductImageCollage extends StatelessWidget {
     this.imageImportPending = const <bool>[],
     this.imageImportDeclined = const <bool>[],
     this.imageCartProductIds = const <String>[],
+    this.decodeCacheWidth,
   });
 
   final List<String> imagePaths;
@@ -87,8 +91,16 @@ class ProductImageCollage extends StatelessWidget {
   /// [pageCount] is total pages.
   final void Function(int pageIndex, int pageCount)? onAlbumPageChanged;
 
+  /// Full album size when larger than [imagePaths] (BE-2 preview page).
+  /// Enables swipe pages + dots before lazy expand fills more URLs.
+  final int expectedImageCount;
+
   /// When true, cells show Telegram-style selection rings / checks.
   final bool selectionMode;
+
+  /// Fixed [ResizeImage] width for all cells — skips per-cell LayoutBuilder
+  /// and aligns warm/paint ImageCache keys (Batch 2).
+  final int? decodeCacheWidth;
 
   /// Absolute indexes into [imagePaths] that are selected.
   final Set<int> selectedIndexes;
@@ -142,17 +154,33 @@ class ProductImageCollage extends StatelessWidget {
   Widget _buildCollageShell({required CollageGridArrangement? arrangement}) {
     final paths = imagePaths;
     final identity = layoutIdentity?.trim() ?? '';
+    final expected =
+        expectedImageCount > paths.length ? expectedImageCount : paths.length;
     // Orientation bits remount Telegram variants when ThumbHash aspects arrive.
-    final orientKey = [
-      for (final r in imageAspectRatios)
-        TelegramCollageGeometry.isLandscapeRatio(r)
-            ? 'L'
-            : (r == null ? 'u' : 'P'),
-    ].join();
-    final signature =
-        identity.isNotEmpty
-            ? '$identity|o=$orientKey'
-            : '${paths.join('|')}|arr=${arrangement?.side ?? 0}|n=${paths.length}|o=$orientKey';
+    // Paged albums (BE-2 preview → expand) must NOT remount when paths grow —
+    // remount resets PageController to page 0 (swipe jump / spinner flash).
+    final orientKey =
+        [
+          for (final r in imageAspectRatios)
+            TelegramCollageGeometry.isLandscapeRatio(r)
+                ? 'L'
+                : (r == null ? 'u' : 'P'),
+        ].join();
+    final String signature;
+    if (identity.isNotEmpty && expected > 9) {
+      signature = '$identity|paged|e=$expected|arr=${arrangement?.side ?? 0}';
+    } else if (identity.isNotEmpty) {
+      signature = '$identity|o=$orientKey';
+    } else if (expected > 9) {
+      // Fallback without identity: keep page shell stable across expand.
+      signature =
+          'paged|n0=${paths.isEmpty ? 0 : 1}|e=$expected|'
+          'arr=${arrangement?.side ?? 0}|p0=${paths.isNotEmpty ? paths.first : ''}';
+    } else {
+      signature =
+          '${paths.join('|')}|arr=${arrangement?.side ?? 0}|'
+          'n=${paths.length}|o=$orientKey';
+    }
 
     return AnimatedSwitcher(
       duration: Duration(milliseconds: identity.isNotEmpty ? 0 : 280),
@@ -194,6 +222,8 @@ class ProductImageCollage extends StatelessWidget {
             arrangement: arrangement,
             onImageTap: onImageTap,
             onAlbumPageChanged: onAlbumPageChanged,
+            expectedImageCount: expectedImageCount,
+            decodeCacheWidth: decodeCacheWidth,
           ),
         ),
       ),
@@ -286,7 +316,10 @@ class _CollageInteraction extends InheritedWidget {
         !_stockListEquals(imageImportStocks, oldWidget.imageImportStocks) ||
         !_boolListEquals(imageImportPending, oldWidget.imageImportPending) ||
         !_boolListEquals(imageImportDeclined, oldWidget.imageImportDeclined) ||
-        !_stringListEquals(imageCartProductIds, oldWidget.imageCartProductIds) ||
+        !_stringListEquals(
+          imageCartProductIds,
+          oldWidget.imageCartProductIds,
+        ) ||
         !_setEquals(selectedIndexes, oldWidget.selectedIndexes);
   }
 
@@ -338,6 +371,8 @@ class _CollageBody extends StatelessWidget {
     required this.arrangement,
     this.onImageTap,
     this.onAlbumPageChanged,
+    this.expectedImageCount = 0,
+    this.decodeCacheWidth,
   });
 
   final List<String> paths;
@@ -346,11 +381,13 @@ class _CollageBody extends StatelessWidget {
   final bool thumbhashOnly;
   final double gap;
   final double tileBorderRadius;
+  final int? decodeCacheWidth;
 
   /// Non-null only when [kEnableCollageImageArrangement] is on.
   final CollageGridArrangement? arrangement;
   final void Function(int index, {Rect? sourceRect})? onImageTap;
   final void Function(int pageIndex, int pageCount)? onAlbumPageChanged;
+  final int expectedImageCount;
 
   String? _hashAt(int index) {
     if (index < 0 || index >= thumbhashes.length) return null;
@@ -418,6 +455,18 @@ class _CollageBody extends StatelessWidget {
 
   Widget _telegramBody() {
     final n = paths.length;
+    final expected = expectedImageCount > n ? expectedImageCount : n;
+    // Preview may hold <=9 URLs while album has 10+ — still enable swipe pages.
+    if (expected > 9) {
+      return _ScrollableAlbum(
+        paths: paths,
+        columns: 3,
+        slices: CollageGridArrangement.threeByThree.pageSlicesFor(expected),
+        gap: gap,
+        onImageTap: onImageTap,
+        onPageChanged: onAlbumPageChanged,
+      );
+    }
     return switch (n) {
       1 => _ImageCell(path: paths[0], index: 0, onImageTap: onImageTap),
       2 =>
@@ -441,10 +490,7 @@ class _CollageBody extends StatelessWidget {
               topIndex: 0,
               gap: gap,
               onImageTap: onImageTap,
-              bottom: _remainingBelow(
-                rest: paths.sublist(1),
-                startIndex: 1,
-              ),
+              bottom: _remainingBelow(rest: paths.sublist(1), startIndex: 1),
             )
             : _LargeLeftStack(
               largePath: paths[0],
@@ -468,10 +514,7 @@ class _CollageBody extends StatelessWidget {
               topIndex: 0,
               gap: gap,
               onImageTap: onImageTap,
-              bottom: _remainingBelow(
-                rest: paths.sublist(1),
-                startIndex: 1,
-              ),
+              bottom: _remainingBelow(rest: paths.sublist(1), startIndex: 1),
             )
             : _LargeLeftStack(
               largePath: paths[0],
@@ -481,14 +524,6 @@ class _CollageBody extends StatelessWidget {
               gap: gap,
               onImageTap: onImageTap,
             ),
-      _ when n > 9 => _ScrollableAlbum(
-        paths: paths,
-        columns: 3,
-        slices: CollageGridArrangement.threeByThree.pageSlicesFor(n),
-        gap: gap,
-        onImageTap: onImageTap,
-        onPageChanged: onAlbumPageChanged,
-      ),
       _ =>
         TelegramCollageGeometry.useTopThenRestForCount(aspectRatios, n)
             ? _TopThenRest(
@@ -496,10 +531,7 @@ class _CollageBody extends StatelessWidget {
               topIndex: 0,
               gap: gap,
               onImageTap: onImageTap,
-              bottom: _remainingBelow(
-                rest: paths.sublist(1),
-                startIndex: 1,
-              ),
+              bottom: _remainingBelow(rest: paths.sublist(1), startIndex: 1),
             )
             : _RowAlbum(
               paths: paths,
@@ -540,6 +572,7 @@ class _CollageBody extends StatelessWidget {
       hashAt: _hashAt,
       thumbhashOnly: thumbhashOnly,
       tileBorderRadius: tileBorderRadius,
+      decodeCacheWidth: decodeCacheWidth,
       child: body,
     );
   }
@@ -564,7 +597,19 @@ Widget _pageForSlice({
   void Function(int index, {Rect? sourceRect})? onImageTap,
 }) {
   final end = slice.start + slice.count;
-  final pagePaths = paths.sublist(slice.start, end);
+  if (slice.start >= paths.length) {
+    // Page reserved for not-yet-hydrated album frames (lazy expand).
+    // Blurred preview tiles (not a spinner) so swipe still feels like photos
+    // are coming — expand / page dots / navigation unchanged.
+    return _PendingExpandBlurPage(
+      cellCount: slice.count,
+      columns: columns,
+      gap: gap,
+      previewPaths: paths,
+    );
+  }
+  final safeEnd = end > paths.length ? paths.length : end;
+  final pagePaths = paths.sublist(slice.start, safeEnd);
   return switch (slice.kind) {
     CollagePageKind.fullGrid => _UniformGridPage(
       paths: pagePaths,
@@ -589,17 +634,121 @@ Widget _pageForSlice({
   };
 }
 
+/// Soft blurred stand-in grid while BE-2 lazy expand fills the next swipe page.
+///
+/// Reuses already-loaded preview paths (first collage page) so the user still
+/// sees photo-shaped content instead of a circular loader. Non-interactive —
+/// real cells replace this once expand commits more [imagePaths].
+class _PendingExpandBlurPage extends StatelessWidget {
+  const _PendingExpandBlurPage({
+    required this.cellCount,
+    required this.columns,
+    required this.gap,
+    required this.previewPaths,
+  });
+
+  final int cellCount;
+  final int columns;
+  final double gap;
+  final List<String> previewPaths;
+
+  @override
+  Widget build(BuildContext context) {
+    final previews = [
+      for (final p in previewPaths)
+        if (p.trim().isNotEmpty) p.trim(),
+    ];
+    if (previews.isEmpty) {
+      return ColoredBox(
+        color: AppColors.surfaceSecondary.withValues(alpha: 0.55),
+      );
+    }
+
+    final cols = columns < 1 ? 1 : columns;
+    final count = cellCount < 1 ? cols * cols : cellCount;
+    final radius = _CollageThumbhashes.tileRadiusOf(context);
+    final rows = <Widget>[];
+    for (var offset = 0; offset < count; offset += cols) {
+      final rowLen = (offset + cols > count) ? count - offset : cols;
+      if (rows.isNotEmpty && gap > 0) {
+        rows.add(SizedBox(height: gap));
+      }
+      rows.add(
+        Expanded(
+          child: Row(
+            children: [
+              for (var i = 0; i < rowLen; i++) ...[
+                if (i > 0 && gap > 0) SizedBox(width: gap),
+                Expanded(
+                  child: _BlurredPreviewTile(
+                    path: previews[(offset + i) % previews.length],
+                    previewIndex: (offset + i) % previews.length,
+                    radius: radius,
+                  ),
+                ),
+              ],
+            ],
+          ),
+        ),
+      );
+    }
+    return Column(children: rows);
+  }
+}
+
+class _BlurredPreviewTile extends StatelessWidget {
+  const _BlurredPreviewTile({
+    required this.path,
+    required this.previewIndex,
+    required this.radius,
+  });
+
+  final String path;
+  final int previewIndex;
+  final double radius;
+
+  @override
+  Widget build(BuildContext context) {
+    final hash = _CollageThumbhashes.hashAtIndex(context, previewIndex);
+    Widget tile = Stack(
+      fit: StackFit.expand,
+      children: [
+        ImageFiltered(
+          imageFilter: ImageFilter.blur(sigmaX: 14, sigmaY: 14),
+          child: ProductMediaImage(
+            path: path,
+            thumbhash: hash,
+            decodeCacheWidth: _CollageThumbhashes.decodeCacheWidthOf(context),
+          ),
+        ),
+        // Light wash so blur reads as “loading”, not a broken sharp tile.
+        ColoredBox(color: AppColors.surfaceSecondary.withValues(alpha: 0.28)),
+      ],
+    );
+    if (radius > 0) {
+      tile = ClipRRect(
+        borderRadius: BorderRadius.circular(radius),
+        clipBehavior: Clip.antiAlias,
+        child: tile,
+      );
+    }
+    return tile;
+  }
+}
+
 class _CollageThumbhashes extends InheritedWidget {
   const _CollageThumbhashes({
     required this.hashAt,
     required this.thumbhashOnly,
     required this.tileBorderRadius,
+    this.decodeCacheWidth,
     required super.child,
   });
 
   final String? Function(int index) hashAt;
   final bool thumbhashOnly;
   final double tileBorderRadius;
+  final int? decodeCacheWidth;
 
   static String? hashAtIndex(BuildContext context, int index) {
     final scope =
@@ -619,10 +768,17 @@ class _CollageThumbhashes extends InheritedWidget {
     return scope?.tileBorderRadius ?? 2.5;
   }
 
+  static int? decodeCacheWidthOf(BuildContext context) {
+    final scope =
+        context.dependOnInheritedWidgetOfExactType<_CollageThumbhashes>();
+    return scope?.decodeCacheWidth;
+  }
+
   @override
   bool updateShouldNotify(_CollageThumbhashes oldWidget) =>
       oldWidget.tileBorderRadius != tileBorderRadius ||
-      oldWidget.thumbhashOnly != thumbhashOnly;
+      oldWidget.thumbhashOnly != thumbhashOnly ||
+      oldWidget.decodeCacheWidth != decodeCacheWidth;
 }
 
 /// Full N×N page — only used when the page has exactly [columns]² images.
@@ -1062,11 +1218,7 @@ class _ScrollableAlbumState extends State<_ScrollableAlbum> {
 }
 
 class _ImageCell extends StatelessWidget {
-  const _ImageCell({
-    required this.path,
-    required this.index,
-    this.onImageTap,
-  });
+  const _ImageCell({required this.path, required this.index, this.onImageTap});
 
   final String path;
   final int index;
@@ -1087,6 +1239,7 @@ class _ImageCell extends StatelessWidget {
       path: path,
       thumbhash: _CollageThumbhashes.hashAtIndex(context, index),
       thumbhashOnly: _CollageThumbhashes.thumbhashOnlyOf(context),
+      decodeCacheWidth: _CollageThumbhashes.decodeCacheWidthOf(context),
     );
     if (radius > 0) {
       image = ClipRRect(
@@ -1097,8 +1250,7 @@ class _ImageCell extends StatelessWidget {
     }
 
     final uploadOverlay = interaction?.cellOverlayBuilder?.call(index);
-    final needsStack =
-        selectionMode || hasImportTag || uploadOverlay != null;
+    final needsStack = selectionMode || hasImportTag || uploadOverlay != null;
     if (needsStack) {
       image = Stack(
         fit: StackFit.expand,
@@ -1106,17 +1258,9 @@ class _ImageCell extends StatelessWidget {
           image,
           if (uploadOverlay != null) uploadOverlay,
           if (importDeclined)
-            const Positioned(
-              top: 6,
-              left: 6,
-              child: _ImportDeclinedPill(),
-            )
+            const Positioned(top: 6, left: 6, child: _ImportDeclinedPill())
           else if (importPending)
-            const Positioned(
-              top: 6,
-              left: 6,
-              child: _ImportPendingPill(),
-            ),
+            const Positioned(top: 6, left: 6, child: _ImportPendingPill()),
           if (selectionMode)
             Positioned(
               top: 6,
@@ -1165,8 +1309,7 @@ class _ImageCell extends StatelessWidget {
                 }
                 onImageTap!(index, sourceRect: sourceRect);
               },
-      onLongPress:
-          onLongPress == null ? null : () => onLongPress(index),
+      onLongPress: onLongPress == null ? null : () => onLongPress(index),
       child: image,
     );
   }

@@ -11,12 +11,12 @@ This file defines what to follow for UI and logic inside `lib/presentation/store
 - Use `AppTextStyles` and `AppColors` for all display text and palette.
 - Keep reusable controls shared; keep store-profile-only visuals inside local widget folder.
 - Product grid shares one `CustomScrollView` under a **Telegram floating
-  capsule** header (`StoreProfileTelegramHeader`): three frosted pills
+  capsule** header (`StoreProfileTelegramHeader`): three glassy pills
   (back circle · DP + name + followers · add/import + search) — not a
-  full-width bar. Glassy pills: `BackdropFilter` blur + translucent
-  `surface` / `appBar` fill + soft `border`. Day uses `textPrimary` /
-  `textSecondary`; Night uses `textOnPrimary`. Tap the identity pill to
-  push `store_channel_route` —
+  full-width bar. Glassy pills: **fill-only** translucent `surface` /
+  `appBar` + soft `border` (no `BackdropFilter` over scrolling collages —
+  UI-2 jank). Day uses `textPrimary` / `textSecondary`; Night uses
+  `textOnPrimary`. Tap the identity pill to push `store_channel_route` —
   do **not** expand the header in place.
 - **Edge-to-edge image lists** (Discover, channel Media/Group/Gallery, store
   gallery, collection browse): no decorative top/bottom list padding — tiles
@@ -45,7 +45,8 @@ This file defines what to follow for UI and logic inside `lib/presentation/store
   cell shows per-photo lock / out-of-stock (and In Your Store / Exclusive)
   marks; clearing selection hides them again. Destination **Pending** tags
   stay visible without selection. Grid is **collections-first**
-  (`GET …/collections`); collage / browse use `GET …/products?collectionId=`.
+  (`GET …/collections?include=products` for collage); browse still uses
+  `GET …/products?collectionId=` when opening a collection (seed from profile when present).
   Public like vs private wishlist are separate on product details
   (thumbs-up vs heart).
 - `store_channel_route`: opened from Discover header via
@@ -54,7 +55,8 @@ This file defines what to follow for UI and logic inside `lib/presentation/store
   transition (`reverseTransitionDuration: zero`). Collapsing hero:
   **expanded** = full-bleed store logos
   with no glass / edge-wash overlay (avoids a horizontal seam on the photo);
-  **collapsed** = compact title+logo on a frosted pinned bar (`BackdropFilter`
+  **collapsed** = compact title+logo on a translucent pinned bar (channel +
+  Discover glass are fill-only — no `BackdropFilter` over imagery)
   + translucent fill, no hard bottom border). Scroll down → full-width
   swipeable **store** logos only — never product photos; missing logo →
   name initials. Count buttons: **Products** / **Followers** / **Following**
@@ -67,11 +69,18 @@ This file defines what to follow for UI and logic inside `lib/presentation/store
   `ProfileLinkService`: validate the path, load the store, then push the
   route. A failed lookup does not open another store. Visitor: Follow
   chrome under counts (not on Discover listing). Tabs: **Media** (pinch
-  zoom 2–9 columns, smooth continuous resize + snap) / **Group** /
-  **Gallery**. Edge-swipe back via `EdgeBackSwipe`.
+  2–9 via `ValueNotifier` — mid-pinch does not rebuild TabBarView; paint
+  role + image warm settle on release) / **Group** / **Gallery** (real
+  `SliverGrid` mosaics, role locked while pinching). Edge-swipe back via
+  `EdgeBackSwipe`.
 - Discover scroll: jump-to-bottom FAB uses a `ValueNotifier` (no mid-fling
-  `setState` / sliver padding toggle). `BlocBuilder.buildWhen` skips
-  unrelated state noise so the product grid stays smooth.
+  `setState` / sliver padding toggle). Scroll resume hold uses a
+  `ValueNotifier` for `_awaitingReveal` (mutated from build-time restore
+  helpers — do not Cubit-emit during build). Selection / wishlist / cart
+  busy / paint rebind live in `StoreProfileChromeCubit` (route-scoped;
+  separate from catalog `StoreProfileBloc`). Channel visitor selection /
+  logo page / tab paint epoch use `StoreChannelChromeCubit`. Prefer
+  `BlocBuilder.buildWhen` so the product grid stays smooth.
 - Toolbar (Telegram flat icons — not phone/menu, not blue chips): **search**
   when content is viewable (opens `store_search_route`; hidden when
   `isContentLocked`). Primary action beside it: own store → **+** (add
@@ -168,23 +177,42 @@ This file defines what to follow for UI and logic inside `lib/presentation/store
   so disk cache works without MissingPluginException and rebuilds do not flicker.
 - Other store (when viewer has own store): feed enrichment prefers
   `isAlreadyImported` / `canImport` / `importRestrictionReason` on each
-  product. Legacy quiet `GET /import-targets` probe may still mark **Added** /
-  **Pending** when flags are absent. Product cards show **title only**.
+  product. **Added** / **Pending** badges derive from those list flags (no
+  N× `GET /import-targets` on open). Product cards show **title only**.
   Refresh after returning from import flow.
 - Destination shelf: products with `importStatus: pending` (awaiting source
   owner approval) show an orange **Pending** tag — card chip for singles /
   all-pending groups; per-photo pill on Group collage / Gallery / channel
   Media / collection browse cells. Driven by `ProductImportFlags.isImportPending`
   and parallel `StoreProduct.imageImportStatuses` from collection product
-  hydrate. Always probe `products?collectionId` — list `productCount` is
-  often live-only (0/1) while pending copies still return in /products.
+  hydrate. Shared prefetcher calls
+  `GET …/collections?include=products&productsLimit=9` (BE-2) and maps
+  embedded `products[]` into collage cards (no N× `products?collectionId`).
+  Legacy `products?collectionId` (cap 9) / `fetchCollection` only when embed
+  is empty but `photoCount > 0` (older BE or sparse rows). Grid badge uses
+  collection `productCount`/`photoCount` (`StoreProduct.albumItemCount`) so a
+  20-item album shows **20**, not 9. Group/Single collage enables the horizontal
+  page slider whenever album size > 9. After grid paint, albums with
+  `needsAlbumExpand` background-hydrate via deferred/throttled
+  `StoreProfileExpandAlbumCollage` (`products?collectionId=` up to 100; idle
+  gate then one-at-a-time) so swipe pages fill without a spinner remount or
+  open-frame storm. Not-yet-hydrated swipe pages show a **blurred preview
+  grid** (first-page photos + soft wash), not a circular loader. Collage
+  `layoutIdentity` stays stable across 9→N path growth (no jump to page 0).
+  Quiet refresh **merges** expanded frames — never shrinks an album back to
+  the BE-2 `productsLimit=9` preview.
 - Own store: import-requests inbox lives under **Settings** from shell My store
   (`settings_route`; also still on no-store Profile when applicable). Store
   profile no longer shows the inbox badge icon.
 - Store header meta is **cache-first** via `StoreMetaCache` (name, link,
   cover, showcase images). Listing seeds cover URLs into that cache so the
   logo does not flash-load; `GET /stores/:id` and image append/delete write
-  the cache again, then UI reads from cache.
+  the cache again, then UI reads from cache. Visitor open: seed
+  `canViewContent` from meta cache **or** listing `followStatus`
+  following/self/member; kick `LoadCollections` as soon as disk/memory
+  unlocks (do not wait for network meta). Pending/none stay locked until
+  GET store. Prefetcher returns after cache write; collage decode warms in
+  background (bloc still `warmDiskHits` before paint).
 - Product layout follows Settings → **View products** (`ProductViewPreferences`
   / `AppSettingsStorage`, survives logout): **Group** (2-col cards, default),
   **Single** (Telegram channel feed: centered date pills **Today** /
@@ -369,7 +397,10 @@ This file defines what to follow for UI and logic inside `lib/presentation/store
 - Photos in a Precise sub-group get a small **blue dot** on the right (not a
   “Precise” text chip); Standalone stays unmarked.
 - Tap any tile → `product_details_route`. Jewel-flow product tiles open with
-  that product’s id (`GET /products/:id`) and a per-product `galleryFeed`.
+  that product’s id and a per-product `galleryFeed` that carries `seedCatalog`
+  from the browse `products?collectionId=` response — details hydrates specs /
+  liked / wishlisted from the seed and **skips** per-swipe `GET /products/:id`.
+  (GET remains for openers without seed, e.g. gallery / search / lock refresh.)
   Legacy photo tiles keep a flat collection `galleryFeed` + `imageIndex`.
   Returning from details: `silent` count pops are no-op on browse (no loader);
   real edits refresh with `_load(quiet: true)` so tiles stay visible.

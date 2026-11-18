@@ -80,6 +80,9 @@ class _CollectionBrowseRouteState extends State<CollectionBrowseRoute> {
   Object? _popResult;
   int _crossAxisCount = 5;
   double _pinchStartColumns = 5;
+  final CatalogWarmOwner _warmOwner = CatalogImageCache.createWarmOwner(
+    debugLabel: 'collectionBrowse',
+  );
 
   /// Own-store Select chrome when detail and/or jewel product tiles are ready.
   bool get _canManage =>
@@ -94,7 +97,10 @@ class _CollectionBrowseRouteState extends State<CollectionBrowseRoute> {
 
   @override
   void dispose() {
-    CatalogImageCache.cancelOffscreenWarm(reason: 'collectionBrowseDispose');
+    CatalogImageCache.cancelOffscreenWarm(
+      _warmOwner,
+      reason: 'collectionBrowseDispose',
+    );
     super.dispose();
   }
 
@@ -117,9 +123,14 @@ class _CollectionBrowseRouteState extends State<CollectionBrowseRoute> {
       _loading = false;
       _logTiles(_tiles());
       _warmMedia();
-      // Refresh in background: full product page + own-store detail for manage.
-      // ignore: unawaited_futures
-      _load(quiet: true);
+      // Fast-APK style: when profile already expanded this album, skip the
+      // quiet products refetch (grid opens with 0 list APIs). Own-store still
+      // quiet-refreshes for manage/detail chrome.
+      final albumComplete = !widget.product.needsAlbumExpand;
+      if (!albumComplete || widget.isOwnStore) {
+        // ignore: unawaited_futures
+        _load(quiet: true);
+      }
       return;
     }
     _load();
@@ -145,13 +156,14 @@ class _CollectionBrowseRouteState extends State<CollectionBrowseRoute> {
     ];
     // Disk for all; decode first viewport only (scroll warms the rest).
     // ignore: unawaited_futures
-    CatalogImageCache.precacheUrls(urls);
+    CatalogImageCache.precacheUrls(urls, owner: _warmOwner);
     // ignore: unawaited_futures
     CatalogImageCache.warmWindow(
       urls: urls,
       firstIndex: 0,
       lastIndex: _crossAxisCount * 12 - 1,
-      cacheWidth: CatalogImageCache.gridCacheWidth(),
+      cacheWidth: CatalogImageCache.cacheWidthForMediaColumns(_crossAxisCount),
+      owner: _warmOwner,
     );
   }
 
@@ -167,65 +179,46 @@ class _CollectionBrowseRouteState extends State<CollectionBrowseRoute> {
       final repository = ServiceLocator.get<CollectionRepository>();
       final collectionId = widget.product.id;
 
-      // Jewel tiles: products?collectionId=. Detail only for own-store manage
-      // (Select/Edit/Ungroup) or as fallback when products are empty. Parallel
-      // when both are needed so Group → browse is not blocked twice.
-      final wantDetail = widget.isOwnStore || !hadSeed;
-
+      // Jewel tiles: products?collectionId= first. Detail only after that when
+      // own-store manage needs it, or as fallback when the product page is
+      // empty — never parallel (API-3).
       List<CatalogProduct> products = const [];
       CollectionDetail? detail;
 
-      if (wantDetail) {
-        final productsFuture = repository
-            .listStoreProducts(
-              storeId: widget.storeId,
-              collectionId: collectionId,
-              limit: 100,
-            )
-            .then((page) => page.items)
-            .catchError((Object e) {
-              AppLog.d(
-                _logTag,
-                'products?collectionId failed — detail fallback err=$e',
-              );
-              return const <CatalogProduct>[];
-            });
-        final detailFuture = repository
-            .fetchCollection(
-              storeId: widget.storeId,
-              listingId: collectionId,
-            )
-            .then<CollectionDetail?>((d) => d)
-            .catchError((Object e) {
-              AppLog.d(
-                _logTag,
-                'fetchCollection failed err=$e',
-              );
-              return null;
-            });
-        final results = await Future.wait<Object?>([
-          productsFuture,
-          detailFuture,
-        ]);
-        products = results[0] as List<CatalogProduct>;
-        detail = results[1] as CollectionDetail?;
-        if (products.isEmpty && detail == null && !hadSeed) {
-          throw StateError('collection browse load empty');
-        }
-      } else {
-        try {
-          final page = await repository.listStoreProducts(
-            storeId: widget.storeId,
-            collectionId: collectionId,
-            limit: 100,
+      try {
+        final page = await repository.listStoreProducts(
+          storeId: widget.storeId,
+          collectionId: collectionId,
+          limit: 100,
+        );
+        products = page.items;
+      } catch (e) {
+        if (!hadSeed) {
+          AppLog.d(
+            _logTag,
+            'products?collectionId failed — will try detail err=$e',
           );
-          products = page.items;
-        } catch (e) {
-          if (!hadSeed) rethrow;
+        } else {
           AppLog.d(
             _logTag,
             'quiet products refresh failed — keeping seed err=$e',
           );
+        }
+      }
+
+      final needDetail = widget.isOwnStore || (products.isEmpty && !hadSeed);
+      if (needDetail) {
+        try {
+          detail = await repository.fetchCollection(
+            storeId: widget.storeId,
+            listingId: collectionId,
+          );
+        } catch (e) {
+          AppLog.d(_logTag, 'fetchCollection failed err=$e');
+          detail = null;
+        }
+        if (products.isEmpty && detail == null && !hadSeed) {
+          throw StateError('collection browse load empty');
         }
       }
 
@@ -474,8 +467,9 @@ class _CollectionBrowseRouteState extends State<CollectionBrowseRoute> {
       final id = photo.id?.trim() ?? '';
       if (id.isNotEmpty && seen.contains(id)) continue;
       if (id.isEmpty) {
-        final already =
-            tiles.any((t) => t.photo.url.trim() == photo.url.trim());
+        final already = tiles.any(
+          (t) => t.photo.url.trim() == photo.url.trim(),
+        );
         if (already) continue;
       }
       orphanIndex += 1;
@@ -522,8 +516,7 @@ class _CollectionBrowseRouteState extends State<CollectionBrowseRoute> {
     if (details.pointerCount < 2) return;
     final width = MediaQuery.sizeOf(context).width;
     final maxColumns = (width / 20).floor();
-    final upper =
-        maxColumns < _minColumns ? _minColumns : maxColumns;
+    final upper = maxColumns < _minColumns ? _minColumns : maxColumns;
     final next = (_pinchStartColumns / details.scale).round().clamp(
       _minColumns,
       upper,
@@ -590,19 +583,23 @@ class _CollectionBrowseRouteState extends State<CollectionBrowseRoute> {
           ),
       ];
       feed = [
-        for (final p in mapped)
+        for (var i = 0; i < mapped.length; i++)
           ProductDetailsFeedItem(
-            product: p,
+            product: mapped[i],
             imageIndex: 0,
-            path: p.primaryImagePath ?? '',
+            path: mapped[i].primaryImagePath ?? '',
+            // Browse already loaded full product rows — details swipe skips GET.
+            seedCatalog:
+                i < _collectionProducts.length ? _collectionProducts[i] : null,
           ),
       ];
       final photoId = photo.id?.trim() ?? '';
       final photoUrl = photo.url.trim();
       // Path-first so a missing product id never opens mapped[0].
-      feedIndex = photoUrl.isEmpty
-          ? -1
-          : feed.indexWhere((e) => e.path.trim() == photoUrl);
+      feedIndex =
+          photoUrl.isEmpty
+              ? -1
+              : feed.indexWhere((e) => e.path.trim() == photoUrl);
       if (feedIndex < 0 && photoId.isNotEmpty) {
         feedIndex = mapped.indexWhere((p) => p.id == photoId);
       }
@@ -642,9 +639,10 @@ class _CollectionBrowseRouteState extends State<CollectionBrowseRoute> {
       ];
       tappedIndex = _imageIndexFor(photo);
       final photoUrl = photo.url.trim();
-      feedIndex = photoUrl.isEmpty
-          ? -1
-          : feed.indexWhere((e) => e.path.trim() == photoUrl);
+      feedIndex =
+          photoUrl.isEmpty
+              ? -1
+              : feed.indexWhere((e) => e.path.trim() == photoUrl);
       if (feedIndex < 0) {
         feedIndex = feed.indexWhere((e) => e.imageIndex == tappedIndex);
       }
@@ -659,6 +657,7 @@ class _CollectionBrowseRouteState extends State<CollectionBrowseRoute> {
       decode: true,
       maxDecode: 1,
       cacheWidth: CatalogImageCache.fullCacheWidth(),
+      owner: _warmOwner,
     );
     final photoUrl = photo.url.trim();
     final useFeed =
@@ -677,10 +676,7 @@ class _CollectionBrowseRouteState extends State<CollectionBrowseRoute> {
         'storeLink': widget.storeLink,
         'isOwnStore': widget.isOwnStore,
         'imageIndex': tappedIndex,
-        if (useFeed) ...{
-          'galleryFeed': feed,
-          'galleryFeedIndex': feedIndex,
-        },
+        if (useFeed) ...{'galleryFeed': feed, 'galleryFeedIndex': feedIndex},
       },
     );
     if (!mounted) return;
@@ -717,7 +713,6 @@ class _CollectionBrowseRouteState extends State<CollectionBrowseRoute> {
       }
     }
   }
-
 
   void _toggleSelect(String photoId) {
     setState(() {
@@ -785,8 +780,7 @@ class _CollectionBrowseRouteState extends State<CollectionBrowseRoute> {
     final deleted = <String>{};
     final tilesBefore = _tiles();
     final deletingAll =
-        tilesBefore.isNotEmpty &&
-        selectedIds.length >= tilesBefore.length;
+        tilesBefore.isNotEmpty && selectedIds.length >= tilesBefore.length;
 
     try {
       if (deletingAll) {
@@ -855,11 +849,10 @@ class _CollectionBrowseRouteState extends State<CollectionBrowseRoute> {
         }
       } else {
         // Legacy collection photos.
-        final photoIds =
-            selectedIds
-                .map((e) => e.trim())
-                .where((e) => e.isNotEmpty)
-                .toList(growable: false);
+        final photoIds = selectedIds
+            .map((e) => e.trim())
+            .where((e) => e.isNotEmpty)
+            .toList(growable: false);
         if (photoIds.isNotEmpty) {
           final revision = _detail?.revision;
           await repo.deletePhotos(
@@ -951,9 +944,7 @@ class _CollectionBrowseRouteState extends State<CollectionBrowseRoute> {
         bloc: bloc,
         items: items,
         stockFallback: CatalogStockStatusFallback(
-          stockStatus: composeStockStatusFromName(
-            detail.stockStatus?.apiValue,
-          ),
+          stockStatus: composeStockStatusFromName(detail.stockStatus?.apiValue),
           mtoDays: detail.mtoDays,
           isLocked: detail.isLocked,
         ),
@@ -961,16 +952,13 @@ class _CollectionBrowseRouteState extends State<CollectionBrowseRoute> {
       if (!mounted) return;
 
       if (result != null && result['updated'] == true) {
-        _popResult = <String, Object?>{
-          ...result,
-          'refreshCollections': true,
-        };
+        _popResult = <String, Object?>{...result, 'refreshCollections': true};
         _setSelectMode(false);
         await _load(quiet: true);
         if (!mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Changes saved.')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('Changes saved.')));
         AppLog.d(
           kEditRefineLogTag,
           'browse_select_edit saved → refreshCollections '
@@ -1009,14 +997,11 @@ class _CollectionBrowseRouteState extends State<CollectionBrowseRoute> {
     final tiles = _tiles();
     final selected =
         tiles
-            .where(
-              (t) => _selectedPhotoIds.contains(t.photo.id?.trim() ?? ''),
-            )
+            .where((t) => _selectedPhotoIds.contains(t.photo.id?.trim() ?? ''))
             .toList();
     if (selected.isEmpty) return;
 
-    final sources =
-        selected.map((t) => t.subGroupId?.trim() ?? '').toSet();
+    final sources = selected.map((t) => t.subGroupId?.trim() ?? '').toSet();
     if (sources.length != 1) {
       AppLog.d(
         _logTag,
@@ -1290,7 +1275,9 @@ class _CollectionBrowseRouteState extends State<CollectionBrowseRoute> {
             'tag':
                 sampleSpec.category.trim().isNotEmpty
                     ? sampleSpec.category.trim()
-                    : (detail.tag.trim().isNotEmpty ? detail.tag.trim() : 'item'),
+                    : (detail.tag.trim().isNotEmpty
+                        ? detail.tag.trim()
+                        : 'item'),
             'usePrecisionTag': sampleSpec.isValid,
             if (sampleSpec.isValid) 'specifications': sampleSpec.toApiJson(),
           },
@@ -1303,7 +1290,9 @@ class _CollectionBrowseRouteState extends State<CollectionBrowseRoute> {
             'tag':
                 sampleSpec.category.trim().isNotEmpty
                     ? sampleSpec.category.trim()
-                    : (detail.tag.trim().isNotEmpty ? detail.tag.trim() : 'item'),
+                    : (detail.tag.trim().isNotEmpty
+                        ? detail.tag.trim()
+                        : 'item'),
             'usePrecisionTag': sampleSpec.isValid,
             if (sampleSpec.isValid) 'specifications': sampleSpec.toApiJson(),
           },
@@ -1386,8 +1375,7 @@ class _CollectionBrowseRouteState extends State<CollectionBrowseRoute> {
 
     final topPad = ScreenWrapper.statusBarTop(context);
     const toolbarH = 56.0;
-    final selectSubtitleH =
-        (_selectMode && _canManage) ? 28.0 : 0.0;
+    final selectSubtitleH = (_selectMode && _canManage) ? 28.0 : 0.0;
     final headerExtent = topPad + toolbarH + selectSubtitleH;
 
     return ScreenWrapper(
@@ -1401,9 +1389,7 @@ class _CollectionBrowseRouteState extends State<CollectionBrowseRoute> {
         },
         child: Stack(
           children: [
-            Positioned.fill(
-              child: _buildBody(topInset: headerExtent),
-            ),
+            Positioned.fill(child: _buildBody(topInset: headerExtent)),
             const CatalogImageEdgeFades(),
             Positioned(
               top: 0,
@@ -1477,9 +1463,7 @@ class _CollectionBrowseRouteState extends State<CollectionBrowseRoute> {
                       ),
                       if (_selectMode && _canManage)
                         Padding(
-                          padding: AppPadding.screen(
-                            bottom: 8,
-                          ),
+                          padding: AppPadding.screen(bottom: 8),
                           child: Text(
                             _busy
                                 ? 'Working…'
@@ -1654,11 +1638,23 @@ class _BrowseGalleryBody extends StatefulWidget {
 class _BrowseGalleryBodyState extends State<_BrowseGalleryBody> {
   int _lastWarmKey = -1;
   DateTime? _lastWarmAt;
+  final CatalogWarmOwner _warmOwner = CatalogImageCache.createWarmOwner(
+    debugLabel: 'browseGalleryBody',
+  );
 
   List<String> get _urls => [
     for (final section in widget.sections)
       for (final tile in section.tiles) tile.photo.url,
   ];
+
+  @override
+  void dispose() {
+    CatalogImageCache.cancelOffscreenWarm(
+      _warmOwner,
+      reason: 'browseGalleryBodyDispose',
+    );
+    super.dispose();
+  }
 
   void _warmDecode([ScrollMetrics? metrics]) {
     final urls = _urls;
@@ -1674,13 +1670,17 @@ class _BrowseGalleryBodyState extends State<_BrowseGalleryBody> {
     }
     _lastWarmKey = key;
     _lastWarmAt = now;
+    final cellCacheW = CatalogImageCache.cacheWidthForMediaColumns(
+      widget.crossAxisCount,
+    );
     if (metrics == null) {
       // ignore: unawaited_futures
       CatalogImageCache.warmWindow(
         urls: urls,
         firstIndex: 0,
         lastIndex: widget.crossAxisCount * 12 - 1,
-        cacheWidth: CatalogImageCache.gridCacheWidth(),
+        cacheWidth: cellCacheW,
+        owner: _warmOwner,
       );
       return;
     }
@@ -1688,7 +1688,8 @@ class _BrowseGalleryBodyState extends State<_BrowseGalleryBody> {
     CatalogImageCache.warmAroundScroll(
       urls: urls,
       metrics: metrics,
-      cacheWidth: CatalogImageCache.gridCacheWidth(),
+      cacheWidth: cellCacheW,
+      owner: _warmOwner,
     );
   }
 
@@ -1822,14 +1823,25 @@ class _BrowseGalleryTile extends StatelessWidget {
         child: Stack(
           fit: StackFit.expand,
           children: [
-            ProductMediaImage(
-              path: CatalogResponsiveImage.resolve(
-                masterUrl: tile.photo.url,
-                thumbnailUrl: tile.photo.thumbnailUrl,
-                detailUrl: tile.photo.detailUrl,
-                role: CatalogImageRole.grid,
-              ),
-              thumbhash: tile.photo.thumbhash,
+            LayoutBuilder(
+              builder: (context, constraints) {
+                final cellW =
+                    constraints.maxWidth.isFinite && constraints.maxWidth > 0
+                        ? constraints.maxWidth
+                        : MediaQuery.sizeOf(context).width / 4;
+                return ProductMediaImage(
+                  path: CatalogResponsiveImage.resolve(
+                    masterUrl: tile.photo.url,
+                    thumbnailUrl: tile.photo.thumbnailUrl,
+                    detailUrl: tile.photo.detailUrl,
+                    role: CatalogImageRole.grid,
+                  ),
+                  thumbhash: tile.photo.thumbhash,
+                  decodeCacheWidth: CatalogImageCache.cacheWidthForCellLogical(
+                    cellW,
+                  ),
+                );
+              },
             ),
             if (tile.importDeclined || tile.importPending)
               Positioned(
@@ -1883,8 +1895,7 @@ class _BrowseGalleryTile extends StatelessWidget {
                   alignment: Alignment.center,
                   decoration: BoxDecoration(
                     shape: BoxShape.circle,
-                    color:
-                        selected ? AppColors.primary : AppColors.background,
+                    color: selected ? AppColors.primary : AppColors.background,
                     border: Border.all(
                       color: selected ? AppColors.primary : AppColors.border,
                       width: 1.4,
