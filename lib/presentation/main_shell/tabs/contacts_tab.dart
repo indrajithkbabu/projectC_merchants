@@ -9,6 +9,7 @@ import 'package:project_c/helper/colors.dart';
 import 'package:project_c/helper/safe_display_text.dart';
 import 'package:project_c/helper/text_styles.dart';
 import 'package:project_c/helper/widgets/floating_bottom_nav_bar.dart';
+import 'package:project_c/helper/widgets/screen_wrapper.dart';
 import 'package:project_c/helper/widgets/shell_tab_title_bar.dart';
 import 'package:project_c/models/store_channel.dart';
 import 'package:project_c/navigation/routes.dart';
@@ -134,7 +135,7 @@ class _ContactsTabState extends State<ContactsTab> {
             ? MediaQuery.paddingOf(context).bottom + 8
             : FloatingBottomNavBar.reservedHeight(context) + 8;
 
-    return BlocListener<ContactsBloc, ContactsState>(
+    final page = BlocListener<ContactsBloc, ContactsState>(
       listenWhen:
           (prev, curr) =>
               curr.errorMessage != null &&
@@ -261,6 +262,11 @@ class _ContactsTabState extends State<ContactsTab> {
           ],
         ),
       ),
+    );
+    if (!widget.showBack) return page;
+    return ScreenWrapper(
+      backgroundColor: AppColors.scaffold,
+      child: page,
     );
   }
 }

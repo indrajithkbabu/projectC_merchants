@@ -193,6 +193,40 @@ class CatalogApiClient {
     return await _decodeOrThrow(response, path, method: methodLabel);
   }
 
+  /// Authenticated binary GET. Used for chat photos, which are WebP bytes.
+  Future<List<int>> getBytes({
+    required String path,
+    bool requiresAuth = true,
+  }) async {
+    Future<http.Response> once() {
+      return _execute(
+        method: HttpMethod.get,
+        path: path,
+        extraHeaders: const {'Accept': 'image/webp, application/json'},
+        requiresAuth: requiresAuth,
+        allowAnonymousBearer: false,
+      );
+    }
+
+    var response = await once();
+    if (_shouldRefreshAndRetry(response) && requiresAuth) {
+      await refreshSession();
+      response = await once();
+    }
+    final type = (response.headers['content-type'] ?? '').toLowerCase();
+    if (response.statusCode >= 200 &&
+        response.statusCode < 300 &&
+        type.contains('image/')) {
+      return response.bodyBytes;
+    }
+    _decodeOrThrow(response, path);
+    throw CatalogApiException(
+      statusCode: response.statusCode,
+      code: 'UNEXPECTED_RESPONSE',
+      message: 'Expected an image',
+    );
+  }
+
   Future<CatalogTokens> refreshSession() {
     final existing = _refreshInFlight;
     if (existing != null) return existing;

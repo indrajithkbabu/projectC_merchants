@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:project_c/bloc/account_profile/account_profile_bloc.dart';
 import 'package:project_c/bloc/auth/auth_bloc.dart';
+import 'package:project_c/bloc/chat_inbox/chat_inbox_bloc.dart';
 import 'package:project_c/bloc/profile_context/profile_context_bloc.dart';
 import 'package:project_c/bloc/store_listing/store_listing_bloc.dart';
 import 'package:project_c/bloc/storeprofile/store_profile_bloc.dart';
@@ -17,7 +18,6 @@ import 'package:project_c/models/catalog/profile_context.dart';
 import 'package:project_c/navigation/routes.dart';
 import 'package:project_c/presentation/main_shell/profile_sheets.dart';
 import 'package:project_c/presentation/main_shell/shell_nav.dart';
-import 'package:project_c/presentation/chat/chat_mock_store.dart';
 import 'package:project_c/presentation/chat/chat_tab.dart';
 import 'package:project_c/presentation/main_shell/tabs/my_store_tab.dart';
 import 'package:project_c/presentation/main_shell/tabs/personal_profile_tab.dart';
@@ -44,11 +44,19 @@ class _MainShellRouteState extends State<MainShellRoute> {
   DateTime? _lastExitBackAt;
   int? _handledSwitchToken;
   String? _loggedProfileTabId;
+  late final ChatInboxBloc _inbox;
 
   @override
   void initState() {
     super.initState();
+    _inbox = context.read<ChatInboxBloc>();
     ShellNav.pending.addListener(_onShellNavRequest);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final id =
+          context.read<ProfileContextBloc>().state.activeProfile?.id ?? '';
+      _inbox.add(ChatInboxProfileSelected(id));
+    });
     ProfileSwitchingLog.d(
       'PS-10',
       'MainShell tabs=Stores|Message|Wishlist|Profile (no Settings tab)',
@@ -244,7 +252,9 @@ class _MainShellRouteState extends State<MainShellRoute> {
 
   @override
   Widget build(BuildContext context) {
-    return MultiBlocListener(
+    return BlocProvider.value(
+      value: _inbox,
+      child: MultiBlocListener(
       listeners: [
         BlocListener<AccountProfileBloc, AccountProfileState>(
           listenWhen:
@@ -273,6 +283,15 @@ class _MainShellRouteState extends State<MainShellRoute> {
             Navigator.of(
               context,
             ).pushNamedAndRemoveUntil(Routes.authPhoneRoute, (route) => false);
+          },
+        ),
+        BlocListener<ProfileContextBloc, ProfileContextState>(
+          listenWhen:
+              (prev, curr) => prev.activeProfile?.id != curr.activeProfile?.id,
+          listener: (context, state) {
+            _inbox.add(
+              ChatInboxProfileSelected(state.activeProfile?.id ?? ''),
+            );
           },
         ),
         BlocListener<ProfileContextBloc, ProfileContextState>(
@@ -413,9 +432,13 @@ class _MainShellRouteState extends State<MainShellRoute> {
                           opacity: keyboardOpen ? 0 : 1,
                           child: IgnorePointer(
                             ignoring: keyboardOpen,
-                            child: ListenableBuilder(
-                              listenable: ChatMockStore.instance,
-                              builder: (context, _) {
+                            child: BlocBuilder<ChatInboxBloc, ChatInboxState>(
+                              bloc: _inbox,
+                              buildWhen:
+                                  (prev, curr) =>
+                                      prev.items != curr.items ||
+                                      prev.unavailable != curr.unavailable,
+                              builder: (context, inbox) {
                                 return FloatingBottomNavBar(
                                   currentIndex: safeIndex,
                                   onChanged:
@@ -432,13 +455,9 @@ class _MainShellRouteState extends State<MainShellRoute> {
                                     active: active,
                                     profileSelected: safeIndex == 3,
                                     showProfileDot: ctx.hasOtherUnreadOrInvite,
-                                    chatUnread: ChatMockStore.instance
-                                        .inbox(storesOnly: !actingAsStore)
-                                        .fold<int>(
-                                          0,
-                                          (sum, thread) =>
-                                              sum + thread.unreadCount,
-                                        ),
+                                    chatUnread: inbox.unreadCount(
+                                      storesOnly: !actingAsStore,
+                                    ),
                                   ),
                                 );
                               },
@@ -489,6 +508,7 @@ class _MainShellRouteState extends State<MainShellRoute> {
           );
         },
       ),
+    ),
     );
   }
 }

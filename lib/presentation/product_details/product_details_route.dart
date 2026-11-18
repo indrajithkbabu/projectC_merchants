@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:project_c/bloc/bulk_upload/bulk_upload_bloc.dart';
+import 'package:project_c/bloc/chat_inbox/chat_inbox_bloc.dart';
 import 'package:project_c/bloc/product_details/product_details_bloc.dart';
 import 'package:project_c/di/service_locator.dart';
 import 'package:project_c/helper/app_log.dart';
@@ -26,13 +27,13 @@ import 'package:project_c/navigation/routes.dart';
 import 'package:project_c/navigation/telegram_photo_page_route.dart';
 import 'package:project_c/presentation/add_store_product/compose_product_draft.dart';
 import 'package:project_c/presentation/add_store_product/edit_refine_flow.dart';
-import 'package:project_c/presentation/chat/chat_mock_store.dart';
 import 'package:project_c/presentation/chat/chat_models.dart';
+import 'package:project_c/webservice/catalog_error_mapper.dart';
+import 'package:project_c/webservice/chat/chat_repository.dart';
 import 'package:project_c/presentation/product_details/product_details_widgets/product_details_widgets.dart';
 import 'package:project_c/services/product_details_preferences.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:project_c/services/view_beacon.dart';
-import 'package:project_c/webservice/catalog_error_mapper.dart';
 import 'package:project_c/webservice/collection/collection_repository.dart';
 
 class ProductDetailsRoute extends StatefulWidget {
@@ -83,6 +84,7 @@ class _ProductDetailsRouteState extends State<ProductDetailsRoute> {
   /// Reply bar only. Send starts that store's chat. Hidden on the owner's
   /// own store.
   bool _askComposerOpen = false;
+  bool _askSending = false;
 
   /// True after Reply is tapped: the You / Photo composer replaces the bar.
   bool _askReplyExpanded = false;
@@ -401,6 +403,7 @@ class _ProductDetailsRouteState extends State<ProductDetailsRoute> {
     return _AskTarget(
       storeId: storeId,
       storeName: storeName.isEmpty ? 'Store' : storeName,
+      productId: product.id.trim(),
       product: ChatProductRef(
         id: '$storeId|${product.id}|$imageIndex',
         name: title,
@@ -516,33 +519,53 @@ class _ProductDetailsRouteState extends State<ProductDetailsRoute> {
     });
   }
 
-  void _sendAsk(ProductDetailsState state) {
+  Future<void> _sendAsk(ProductDetailsState state) async {
+    if (_askSending) return;
     final target = _askTargetFor(state);
     final text = _askController.text.trim();
     if (target == null || text.isEmpty) return;
+    setState(() => _askSending = true);
     HapticFeedback.selectionClick();
-    final chatId = ChatMockStore.instance.sendEnquiry(
-      storeId: target.storeId,
-      storeName: target.storeName,
-      text: text,
-      products: [target.product],
-    );
-    _askController.clear();
-    _askFocus.unfocus();
-    setState(() {
-      _askComposerOpen = false;
-      _askReplyExpanded = false;
-      _askShowKeyboard = false;
-      _showInfo = false;
-    });
-    final openId = ChatMockStore.instance.threadById(chatId)?.openDiscussionId;
-    Navigator.of(context).pushNamed(
-      Routes.chatThreadRoute,
-      arguments: <String, String?>{
-        'chatId': chatId,
-        'openDiscussionId': openId,
-      },
-    );
+    try {
+      final discussion = await ServiceLocator.get<ChatRepository>()
+          .sendFirstMessageToStore(
+            targetStoreId: target.storeId,
+            firstMessage: text,
+            title: target.product.name,
+            productId: target.productId,
+          );
+      if (!mounted) return;
+      _askController.clear();
+      _askFocus.unfocus();
+      setState(() {
+        _askSending = false;
+        _askComposerOpen = false;
+        _askReplyExpanded = false;
+        _askShowKeyboard = false;
+        _showInfo = false;
+      });
+      context.read<ChatInboxBloc>().add(const ChatInboxRefreshed());
+      final relationshipId = discussion.relationshipId.trim();
+      if (relationshipId.isEmpty) return;
+      await Navigator.of(context).pushNamed(
+        Routes.chatThreadRoute,
+        arguments: <String, Object?>{
+          'chatId': relationshipId,
+          'api': true,
+          'title': target.storeName,
+          'isStore': true,
+          'openDiscussionId': discussion.id,
+          'productId': target.productId,
+          'productImageUrl': target.product.imageUrl,
+        },
+      );
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _askSending = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(CatalogErrorMapper.toUserMessage(error))),
+      );
+    }
   }
 
   int _productImageIndex(ProductDetailsState state) {
@@ -2150,11 +2173,13 @@ class _AskTarget {
   const _AskTarget({
     required this.storeId,
     required this.storeName,
+    required this.productId,
     required this.product,
   });
 
   final String storeId;
   final String storeName;
+  final String productId;
   final ChatProductRef product;
 }
 

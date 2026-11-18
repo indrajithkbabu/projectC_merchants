@@ -195,4 +195,17 @@ class Endpoints {
 
   static String storeProductInsights(String storeId, String productId) =>
       '/stores/$storeId/products/$productId/insights';
+
+  // Chat phase 1 reads. Writes, photos, and sync are added with their screens.
+  static const String chatCapabilities = '/chat/capabilities';
+  static const String chatRelationships = '/chat/relationships';
+  static String chatRelationshipDiscussions(String relationshipId) =>
+      '/chat/relationships/$relationshipId/discussions';
+  static String chatDiscussionMessages(String discussionId) =>
+      '/chat/discussions/$discussionId/messages';
+  static String chatDiscussionPhotos(String discussionId) =>
+      '/chat/discussions/$discussionId/photos';
+  static String chatDiscussionReceipt(String discussionId) =>
+      '/chat/discussions/$discussionId/receipt';
+  static String chatPhoto(String photoId) => '/chat/photos/$photoId';
 }

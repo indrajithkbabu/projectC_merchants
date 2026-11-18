@@ -348,6 +348,10 @@ PageRoute? _chatThreadRoute(RouteSettings settings) {
       discussion is String && discussion.trim().isNotEmpty
           ? discussion.trim()
           : null;
+  final rawTitle = map['title'];
+  final title = rawTitle is String ? rawTitle.trim() : '';
+  final rawProductId = map['productId'];
+  final rawImage = map['productImageUrl'];
   return _buildAnimatedRoute(
     settings: settings,
     builder: (_) {
@@ -358,6 +362,11 @@ PageRoute? _chatThreadRoute(RouteSettings settings) {
       return ChatThreadRoute(
         chatId: chatId,
         openDiscussionId: openDiscussionId,
+        fromApi: map['api'] == true,
+        title: title,
+        isStore: map['isStore'] == true,
+        productId: rawProductId is String ? rawProductId.trim() : '',
+        productImageUrl: rawImage is String ? rawImage.trim() : '',
       );
     },
   );

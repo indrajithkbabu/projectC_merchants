@@ -1,25 +1,28 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:project_c/bloc/chat_inbox/chat_inbox_bloc.dart';
 import 'package:project_c/bloc/contacts/contacts_bloc.dart';
 import 'package:project_c/bloc/store_listing/store_listing_bloc.dart';
+import 'package:project_c/di/service_locator.dart';
 import 'package:project_c/helper/app_padding.dart';
 import 'package:project_c/helper/colors.dart';
 import 'package:project_c/helper/text_styles.dart';
 import 'package:project_c/helper/widgets/screen_wrapper.dart';
 import 'package:project_c/navigation/routes.dart';
-import 'package:project_c/presentation/chat/chat_mock_store.dart';
+import 'package:project_c/models/catalog/chat_api_models.dart';
+import 'package:project_c/models/store_channel.dart';
 import 'package:project_c/presentation/chat/chat_models.dart';
+import 'package:project_c/webservice/catalog_error_mapper.dart';
+import 'package:project_c/webservice/chat/chat_repository.dart';
 import 'package:project_c/presentation/chat/chat_widgets/chat_pieces.dart';
 import 'package:project_c/presentation/chat/new_group_route.dart';
 import 'package:project_c/presentation/main_shell/tabs/contacts_tab.dart';
 
 /// New chat: group, find stores, invite, then stores and followers.
 class NewChatRoute extends StatefulWidget {
-  const NewChatRoute({
-    super.key,
-    this.contactsBloc,
-    this.storeListingBloc,
-  });
+  const NewChatRoute({super.key, this.contactsBloc, this.storeListingBloc});
 
   final ContactsBloc? contactsBloc;
   final StoreListingBloc? storeListingBloc;
@@ -31,9 +34,25 @@ class NewChatRoute extends StatefulWidget {
 class _NewChatRouteState extends State<NewChatRoute> {
   final TextEditingController _search = TextEditingController();
   String _query = '';
+  bool _opening = false;
+  StreamSubscription<StoreListingState>? _listingSub;
+  StreamSubscription<ContactsState>? _contactsSub;
+
+  @override
+  void initState() {
+    super.initState();
+    _listingSub = widget.storeListingBloc?.stream.listen((_) {
+      if (mounted) setState(() {});
+    });
+    _contactsSub = widget.contactsBloc?.stream.listen((_) {
+      if (mounted) setState(() {});
+    });
+  }
 
   @override
   void dispose() {
+    _listingSub?.cancel();
+    _contactsSub?.cancel();
     _search.dispose();
     super.dispose();
   }
@@ -41,13 +60,7 @@ class _NewChatRouteState extends State<NewChatRoute> {
   @override
   Widget build(BuildContext context) {
     final query = _query.trim().toLowerCase();
-    final people =
-        ChatMockStore.instance.followers.where((person) {
-          if (query.isEmpty) return true;
-          final phone = person.phone.replaceAll(RegExp(r'\s+'), '');
-          return person.name.toLowerCase().contains(query) ||
-              phone.contains(query);
-        }).toList();
+    final people = _matches(_people(), query);
     final stores = people.where((person) => person.isStoreAccount).toList();
     final followers = people.where((person) => !person.isStoreAccount).toList();
 
@@ -113,15 +126,17 @@ class _NewChatRouteState extends State<NewChatRoute> {
             ),
           ),
           if (query.isEmpty) ...[
-            _Action(
-              icon: Icons.group_add_outlined,
-              label: 'New group',
-              onTap: () {
-                Navigator.of(context).push(
-                  MaterialPageRoute<void>(builder: (_) => const NewGroupRoute()),
-                );
-              },
-            ),
+            // _Action(
+            //   icon: Icons.group_add_outlined,
+            //   label: 'New group',
+            //   onTap: () {
+            //     Navigator.of(context).push(
+            //       MaterialPageRoute<void>(
+            //         builder: (_) => const NewGroupRoute(),
+            //       ),
+            //     );
+            //   },
+            // ),
             _Action(
               icon: Icons.storefront_outlined,
               label: 'Find stores',
@@ -145,7 +160,7 @@ class _NewChatRouteState extends State<NewChatRoute> {
                 people.isEmpty
                     ? Center(
                       child: Text(
-                        'No matching people',
+                        query.isEmpty ? 'No stores yet' : 'No matching people',
                         style: AppTextStyles.bodySecondary(),
                       ),
                     )
@@ -153,7 +168,7 @@ class _NewChatRouteState extends State<NewChatRoute> {
                       children: [
                         if (stores.isNotEmpty) _label('Stores'),
                         for (final person in stores) _person(person),
-                        if (followers.isNotEmpty) _label('Followers'),
+                        if (followers.isNotEmpty) _label('Contacts'),
                         for (final person in followers) _person(person),
                       ],
                     ),
@@ -209,21 +224,105 @@ class _NewChatRouteState extends State<NewChatRoute> {
     );
   }
 
-  void _open(ChatActor person) {
-    final chatId = ChatMockStore.instance.startChat(person);
-    Navigator.of(context).pushReplacementNamed(
-      Routes.chatThreadRoute,
-      arguments: <String, String?>{'chatId': chatId},
-    );
+  List<ChatActor> _people() {
+    final stores =
+        widget.storeListingBloc?.state.allStores ?? const <StoreChannel>[];
+    final contacts =
+        widget.contactsBloc?.state.deviceContacts ??
+        const <ContactInviteCandidate>[];
+    return [
+      for (final store in stores)
+        if (!store.isOwn &&
+            RegExp(r'^[a-fA-F0-9]{24}$').hasMatch(store.id.trim()))
+          ChatActor(
+            id: store.id.trim(),
+            name: store.name.trim().isEmpty ? 'Store' : store.name.trim(),
+            isStoreAccount: true,
+            phone: store.phone,
+          ),
+      for (final contact in contacts)
+        if (contact.phone.trim().isNotEmpty)
+          ChatActor(
+            id: contact.phone.trim(),
+            name:
+                contact.name.trim().isEmpty
+                    ? contact.phone.trim()
+                    : contact.name.trim(),
+            phone: contact.phone.trim(),
+          ),
+    ];
+  }
+
+  List<ChatActor> _matches(List<ChatActor> people, String query) {
+    if (query.isEmpty) return people;
+    return people.where((person) {
+      final phone = person.phone.replaceAll(RegExp(r'\s+'), '');
+      return person.name.toLowerCase().contains(query) || phone.contains(query);
+    }).toList();
+  }
+
+  Future<void> _open(ChatActor person) async {
+    if (_opening) return;
+    setState(() => _opening = true);
+    try {
+      final repository = ServiceLocator.get<ChatRepository>();
+      final ChatRelationship relationship;
+      if (person.isStoreAccount) {
+        relationship = await repository.openStoreChat(person.id);
+      } else {
+        final phone = _internationalPhone(person.phone);
+        if (phone == null) {
+          if (!mounted) return;
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Use a mobile number with country code.'),
+            ),
+          );
+          return;
+        }
+        relationship = await repository.openCustomerChat(phone);
+      }
+      if (!mounted || relationship.id.trim().isEmpty) return;
+      context.read<ChatInboxBloc>().add(const ChatInboxRefreshed());
+      final other = relationship.otherSide;
+      final title =
+          (other?.name.trim().isNotEmpty == true)
+              ? other!.name.trim()
+              : person.name;
+      await Navigator.of(context).pushReplacementNamed(
+        Routes.chatThreadRoute,
+        arguments: <String, Object?>{
+          'chatId': relationship.id,
+          'api': true,
+          'title': title,
+          'isStore': person.isStoreAccount || other?.isStore == true,
+        },
+      );
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(CatalogErrorMapper.toUserMessage(error))),
+      );
+    } finally {
+      if (mounted) setState(() => _opening = false);
+    }
   }
 }
 
+String? _internationalPhone(String raw) {
+  final compact = raw.replaceAll(RegExp(r'[\s-]'), '');
+  if (compact.startsWith('+') && compact.length >= 8) return compact;
+  final digits = compact.replaceAll(RegExp(r'\D'), '');
+  if (digits.length == 10) return '+91$digits';
+  if (digits.length == 12 && digits.startsWith('91')) return '+$digits';
+  if (digits.length == 11 && digits.startsWith('0')) {
+    return '+91${digits.substring(1)}';
+  }
+  return null;
+}
+
 class _Action extends StatelessWidget {
-  const _Action({
-    required this.icon,
-    required this.label,
-    required this.onTap,
-  });
+  const _Action({required this.icon, required this.label, required this.onTap});
 
   final IconData icon;
   final String label;
